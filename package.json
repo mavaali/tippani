@@ -1,15 +1,37 @@
 {
   "name": "tippani",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Offline-capable CLI that renders Azure DevOps PR markdown files as a clean review portal",
   "type": "module",
   "bin": {
     "tippani": "./src/index.js"
   },
+  "files": [
+    "src/",
+    "README.md",
+    "CHANGELOG.md",
+    "LICENSE"
+  ],
   "scripts": {
     "start": "node src/index.js",
     "build": "node scripts/build.js"
   },
+  "keywords": [
+    "azure-devops",
+    "ado",
+    "pull-request",
+    "review",
+    "markdown",
+    "cli",
+    "offline",
+    "spec"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/mavaali/tippani.git"
+  },
+  "homepage": "https://github.com/mavaali/tippani",
+  "author": "Mihir Wagle",
   "dependencies": {
     "azure-devops-node-api": "^15.1.2",
     "express": "^5.2.1",

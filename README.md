@@ -6,31 +6,26 @@ Offline-capable CLI that renders Azure DevOps PR markdown files as a clean, thre
 
 ## Quick Start
 
-Download the [latest release](https://github.com/mavaali/tippani/releases/latest):
+Install globally from npm:
+
+```bash
+npm install -g tippani
+tippani 12345 --org=https://dev.azure.com/YOUR_ORG --project="Your Project" --save-config
+```
+
+Or run without installing:
+
+```bash
+npx tippani 12345 --org=https://dev.azure.com/YOUR_ORG --project="Your Project" --save-config
+```
+
+Or download a standalone binary from the [latest release](https://github.com/mavaali/tippani/releases/latest):
 
 | Platform | Download | Requires |
 |---|---|---|
 | **macOS** (Apple Silicon) | [`tippani`](https://github.com/mavaali/tippani/releases/latest/download/tippani) | Nothing — standalone binary |
 | **Windows** | [`cli.cjs`](https://github.com/mavaali/tippani/releases/latest/download/cli.cjs) + [`tippani.bat`](https://github.com/mavaali/tippani/releases/latest/download/tippani.bat) | Node.js 18+ |
 | **Linux / macOS** | [`cli.cjs`](https://github.com/mavaali/tippani/releases/latest/download/cli.cjs) + [`tippani.sh`](https://github.com/mavaali/tippani/releases/latest/download/tippani.sh) | Node.js 18+ |
-
-```bash
-# macOS — download and run
-chmod +x tippani
-./tippani 12345 --org=https://dev.azure.com/YOUR_ORG --project="Your Project" --save-config
-
-# Windows — place cli.cjs and tippani.bat in the same folder
-tippani.bat 12345 --org=https://dev.azure.com/YOUR_ORG --project="Your Project" --save-config
-```
-
-Or install from source:
-
-```bash
-git clone https://github.com/mavaali/tippani.git
-cd tippani
-npm install
-npx tippani 12345 --org=https://dev.azure.com/YOUR_ORG --project="Your Project" --save-config
-```
 
 ## Features
 
@@ -130,4 +125,8 @@ Comments are written to a local queue first, then synced to ADO. If offline, the
 
 ## License
 
-MIT
+MIT — see [LICENSE](LICENSE)
+
+## Changelog
+
+See [CHANGELOG.md](CHANGELOG.md) for release history.
