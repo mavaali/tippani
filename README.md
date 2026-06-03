@@ -27,6 +27,16 @@ Or download a standalone binary from the [latest release](https://github.com/mav
 | **Windows** | [`cli.cjs`](https://github.com/mavaali/tippani/releases/latest/download/cli.cjs) + [`tippani.bat`](https://github.com/mavaali/tippani/releases/latest/download/tippani.bat) | Node.js 18+ |
 | **Linux / macOS** | [`cli.cjs`](https://github.com/mavaali/tippani/releases/latest/download/cli.cjs) + [`tippani.sh`](https://github.com/mavaali/tippani/releases/latest/download/tippani.sh) | Node.js 18+ |
 
+## Screenshots
+
+**File Picker** — select which file to review from a multi-file PR:
+
+![File Picker](docs/file-picker.png)
+
+**Spec View** — three-column layout with TOC, rendered markdown, and comment threads:
+
+![Spec View](docs/spec-view.png)
+
 ## Features
 
 - **File picker** — multi-file PRs show a landing page; single-file PRs auto-open

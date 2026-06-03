@@ -16,7 +16,7 @@ function run(cmd, opts = {}) {
   execSync(cmd, { cwd: ROOT, stdio: "inherit", ...opts });
 }
 
-console.log("\n=== FabricSpecs Review Portal — Build ===\n");
+console.log("\n=== tippani — Build ===\n");
 
 // Clean
 fs.rmSync(DIST, { recursive: true, force: true });
