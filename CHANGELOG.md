@@ -1,6 +1,15 @@
 # Changelog
 
-## 1.1.0 (2026-06-03)
+## 1.2.0 (2026-06-03)
+
+### Security
+- **Fixed:** Markdown rendering now uses `rehype-sanitize` — prevents stored XSS from malicious PR content
+- **Fixed:** Server binds to `127.0.0.1` instead of `0.0.0.0` — no longer LAN-accessible
+- **Fixed:** Comment HTML always re-rendered through safe pipeline (ADO `renderedContent` no longer trusted)
+- **Fixed:** CSRF origin-check middleware on all POST endpoints
+- **Fixed:** Config, cache, and pending files written with restrictive permissions (`0o600`)
+- **Fixed:** Error responses no longer leak internal details to client
+- **Pinned:** `express`, `azure-devops-node-api`, `rehype-sanitize` to exact versions
 
 ### Error Handling
 - **Fixed:** Empty PAT no longer saved when prompt is cancelled — previously broke all subsequent runs
@@ -8,12 +17,12 @@
 - **Fixed:** Disk full during cache/queue writes caught and warned instead of crashing
 - **Fixed:** ADO 401/403/404/429/5xx errors show actionable messages with guidance
 - **Fixed:** Wrong org URL, project, or repo name shows specific fix instructions
-- **Fixed:** XSS vulnerability — comment rendering no longer allows raw HTML execution
 
 ### Improvements
 - Org URL auto-normalized (trailing slash stripped, `https://` auto-prepended)
 - Abandoned/completed PRs show a warning on startup
 - PAT prompt URL now uses your configured org instead of hardcoded value
+- Demo server with generic mock data for screenshots (`node scripts/demo.js`)
 
 ## 1.0.0 (2026-06-03)
 
