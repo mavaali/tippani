@@ -10,6 +10,7 @@ import remarkRehype from "remark-rehype";
 import rehypeStringify from "rehype-stringify";
 import rehypeSlug from "rehype-slug";
 import rehypeAutolinkHeadings from "rehype-autolink-headings";
+import rehypeSanitize, { defaultSchema } from "rehype-sanitize";
 import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
@@ -29,8 +30,8 @@ function loadConfig() {
 }
 
 function saveConfig(cfg) {
-  fs.mkdirSync(CONFIG_DIR, { recursive: true });
-  fs.writeFileSync(CONFIG_FILE, JSON.stringify(cfg, null, 2));
+  fs.mkdirSync(CONFIG_DIR, { recursive: true, mode: 0o700 });
+  fs.writeFileSync(CONFIG_FILE, JSON.stringify(cfg, null, 2), { mode: 0o600 });
 }
 
 function getConfig() {
@@ -83,9 +84,9 @@ function loadCache(prId) {
 
 function saveCache(prId, data) {
   try {
-    fs.mkdirSync(CACHE_DIR, { recursive: true });
+    fs.mkdirSync(CACHE_DIR, { recursive: true, mode: 0o700 });
     data.cachedAt = new Date().toISOString();
-    fs.writeFileSync(getCachePath(prId), JSON.stringify(data, null, 2));
+    fs.writeFileSync(getCachePath(prId), JSON.stringify(data, null, 2), { mode: 0o600 });
   } catch (e) {
     console.warn(`  ⚠ Could not write cache: ${e.code || e.message}. Continuing without cache.`);
   }
@@ -108,8 +109,8 @@ function loadPending(prId) {
 
 function savePending(prId, actions) {
   try {
-    fs.mkdirSync(CACHE_DIR, { recursive: true });
-    fs.writeFileSync(getPendingPath(prId), JSON.stringify(actions, null, 2));
+    fs.mkdirSync(CACHE_DIR, { recursive: true, mode: 0o700 });
+    fs.writeFileSync(getPendingPath(prId), JSON.stringify(actions, null, 2), { mode: 0o600 });
   } catch (e) {
     console.warn(`  ⚠ Could not save pending queue: ${e.code || e.message}`);
   }
@@ -259,14 +260,30 @@ async function resolveThread(conn, prId, threadId) {
 }
 
 // --- Markdown rendering ---
+// Spec content schema: allow headings with ids (for TOC) but strip scripts/iframes
+const specSanitizeSchema = {
+  ...defaultSchema,
+  attributes: {
+    ...defaultSchema.attributes,
+    h1: [...(defaultSchema.attributes?.h1 || []), "id"],
+    h2: [...(defaultSchema.attributes?.h2 || []), "id"],
+    h3: [...(defaultSchema.attributes?.h3 || []), "id"],
+    h4: [...(defaultSchema.attributes?.h4 || []), "id"],
+    h5: [...(defaultSchema.attributes?.h5 || []), "id"],
+    h6: [...(defaultSchema.attributes?.h6 || []), "id"],
+    a: [...(defaultSchema.attributes?.a || []), "id"],
+  },
+};
+
 async function renderMarkdown(content) {
   const result = await unified()
     .use(remarkParse)
     .use(remarkGfm)
-    .use(remarkRehype, { allowDangerousHtml: true })
+    .use(remarkRehype)
+    .use(rehypeSanitize, specSanitizeSchema)
     .use(rehypeSlug)
     .use(rehypeAutolinkHeadings, { behavior: "wrap" })
-    .use(rehypeStringify, { allowDangerousHtml: true })
+    .use(rehypeStringify)
     .process(content);
   return String(result);
 }
@@ -1279,6 +1296,17 @@ async function main() {
   const app = express();
   app.use(express.json());
 
+  // CSRF protection: reject cross-origin mutations
+  app.use((req, res, next) => {
+    if (req.method !== "GET" && req.method !== "HEAD") {
+      const origin = req.headers.origin || req.headers.referer || "";
+      if (!origin.startsWith(`http://localhost:${PORT}`) && !origin.startsWith(`http://127.0.0.1:${PORT}`)) {
+        return res.status(403).json({ error: "Forbidden: cross-origin request" });
+      }
+    }
+    next();
+  });
+
   // File picker or auto-redirect
   app.get("/", (_req, res) => {
     if (_changedFiles.length === 1) {
@@ -1338,10 +1366,10 @@ async function main() {
 
       const allThreads = [...threads, ...pendingThreads];
 
-      // Pre-render comment markdown
+      // Pre-render comment markdown (always use safe renderer, ignore ADO's renderedContent)
       for (const t of allThreads) {
         for (const c of (t.comments || [])) {
-          if (c.content && !c.renderedContent) {
+          if (c.content) {
             c.renderedContent = await renderMarkdownSafe(c.content);
           }
         }
@@ -1349,7 +1377,8 @@ async function main() {
 
       res.type("html").send(buildSpecPage(specHtml, toc, metadata, _pr, allThreads, filePath, sourceMap, _changedFiles, idx));
     } catch (e) {
-      res.status(500).send("Error rendering spec: " + e.message);
+      res.status(500).send("Error rendering spec. Check the server console for details.");
+      console.error("Spec render error:", e.message);
     }
   });
 
@@ -1465,7 +1494,7 @@ async function main() {
     res.json({ count: unsynced.length, isOffline: _isOffline });
   });
 
-  const server = app.listen(PORT, () => {
+  const server = app.listen(PORT, "127.0.0.1", () => {
     const base = `http://localhost:${PORT}`;
     const url = openIndex !== null ? `${base}/file/${openIndex}` : base;
     console.log(`\n  Review portal running at ${base}\n`);

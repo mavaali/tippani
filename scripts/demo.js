@@ -17,7 +17,24 @@ import rehypeStringify from "rehype-stringify";
 import rehypeSlug from "rehype-slug";
 import rehypeAutolinkHeadings from "rehype-autolink-headings";
 
+import rehypeSanitize, { defaultSchema } from "rehype-sanitize";
+
 const PORT = 3847;
+
+// Spec content schema: allow headings with ids but strip scripts/iframes
+const specSanitizeSchema = {
+  ...defaultSchema,
+  attributes: {
+    ...defaultSchema.attributes,
+    h1: [...(defaultSchema.attributes?.h1 || []), "id"],
+    h2: [...(defaultSchema.attributes?.h2 || []), "id"],
+    h3: [...(defaultSchema.attributes?.h3 || []), "id"],
+    h4: [...(defaultSchema.attributes?.h4 || []), "id"],
+    h5: [...(defaultSchema.attributes?.h5 || []), "id"],
+    h6: [...(defaultSchema.attributes?.h6 || []), "id"],
+    a: [...(defaultSchema.attributes?.a || []), "id"],
+  },
+};
 
 // ── Markdown rendering (copied from src/index.js) ──────────────────────
 
@@ -25,10 +42,11 @@ async function renderMarkdown(content) {
   const result = await unified()
     .use(remarkParse)
     .use(remarkGfm)
-    .use(remarkRehype, { allowDangerousHtml: true })
+    .use(remarkRehype)
+    .use(rehypeSanitize, specSanitizeSchema)
     .use(rehypeSlug)
     .use(rehypeAutolinkHeadings, { behavior: "wrap" })
-    .use(rehypeStringify, { allowDangerousHtml: true })
+    .use(rehypeStringify)
     .process(content);
   return String(result);
 }
@@ -979,7 +997,7 @@ async function main() {
   app.post("/api/review", (_req, res) => res.json({ ok: true }));
   app.get("/api/pending", (_req, res) => res.json({ count: 0, isOffline: false }));
 
-  const server = app.listen(PORT, () => {
+  const server = app.listen(PORT, "127.0.0.1", () => {
     const url = `http://localhost:${PORT}`;
     console.log(`\n  Demo server running at ${url} — use for screenshots\n`);
     open(url);
