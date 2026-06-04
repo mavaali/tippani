@@ -1,5 +1,9 @@
 # tippani
 
+[![npm](https://img.shields.io/npm/v/tippani)](https://www.npmjs.com/package/tippani)
+[![GitHub release](https://img.shields.io/github/v/release/mavaali/tippani)](https://github.com/mavaali/tippani/releases/latest)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+
 > टिप्पणी — *annotation* (Sanskrit)
 
 Offline-capable CLI that renders Azure DevOps PR markdown files as a clean, three-column review portal — designed for non-technical reviewers who shouldn't need to learn ADO's diff view.
