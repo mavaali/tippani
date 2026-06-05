@@ -539,7 +539,7 @@ function buildPickerPage(pr, changedFiles) {
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>FabricSpecs Review — PR #${prId}</title>
+<title>Tippani — PR #${prId}</title>
 <style>
 ${cssVariables()}
 * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -551,7 +551,8 @@ body { font-family: "Segoe UI", Aptos, Calibri, -apple-system, BlinkMacSystemFon
 
 .brand-bar { display: flex; align-items: center; gap: 10px; margin-bottom: 32px; }
 .logo { width: 32px; height: 32px; border-radius: 8px; background: var(--cp-accent); display: flex; align-items: center; justify-content: center; color: var(--cp-accent-fg); font-size: 12px; font-weight: 700; }
-.brand-text { font-size: 15px; font-weight: 600; color: var(--cp-text-muted); }
+.brand-text { font-size: 15px; font-weight: 600; color: var(--cp-text); }
+.brand-text-sub { font-size: 13px; font-weight: 400; color: var(--cp-text-muted); }
 
 .container { width: 100%; max-width: 720px; }
 
@@ -583,7 +584,7 @@ body { font-family: "Segoe UI", Aptos, Calibri, -apple-system, BlinkMacSystemFon
 <body>
   <div class="brand-bar">
     <div class="logo">FS</div>
-    <span class="brand-text">FabricSpecs Review Portal</span>
+    <span class="brand-text">Tippani</span><span class="brand-text-sub"> · read · annotate · edit</span>
   </div>
   <div class="container">
     <div class="pr-card">
@@ -676,7 +677,7 @@ function buildSpecPage(specHtml, toc, metadata, pr, threads, specPath, sourceMap
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>${prTitle} — FabricSpecs Review</title>
+<title>${prTitle} — Tippani</title>
 <style>
 ${cssVariables()}
 * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -704,7 +705,8 @@ button:focus-visible { outline: 2px solid var(--cp-accent); outline-offset: 2px;
 .main-content.editing { box-shadow: inset 0 0 0 2px var(--cp-accent-soft); background: var(--cp-accent-soft); }
 .main-content.editing #spec-editor { background: var(--cp-bg); }
 .logo { width: 26px; height: 26px; border-radius: 6px; background: var(--cp-accent); display: flex; align-items: center; justify-content: center; color: var(--cp-accent-fg); font-size: 10px; font-weight: 700; flex-shrink: 0; }
-.brand { font-size: 13px; font-weight: 600; color: var(--cp-text-muted); flex-shrink: 0; }
+.brand { font-size: 13px; font-weight: 600; color: var(--cp-text); flex-shrink: 0; }
+.brand-sub { font-size: 11px; font-weight: 400; color: var(--cp-text-muted); flex-shrink: 0; white-space: nowrap; }
 .hdr-sep { color: var(--cp-border); margin: 0 2px; }
 .pr-info { min-width: 0; }
 .pr-info h1 { font-size: 14px; font-weight: 600; line-height: 1.3; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -884,7 +886,7 @@ details[open] .resolved-summary::before { content: '▾ '; }
   <div class="header-left">
     <a href="/" style="text-decoration:none;display:flex;align-items:center;gap:10px;">
       <div class="logo">FS</div>
-      <span class="brand">Review Portal</span>
+      <span class="brand">Tippani</span><span class="brand-sub"> · read · annotate · edit</span>
     </a>
     <span class="hdr-sep">|</span>
     <div class="pr-info">
@@ -2029,7 +2031,7 @@ async function main() {
   const server = app.listen(PORT, "127.0.0.1", () => {
     const base = `http://localhost:${PORT}`;
     const url = openIndex !== null ? `${base}/file/${openIndex}` : base;
-    console.log(`\n  Review portal running at ${base}\n`);
+    console.log(`\n  Tippani running at ${base}\n`);
     open(url);
   });
   server.on("error", (err) => {

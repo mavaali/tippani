@@ -1,7 +1,7 @@
 {
   "name": "tippani",
   "version": "1.2.0",
-  "description": "Offline-capable CLI that renders Azure DevOps PR markdown files as a clean review portal",
+  "description": "Offline-capable CLI to read, annotate, and edit Azure DevOps PR markdown specs",
   "type": "module",
   "bin": {
     "tippani": "./src/index.js"
