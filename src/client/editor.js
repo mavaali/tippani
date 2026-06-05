@@ -263,6 +263,37 @@ const tippaniTheme = EditorView.theme({
     background: "var(--cp-surface-soft)",
     fontWeight: "600",
   },
+  ".cm-pv-table th:focus, .cm-pv-table td:focus": {
+    outline: "2px solid var(--cp-accent)",
+    outlineOffset: "-2px",
+  },
+  ".cm-pv-table-wrap": { position: "relative", margin: "4px 0" },
+  // Toolbar hidden until the table has focus.
+  ".cm-pv-tbar": {
+    display: "none",
+    position: "absolute",
+    top: "-30px",
+    left: "0",
+    gap: "3px",
+    background: "var(--cp-surface)",
+    border: "1px solid var(--cp-border)",
+    borderRadius: "6px",
+    padding: "3px",
+    zIndex: "20",
+  },
+  ".cm-pv-table-wrap:focus-within .cm-pv-tbar": { display: "flex" },
+  ".cm-pv-tbar button": {
+    fontFamily: "inherit",
+    fontSize: "11px",
+    lineHeight: "1",
+    padding: "3px 6px",
+    border: "1px solid var(--cp-border)",
+    borderRadius: "4px",
+    background: "var(--cp-bg)",
+    color: "var(--cp-text)",
+    cursor: "pointer",
+  },
+  ".cm-pv-tbar button:hover": { background: "var(--cp-surface-soft)" },
 });
 
 // --- Public API ---------------------------------------------------------------
