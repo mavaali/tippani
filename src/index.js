@@ -260,6 +260,41 @@ async function resolveThread(conn, prId, threadId) {
   return gitApi.updateThread({ status: 2 }, ADO_REPO, prId, threadId, ADO_PROJECT);
 }
 
+// Current tip commit (objectId) of a branch ref like "refs/heads/feature/x".
+async function getBranchTip(conn, branchRef) {
+  const gitApi = await conn.getGitApi();
+  const shortBranch = branchRef.replace("refs/heads/", "");
+  const refs = await gitApi.getRefs(ADO_REPO, ADO_PROJECT, `heads/${shortBranch}`);
+  const ref = (refs || []).find((r) => r.name === branchRef);
+  if (!ref) throw new Error(`Branch ref not found: ${branchRef}`);
+  return ref.objectId;
+}
+
+// Commit an edited file to a branch via the ADO push API. expectedOldObjectId, when
+// provided, is used as the push's oldObjectId (optimistic concurrency — the conflict
+// guard in #49 passes the load-time SHA); otherwise the live tip is used.
+async function pushFileToBranch(conn, branchRef, filePath, content, message, expectedOldObjectId) {
+  const gitApi = await conn.getGitApi();
+  const oldObjectId = expectedOldObjectId || (await getBranchTip(conn, branchRef));
+  const push = {
+    refUpdates: [{ name: branchRef, oldObjectId }],
+    commits: [
+      {
+        comment: message,
+        changes: [
+          {
+            changeType: 2, // VersionControlChangeType.Edit
+            item: { path: filePath },
+            newContent: { content, contentType: 0 }, // ItemContentType.RawText
+          },
+        ],
+      },
+    ],
+  };
+  const result = await gitApi.createPush(push, ADO_REPO, ADO_PROJECT);
+  return result?.commits?.[0]?.commitId || result?.refUpdates?.[0]?.newObjectId || null;
+}
+
 // --- Markdown rendering ---
 // Spec content schema: allow headings with ids (for TOC) but strip scripts/iframes
 const specSanitizeSchema = {
@@ -767,6 +802,12 @@ details[open] .resolved-summary::before { content: '▾ '; }
 .diff-del { background: color-mix(in srgb, #d93f0b 14%, transparent); }
 .diff-del .diff-gutter { color: #d93f0b; }
 .diff-empty { padding: 24px; text-align: center; color: var(--cp-text-muted); }
+.diff-msg-row { display: flex; align-items: center; gap: 10px; margin-top: 12px; }
+.diff-msg-row label { font-size: 12px; font-weight: 600; color: var(--cp-text-muted); white-space: nowrap; }
+.diff-msg-row input { flex: 1; font-family: inherit; font-size: 13px; padding: 7px 10px; border-radius: 8px; border: 1px solid var(--cp-border); background: var(--cp-bg); color: var(--cp-text); }
+.save-btn { background: var(--cp-accent); color: var(--cp-accent-fg); border-color: var(--cp-accent); }
+.save-btn:hover:not(:disabled) { background: var(--cp-accent-hover); }
+.save-btn:disabled { opacity: 0.5; cursor: default; }
 
 /* Toast */
 .toast { position: fixed; bottom: 80px; right: 24px; background: var(--cp-surface); color: var(--cp-text); padding: 10px 18px; border-radius: 10px; font-size: 13px; display: none; z-index: 200; border: 1px solid var(--cp-border); box-shadow: var(--cp-shadow); }
@@ -795,6 +836,7 @@ details[open] .resolved-summary::before { content: '▾ '; }
     </div>
   </div>
   <div class="header-right">
+    ${canEdit ? `<button class="edit-toggle save-btn" id="saveBtn" onclick="tippani.save()" style="display:none" disabled>Save</button>` : ""}
     ${canEdit ? `<button class="edit-toggle" id="editToggle" onclick="tippani.toggle()" title="Toggle edit mode (${"⌘"}/Ctrl+E)">Edit</button>` : ""}
   </div>
 </div>
@@ -855,6 +897,10 @@ details[open] .resolved-summary::before { content: '▾ '; }
       <span class="diff-stats" id="diffStats"></span>
     </div>
     <div class="diff-body" id="diffBody"></div>
+    <div class="diff-msg-row" id="diffMsgRow" style="display:none">
+      <label for="commitMsg">Commit message</label>
+      <input type="text" id="commitMsg" autocomplete="off" />
+    </div>
     <div class="comment-modal-actions">
       <button class="modal-btn" id="diffCancel">Cancel</button>
       <button class="modal-btn modal-btn-primary" id="diffConfirm">Confirm &amp; Save</button>
@@ -870,16 +916,29 @@ details[open] .resolved-summary::before { content: '▾ '; }
 // The CM editor is mounted lazily on first entry and reused, so edits persist
 // across toggle cycles within the session. Cmd/Ctrl+E toggles.
 window.tippani = (function () {
-  const RAW_MARKDOWN = ${JSON.stringify(rawMarkdown || "")};
+  // Mutable baseline: updated after a successful save so the editor is no longer
+  // dirty and the next diff is measured against the saved state.
+  let RAW_MARKDOWN = ${JSON.stringify(rawMarkdown || "")};
+  const SPEC_FILE_PATH = ${JSON.stringify(specPath)};
+  const FILENAME = SPEC_FILE_PATH.split("/").pop();
   let editor = null;
   let editMode = false;
+  let saving = false;
 
   const el = (id) => document.getElementById(id);
   const isDirty = () => !!editor && editor.getMarkdown() !== RAW_MARKDOWN;
 
+  // Save button is enabled only when there are unsaved changes.
+  function updateSaveState() {
+    const btn = el("saveBtn");
+    if (btn) btn.disabled = saving || !isDirty();
+  }
+
   function ensureEditor() {
     if (!editor && window.TippaniEditor)
-      editor = window.TippaniEditor.mount(el("spec-editor"), RAW_MARKDOWN, {});
+      editor = window.TippaniEditor.mount(el("spec-editor"), RAW_MARKDOWN, {
+        onChange: updateSaveState,
+      });
     return editor;
   }
   function enterEdit() {
@@ -889,19 +948,24 @@ window.tippani = (function () {
     el("mainContent").classList.add("editing");
     const btn = el("editToggle");
     if (btn) btn.textContent = "View";
+    const save = el("saveBtn");
+    if (save) save.style.display = "";
+    updateSaveState();
     editMode = true;
     editor.view.focus();
   }
   function exitEdit() {
     // Unsaved-changes prompt on mode switch. Edits are kept for the session (not
-    // discarded) so they survive toggle cycles; a true discard/Save arrives with
-    // #49 / #48. Cancel keeps you in edit mode.
+    // discarded) so they survive toggle cycles; saving is via the Save button.
+    // Cancel keeps you in edit mode.
     if (isDirty() && !confirm("You have unsaved changes. Switch to read view? Your edits are kept for this session.")) return;
     el("spec-editor").style.display = "none";
     el("spec-content").style.display = "";
     el("mainContent").classList.remove("editing");
     const btn = el("editToggle");
     if (btn) btn.textContent = "Edit";
+    const save = el("saveBtn");
+    if (save) save.style.display = "none";
     editMode = false;
   }
   function toggle() {
@@ -952,6 +1016,50 @@ window.tippani = (function () {
     });
   }
 
+  // Save (#48): diff preview (with editable commit message) → commit to PR branch.
+  async function save() {
+    if (saving || !isDirty()) return;
+    const newMd = editor.getMarkdown();
+    const msgRow = el("diffMsgRow");
+    const msgInput = el("commitMsg");
+    const defaultMsg = "tippani: update " + FILENAME;
+    if (msgInput) msgInput.value = defaultMsg;
+    if (msgRow) msgRow.style.display = "flex";
+    const ok = await showDiff(RAW_MARKDOWN, newMd);
+    if (msgRow) msgRow.style.display = "none";
+    if (!ok) return;
+    const message = (msgInput && msgInput.value.trim()) || defaultMsg;
+
+    saving = true;
+    const btn = el("saveBtn");
+    if (btn) btn.textContent = "Saving…";
+    updateSaveState();
+    const toast = (m) => window.showToast && window.showToast(m);
+    try {
+      const r = await fetch("/api/save", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ filePath: SPEC_FILE_PATH, content: newMd, message }),
+      });
+      const data = await r.json();
+      if (data.ok && data.synced) {
+        RAW_MARKDOWN = newMd; // new saved baseline → no longer dirty
+        toast("Saved — commit " + (data.commitId ? String(data.commitId).slice(0, 8) : "ok"));
+      } else if (data.queued) {
+        RAW_MARKDOWN = newMd; // safely persisted to the queue; will retry on sync
+        toast(data.error ? "Push failed (" + data.error + ") — queued, will retry on sync" : (data.message || "Saved locally — will sync"));
+      } else {
+        toast("Save failed: " + (data.error || "unknown") + " — your edits are kept");
+      }
+    } catch (e) {
+      toast("Save failed: " + e.message + " — your edits are kept");
+    } finally {
+      saving = false;
+      if (btn) btn.textContent = "Save";
+      updateSaveState();
+    }
+  }
+
   document.addEventListener("keydown", (e) => {
     if ((e.metaKey || e.ctrlKey) && (e.key === "e" || e.key === "E")) {
       // Only when an Edit affordance exists (write access).
@@ -971,6 +1079,7 @@ window.tippani = (function () {
     enterEdit,
     exitEdit,
     isDirty,
+    save,
     showDiff,
     // Original (last-loaded) markdown — the baseline a save diffs against.
     getOriginal: () => RAW_MARKDOWN,
@@ -1600,6 +1709,37 @@ async function main() {
     }
   });
 
+  // Save an edited spec: commit the markdown to the PR source branch (#48).
+  app.post("/api/save", async (req, res) => {
+    const { filePath, content, message } = req.body || {};
+    if (typeof content !== "string" || !filePath) {
+      return res.status(400).json({ ok: false, error: "filePath and content are required" });
+    }
+    const commitMessage = (message && String(message).trim()) || `tippani: update ${filePath.split("/").pop()}`;
+    // Queue first so a failure/offline never loses the edit.
+    const action = addPending(_prId, { type: "save", filePath, content, message: commitMessage });
+
+    if (_isOffline || !_conn) {
+      return res.json({ ok: true, synced: false, queued: true, message: "Saved locally (offline) — will push on sync." });
+    }
+    try {
+      const commitId = await pushFileToBranch(_conn, _branch, filePath, content, commitMessage);
+      const pending = loadPending(_prId);
+      const idx = pending.findIndex((p) => p.id === action.id);
+      if (idx >= 0) pending[idx].synced = true;
+      savePending(_prId, pending);
+      // Refresh the local cache so a reload shows the saved content.
+      if (_cache && _cache.fileContents) {
+        _cache.fileContents[filePath] = content;
+        saveCache(_prId, _cache);
+      }
+      res.json({ ok: true, synced: true, commitId });
+    } catch (e) {
+      // Edit stays queued (unsynced) — no data loss. Surface an actionable error.
+      res.json({ ok: false, synced: false, queued: true, error: friendlyAdoError(e, "save") });
+    }
+  });
+
   app.post("/api/review", async (req, res) => {
     try {
       const gitApi = await _conn.getGitApi();
@@ -1628,6 +1768,9 @@ async function main() {
           await replyToThread(_conn, _prId, action.threadId, action.content);
         } else if (action.type === 'resolve') {
           await resolveThread(_conn, _prId, action.threadId);
+        } else if (action.type === 'save') {
+          await pushFileToBranch(_conn, _branch, action.filePath, action.content, action.message);
+          if (_cache && _cache.fileContents) _cache.fileContents[action.filePath] = action.content;
         }
         action.synced = true;
         synced++;
