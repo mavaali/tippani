@@ -309,10 +309,11 @@ const GIT_PERMISSION_GENERIC_CONTRIBUTE = 4;
 // Whether the Edit affordance should be offered, gating push access. Decided without a
 // network call when it can be: a non-active PR is never editable; offline is allowed
 // (edits queue and sync on reconnect, per #48); online-but-unauthenticated can't push.
-// Otherwise probe ADO for GenericContribute at the repository level. The repo-level token
-// needs no ref-name encoding and catches the dominant "read-only access" case; rare
-// per-branch deny ACLs fall through (fail open) and the save path surfaces any real
-// rejection. Probe errors also fail open. See decideCanEdit (canedit.js) for the gate.
+// If the installed ADO SDK exposes a generic security namespace API, probe ADO for
+// GenericContribute at the repository level. azure-devops-node-api@15 does not expose
+// that API, so those builds fall through as indeterminate (fail open) and the save path
+// surfaces any real rejection. Probe errors also fail open. See decideCanEdit
+// (canedit.js) for the gate.
 async function computeCanEdit(conn, pr, isOffline) {
   if (isOffline || !conn || pr?.status !== 1) {
     return decideCanEdit({ isOffline, hasConn: !!conn, prStatus: pr?.status, probe: null });
@@ -322,6 +323,9 @@ async function computeCanEdit(conn, pr, isOffline) {
   let probe = null; // indeterminate => fail open
   if (projectId && repoId) {
     try {
+      if (typeof conn.getSecurityApi !== "function") {
+        return decideCanEdit({ isOffline, hasConn: true, prStatus: pr.status, probe: null });
+      }
       const securityApi = await conn.getSecurityApi();
       const results = await securityApi.hasPermissions(
         GIT_SECURITY_NAMESPACE,
@@ -691,6 +695,11 @@ button:focus-visible { outline: 2px solid var(--cp-accent); outline-offset: 2px;
 .header-right { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
 .edit-toggle { font-family: inherit; font-size: 12px; font-weight: 600; padding: 6px 14px; border-radius: 6px; border: 1px solid var(--cp-border); background: var(--cp-bg); color: var(--cp-text); cursor: pointer; transition: background 0.12s, border-color 0.12s; }
 .edit-toggle:hover { background: var(--cp-surface-soft); border-color: var(--cp-border-strong); }
+.edit-pane-controls { display: none; align-items: center; gap: 4px; padding-right: 2px; border-right: 1px solid var(--cp-border); margin-right: 2px; }
+.edit-pane-controls.visible { display: flex; }
+.pane-toggle { width: 30px; height: 30px; display: inline-flex; align-items: center; justify-content: center; padding: 0; border-radius: 6px; border: 1px solid var(--cp-border); background: var(--cp-bg); color: var(--cp-text-muted); cursor: pointer; font-family: inherit; font-size: 12px; font-weight: 700; transition: background 0.12s, border-color 0.12s, color 0.12s; }
+.pane-toggle:hover { background: var(--cp-surface-soft); border-color: var(--cp-border-strong); color: var(--cp-text); }
+.pane-toggle.active { background: var(--cp-accent-soft); border-color: var(--cp-accent); color: var(--cp-accent); }
 /* Edit-mode visual distinction on the center column */
 .main-content.editing { box-shadow: inset 0 0 0 2px var(--cp-accent-soft); background: var(--cp-accent-soft); }
 .main-content.editing #spec-editor { background: var(--cp-bg); }
@@ -727,6 +736,10 @@ body.col-resizing * { cursor: col-resize !important; user-select: none !importan
 /* Left sidebar */
 .sidebar-left { width: 260px; flex-shrink: 0; display: flex; flex-direction: column; border-right: 1px solid var(--cp-border); background: var(--cp-bg-elevated); overflow: hidden; }
 .sidebar-left-scroll { flex: 1; overflow-y: auto; padding: 16px; }
+.layout.edit-mode.left-collapsed .sidebar-left { width: 42px !important; align-items: center; }
+.layout.edit-mode.left-collapsed .sidebar-left-scroll { display: none; }
+.layout.edit-mode.left-collapsed .sidebar-left::before { content: 'TOC'; writing-mode: vertical-rl; text-orientation: mixed; margin-top: 16px; font-size: 11px; font-weight: 700; letter-spacing: 0.08em; color: var(--cp-text-muted); }
+.layout.edit-mode.left-collapsed #resizeLeft { display: none; }
 .sidebar-section-label { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; color: var(--cp-text-muted); margin-bottom: 8px; margin-top: 16px; }
 .sidebar-section-label:first-child { margin-top: 0; }
 
@@ -770,6 +783,10 @@ body.col-resizing * { cursor: col-resize !important; user-select: none !importan
 
 /* Right sidebar — comments */
 .sidebar-right { width: 320px; flex-shrink: 0; border-left: 1px solid var(--cp-border); background: var(--cp-bg-elevated); overflow-y: auto; padding: 16px; }
+.layout.edit-mode.right-collapsed .sidebar-right { width: 42px !important; padding: 0; display: flex; align-items: center; justify-content: flex-start; overflow: hidden; }
+.layout.edit-mode.right-collapsed .sidebar-right > * { display: none; }
+.layout.edit-mode.right-collapsed .sidebar-right::before { content: 'Comments'; writing-mode: vertical-rl; text-orientation: mixed; margin-top: 16px; font-size: 11px; font-weight: 700; letter-spacing: 0.08em; color: var(--cp-text-muted); }
+.layout.edit-mode.right-collapsed #resizeRight { display: none; }
 .empty-comments { font-size: 13px; color: var(--cp-text-muted); font-style: italic; padding: 12px 0; }
 .comment-thread { background: var(--cp-surface); border: 1px solid var(--cp-border); border-radius: 16px; padding: 16px; margin-bottom: 10px; font-size: 13px; transition: box-shadow 0.15s; overflow: hidden; min-width: 0; }
 .comment-thread:hover { box-shadow: 0 4px 16px rgba(0,0,0,0.08); }
@@ -881,6 +898,11 @@ details[open] .resolved-summary::before { content: '▾ '; }
   </div>
   <div class="header-right">
     <span class="dirty-dot" id="dirtyDot" style="display:none" title="Unsaved changes">●</span>
+    ${canEdit ? `<div class="edit-pane-controls" id="editPaneControls" aria-label="Edit layout controls">
+      <button class="pane-toggle" id="toggleTocPane" onclick="tippani.togglePane('left')" title="Minimize contents pane" aria-label="Minimize contents pane" aria-pressed="false">T</button>
+      <button class="pane-toggle" id="toggleCommentsPane" onclick="tippani.togglePane('right')" title="Minimize comments pane" aria-label="Minimize comments pane" aria-pressed="false">C</button>
+      <button class="pane-toggle" id="focusEditPane" onclick="tippani.toggleFocusEdit()" title="Focus editor" aria-label="Focus editor" aria-pressed="false">F</button>
+    </div>` : ""}
     ${canEdit ? `<button class="edit-toggle save-btn" id="saveBtn" onclick="tippani.save()" style="display:none" disabled>Save</button>` : ""}
     ${canEdit ? `<button class="edit-toggle" id="editToggle" onclick="tippani.toggle()" title="Toggle edit mode (${"⌘"}/Ctrl+E)">Edit</button>` : ""}
   </div>
@@ -984,6 +1006,10 @@ window.tippani = (function () {
   let editor = null;
   let editMode = false;
   let saving = false;
+  const paneState = {
+    left: localStorage.getItem("fsrp-edit-left-collapsed") === "1",
+    right: localStorage.getItem("fsrp-edit-right-collapsed") === "1",
+  };
 
   const el = (id) => document.getElementById(id);
   const isDirty = () => !!editor && editor.getMarkdown() !== RAW_MARKDOWN;
@@ -1015,6 +1041,61 @@ window.tippani = (function () {
       });
     return editor;
   }
+
+  function updatePaneControls() {
+    const controls = el("editPaneControls");
+    if (controls) controls.classList.toggle("visible", editMode);
+    const toc = el("toggleTocPane");
+    const comments = el("toggleCommentsPane");
+    const focus = el("focusEditPane");
+    if (toc) {
+      toc.classList.toggle("active", paneState.left);
+      toc.setAttribute("aria-pressed", paneState.left ? "true" : "false");
+      toc.title = paneState.left ? "Restore contents pane" : "Minimize contents pane";
+      toc.setAttribute("aria-label", toc.title);
+    }
+    if (comments) {
+      comments.classList.toggle("active", paneState.right);
+      comments.setAttribute("aria-pressed", paneState.right ? "true" : "false");
+      comments.title = paneState.right ? "Restore comments pane" : "Minimize comments pane";
+      comments.setAttribute("aria-label", comments.title);
+    }
+    if (focus) {
+      const focused = paneState.left && paneState.right;
+      focus.classList.toggle("active", focused);
+      focus.setAttribute("aria-pressed", focused ? "true" : "false");
+      focus.title = focused ? "Restore edit panes" : "Focus editor";
+      focus.setAttribute("aria-label", focus.title);
+    }
+  }
+
+  function applyEditPaneState() {
+    const layout = el("layout");
+    if (!layout) return;
+    layout.classList.toggle("edit-mode", editMode);
+    layout.classList.toggle("left-collapsed", paneState.left);
+    layout.classList.toggle("right-collapsed", paneState.right);
+    updatePaneControls();
+  }
+
+  function setPaneCollapsed(side, collapsed, persist = true) {
+    paneState[side] = collapsed;
+    if (persist) localStorage.setItem("fsrp-edit-" + side + "-collapsed", collapsed ? "1" : "0");
+    applyEditPaneState();
+  }
+
+  function togglePane(side) {
+    if (!editMode) return;
+    setPaneCollapsed(side, !paneState[side]);
+  }
+
+  function toggleFocusEdit() {
+    if (!editMode) return;
+    const collapseBoth = !(paneState.left && paneState.right);
+    setPaneCollapsed("left", collapseBoth);
+    setPaneCollapsed("right", collapseBoth);
+  }
+
   function enterEdit() {
     if (!ensureEditor()) return;
     el("spec-content").style.display = "none";
@@ -1027,6 +1108,7 @@ window.tippani = (function () {
     updateSaveState();
     updateDirtyIndicator();
     editMode = true;
+    applyEditPaneState();
     editor.view.focus();
   }
   function exitEdit() {
@@ -1042,6 +1124,7 @@ window.tippani = (function () {
     const save = el("saveBtn");
     if (save) save.style.display = "none";
     editMode = false;
+    applyEditPaneState();
   }
   function toggle() {
     editMode ? exitEdit() : enterEdit();
@@ -1201,6 +1284,8 @@ window.tippani = (function () {
   }
   return {
     toggle,
+    togglePane,
+    toggleFocusEdit,
     enterEdit,
     exitEdit,
     isDirty,

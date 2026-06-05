@@ -45,6 +45,33 @@ function caretToEnd(el) {
   sel.addRange(range);
 }
 
+function escHtml(s) {
+  return String(s)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
+function renderInlineMarkdown(md) {
+  let html = escHtml(md);
+  html = html.replace(/`([^`]+)`/g, "<code>$1</code>");
+  html = html.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
+  html = html.replace(/__([^_]+)__/g, "<strong>$1</strong>");
+  html = html.replace(/\*([^*]+)\*/g, "<em>$1</em>");
+  html = html.replace(/_([^_]+)_/g, "<em>$1</em>");
+  html = html.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<span class="cm-pv-cell-link">$1</span>');
+  return html;
+}
+
+function cellMarkdown(cell) {
+  return cell === document.activeElement ? cell.textContent.trim() : (cell.dataset.md || cell.textContent.trim());
+}
+
+function renderCell(cell) {
+  cell.innerHTML = renderInlineMarkdown(cell.dataset.md || "");
+}
+
 class TableWidget extends WidgetType {
   constructor(src, model) {
     super();
@@ -59,10 +86,10 @@ class TableWidget extends WidgetType {
   // Read the grid DOM back into a table model, preserving alignment.
   readModel(table) {
     const header = [...table.querySelectorAll("thead th")].map((th) =>
-      th.textContent.trim()
+      cellMarkdown(th)
     );
     const rows = [...table.querySelectorAll("tbody tr")].map((tr) =>
-      [...tr.children].map((td) => td.textContent.trim())
+      [...tr.children].map((td) => cellMarkdown(td))
     );
     return { aligns: this.model.aligns.slice(), header, rows };
   }
@@ -240,11 +267,20 @@ class TableWidget extends WidgetType {
 
     const mkCell = (tag, text, c) => {
       const el = document.createElement(tag);
-      el.textContent = text;
+      el.dataset.md = text;
+      renderCell(el);
       el.style.textAlign = ALIGN_CSS[aligns[c]] || "left";
       el.contentEditable = "true";
       el.spellcheck = false;
-      el.addEventListener("focus", () => setActiveFromCell(el));
+      el.addEventListener("focus", () => {
+        setActiveFromCell(el);
+        el.textContent = el.dataset.md || "";
+        caretToEnd(el);
+      });
+      el.addEventListener("blur", () => {
+        el.dataset.md = el.textContent.trim();
+        renderCell(el);
+      });
       el.addEventListener("keydown", (e) => {
         if (
           e.key === "Tab" ||
