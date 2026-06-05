@@ -14,6 +14,7 @@ import {
 } from "@codemirror/view";
 import { syntaxTree } from "@codemirror/language";
 import { markdown } from "@codemirror/lang-markdown";
+import { GFM } from "@lezer/markdown";
 import { defaultKeymap, history, historyKeymap } from "@codemirror/commands";
 
 // --- Live-preview decorations -------------------------------------------------
@@ -30,10 +31,40 @@ function selectionTouches(state, from, to) {
   return false;
 }
 
-// Line-level class for headings so we can size them via CSS.
-const headingLine = (level) =>
-  Decoration.line({ class: `cm-pv-h${level}` });
-const strongMark = Decoration.mark({ class: "cm-pv-strong" });
+// Line-level decorations (size headings, style block elements via CSS).
+const headingLine = (level) => Decoration.line({ class: `cm-pv-h${level}` });
+const lineClass = (cls) => Decoration.line({ class: cls });
+
+// Inline mark decorations.
+const mark = (cls) => Decoration.mark({ class: cls });
+const strongMark = mark("cm-pv-strong");
+const emMark = mark("cm-pv-em");
+const strikeMark = mark("cm-pv-strike");
+const codeInlineMark = mark("cm-pv-code-inline");
+const linkMark = mark("cm-pv-link");
+const listMark = mark("cm-pv-listmark");
+
+// Hide a node's marker children (delimiters) when the cursor isn't on it. Walking
+// the actual marker nodes is robust to *, _, ** and __ forms and nesting.
+function hideChildren(node, names, deco) {
+  const n = node.node;
+  for (const name of names) {
+    for (const c of n.getChildren(name)) {
+      if (c.to > c.from) deco.push(hideMark.range(c.from, c.to));
+    }
+  }
+}
+
+// Apply a line class to every line a [from, to] range spans.
+function addLineClass(state, from, to, cls, deco) {
+  let pos = from;
+  for (;;) {
+    const line = state.doc.lineAt(pos);
+    deco.push(lineClass(cls).range(line.from));
+    if (line.to >= to) break;
+    pos = line.to + 1;
+  }
+}
 
 function buildDecorations(view) {
   const deco = [];
@@ -43,6 +74,8 @@ function buildDecorations(view) {
       from,
       to,
       enter(node) {
+        const reveal = selectionTouches(state, node.from, node.to);
+
         // Headings: ATXHeading1..6 — size the line, hide the leading "# " marker
         const headingMatch = /^ATXHeading(\d)$/.exec(node.name);
         if (headingMatch) {
@@ -50,21 +83,65 @@ function buildDecorations(view) {
           const line = state.doc.lineAt(node.from);
           deco.push(headingLine(level).range(line.from));
           if (!selectionTouches(state, line.from, line.to)) {
-            // hide "#"* and the following space
             const text = state.doc.sliceString(line.from, line.to);
             const m = /^#{1,6}\s/.exec(text);
             if (m) deco.push(hideMark.range(line.from, line.from + m[0].length));
           }
           return;
         }
-        // Strong (**bold**): style inner text, hide the ** delimiters off-cursor
-        if (node.name === "StrongEmphasis") {
-          const reveal = selectionTouches(state, node.from, node.to);
-          deco.push(strongMark.range(node.from + 2, node.to - 2));
-          if (!reveal) {
-            deco.push(hideMark.range(node.from, node.from + 2));
-            deco.push(hideMark.range(node.to - 2, node.to));
+
+        switch (node.name) {
+          case "StrongEmphasis":
+            deco.push(strongMark.range(node.from, node.to));
+            if (!reveal) hideChildren(node, ["EmphasisMark"], deco);
+            break;
+          case "Emphasis":
+            deco.push(emMark.range(node.from, node.to));
+            if (!reveal) hideChildren(node, ["EmphasisMark"], deco);
+            break;
+          case "Strikethrough":
+            deco.push(strikeMark.range(node.from, node.to));
+            if (!reveal) hideChildren(node, ["StrikethroughMark"], deco);
+            break;
+          case "InlineCode":
+            deco.push(codeInlineMark.range(node.from, node.to));
+            if (!reveal) hideChildren(node, ["CodeMark"], deco);
+            break;
+          case "Link":
+            // Keep the link text; hide the [ ] ( ) marks, URL and title off-cursor.
+            deco.push(linkMark.range(node.from, node.to));
+            if (!reveal) hideChildren(node, ["LinkMark", "URL", "LinkTitle"], deco);
+            break;
+          case "ListMark":
+            deco.push(listMark.range(node.from, node.to));
+            break;
+          case "Blockquote":
+            addLineClass(state, node.from, node.to, "cm-pv-quote", deco);
+            break;
+          case "QuoteMark": {
+            // Per-line reveal — each ">" hides unless the cursor is on its line.
+            // (A blockquote's marks aren't all direct children, so handle the mark
+            // node directly rather than via the Blockquote node.)
+            const qLine = state.doc.lineAt(node.from);
+            if (!selectionTouches(state, qLine.from, qLine.to)) {
+              const after =
+                state.doc.sliceString(node.to, node.to + 1) === " " ? 1 : 0;
+              deco.push(hideMark.range(node.from, node.to + after));
+            }
+            break;
           }
+          case "FencedCode":
+            addLineClass(state, node.from, node.to, "cm-pv-code", deco);
+            break;
+          case "HorizontalRule": {
+            const line = state.doc.lineAt(node.from);
+            deco.push(lineClass("cm-pv-hr").range(line.from));
+            if (!reveal && line.to > line.from)
+              deco.push(hideMark.range(line.from, line.to));
+            break;
+          }
+          default:
+            break;
         }
       },
     });
@@ -91,6 +168,9 @@ const livePreview = ViewPlugin.fromClass(
 // Theme bound to Tippani's CSS variables (inherits dark mode for free).
 const tippaniTheme = EditorView.theme({
   "&": { backgroundColor: "transparent", color: "var(--cp-text)" },
+  // CM6's base theme forces monospace on .cm-scroller — override so prose inherits
+  // the document's sans-serif font.
+  ".cm-scroller": { fontFamily: "inherit", lineHeight: "1.7" },
   ".cm-content": {
     fontFamily: "inherit",
     fontSize: "15px",
@@ -100,13 +180,42 @@ const tippaniTheme = EditorView.theme({
   },
   ".cm-cursor": { borderLeftColor: "var(--cp-accent)" },
   "&.cm-focused": { outline: "none" },
+  // Headings
   ".cm-pv-h1": { fontSize: "1.8em", fontWeight: "700", lineHeight: "1.3" },
   ".cm-pv-h2": { fontSize: "1.45em", fontWeight: "700", lineHeight: "1.3" },
   ".cm-pv-h3": { fontSize: "1.2em", fontWeight: "600" },
   ".cm-pv-h4": { fontSize: "1.05em", fontWeight: "600" },
   ".cm-pv-h5": { fontWeight: "600" },
   ".cm-pv-h6": { fontWeight: "600", color: "var(--cp-text-muted)" },
+  // Inline
   ".cm-pv-strong": { fontWeight: "700" },
+  ".cm-pv-em": { fontStyle: "italic" },
+  ".cm-pv-strike": { textDecoration: "line-through", color: "var(--cp-text-muted)" },
+  ".cm-pv-code-inline": {
+    fontFamily: "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace",
+    fontSize: "0.9em",
+    background: "var(--cp-surface-soft)",
+    border: "1px solid var(--cp-border)",
+    borderRadius: "4px",
+    padding: "0 4px",
+  },
+  ".cm-pv-link": { color: "var(--cp-link)", textDecoration: "underline" },
+  ".cm-pv-listmark": { color: "var(--cp-text-muted)" },
+  // Blocks
+  ".cm-pv-quote": {
+    borderLeft: "3px solid var(--cp-border-strong)",
+    paddingLeft: "14px",
+    color: "var(--cp-text-muted)",
+  },
+  ".cm-pv-code": {
+    fontFamily: "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace",
+    fontSize: "0.9em",
+    background: "var(--cp-surface-soft)",
+  },
+  ".cm-pv-hr": {
+    borderBottom: "2px solid var(--cp-border)",
+    display: "block",
+  },
 });
 
 // --- Public API ---------------------------------------------------------------
@@ -118,7 +227,7 @@ function mount(el, markdownText, opts = {}) {
     extensions: [
       history(),
       keymap.of([...defaultKeymap, ...historyKeymap]),
-      markdown(),
+      markdown({ extensions: GFM }),
       livePreview,
       tippaniTheme,
       EditorView.lineWrapping,
