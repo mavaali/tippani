@@ -17,6 +17,7 @@ import { fileURLToPath } from "url";
 import os from "os";
 import { EDITOR_JS } from "./client/editor.bundle.js";
 import { isConflict } from "./conflict.js";
+import { decideCanEdit } from "./canedit.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -299,6 +300,40 @@ async function pushFileToBranch(conn, branchRef, filePath, content, message, exp
   };
   const result = await gitApi.createPush(push, ADO_REPO, ADO_PROJECT);
   return result?.commits?.[0]?.commitId || result?.refUpdates?.[0]?.newObjectId || null;
+}
+
+// ADO security namespace + permission bit for Git "Contribute" (push) access.
+const GIT_SECURITY_NAMESPACE = "2e9eb7ed-3c0a-47d4-87c1-0ffdd275fd87";
+const GIT_PERMISSION_GENERIC_CONTRIBUTE = 4;
+
+// Whether the authenticated identity may push to the PR repo, gating the Edit affordance.
+// Hard false offline / unauthenticated / on a non-active PR (no network call). Otherwise
+// probe ADO for GenericContribute at the repository level. The repo-level token needs no
+// ref-name encoding and catches the dominant "read-only access" case; rare per-branch deny
+// ACLs fall through (fail open) and the save path surfaces any real rejection. Probe errors
+// also fail open. See decideCanEdit (canedit.js) for the pure gate logic.
+async function computeCanEdit(conn, pr, isOffline) {
+  if (isOffline || !conn || pr?.status !== 1) {
+    return decideCanEdit({ isOffline, hasConn: !!conn, prStatus: pr?.status, probe: null });
+  }
+  const projectId = pr?.repository?.project?.id;
+  const repoId = pr?.repository?.id;
+  let probe = null; // indeterminate => fail open
+  if (projectId && repoId) {
+    try {
+      const securityApi = await conn.getSecurityApi();
+      const results = await securityApi.hasPermissions(
+        GIT_SECURITY_NAMESPACE,
+        GIT_PERMISSION_GENERIC_CONTRIBUTE,
+        `repoV2/${projectId}/${repoId}`
+      );
+      probe = Array.isArray(results) ? results[0] === true : results === true;
+    } catch (e) {
+      console.log("  ⚠ Could not verify push permission; Edit left enabled. (" + e.message + ")");
+      probe = null;
+    }
+  }
+  return decideCanEdit({ isOffline, hasConn: true, prStatus: pr.status, probe });
 }
 
 // --- Markdown rendering ---
@@ -1475,7 +1510,7 @@ setInterval(updateSyncStatus, 30000);
 }
 
 // --- Module-level state ---
-let _conn, _pr, _prId, _branch, _changedFiles, _cache, _isOffline;
+let _conn, _pr, _prId, _branch, _changedFiles, _cache, _isOffline, _canEdit = false;
 
 // --- Express server ---
 async function main() {
@@ -1642,6 +1677,9 @@ async function main() {
     process.exit(1);
   }
 
+  // Determine push access once — gates the Edit affordance in every spec view.
+  _canEdit = await computeCanEdit(_conn, _pr, _isOffline);
+
   // Resolve explicit file to an index
   let openIndex = null;
   if (explicitFile) {
@@ -1732,10 +1770,9 @@ async function main() {
         }
       }
 
-      // canEdit gates the Edit affordance. Real ADO push-permission detection for
-      // the PR source branch is tracked separately; for now, editing is offered
-      // whenever a PR was loaded.
-      const canEdit = true;
+      // canEdit gates the Edit affordance; resolved once at startup from the
+      // identity's push access to the PR repo (see computeCanEdit).
+      const canEdit = _canEdit;
       // Conflict guard (#49): capture the branch tip at load time. Saving passes
       // this back as oldObjectId so ADO rejects the push if the branch has moved.
       let baseObjectId = null;
