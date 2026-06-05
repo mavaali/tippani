@@ -6,7 +6,7 @@
 
 > टिप्पणी — *annotation* (Sanskrit)
 
-Offline-capable CLI that renders Azure DevOps PR markdown files as a clean, three-column review portal — designed for non-technical reviewers who shouldn't need to learn ADO's diff view.
+Offline-capable CLI to **read, annotate, and edit** Azure DevOps PR markdown specs — a clean, three-column workspace for non-technical contributors who shouldn't need to learn ADO's diff view. Render specs, comment inline, and edit them WYSIWYG, committing straight back to the PR branch.
 
 ## Quick Start
 
@@ -133,7 +133,7 @@ Single-file CLI (`src/index.js`) that:
 3. Caches everything locally for offline use
 4. Starts a local Express server on port 3847
 5. Renders markdown to HTML via `remark` + `rehype`
-6. Opens the browser to the review portal
+6. Opens the browser to Tippani
 
 Comments are written to a local queue first, then synced to ADO. If offline, they stay in the queue until the next sync.
 

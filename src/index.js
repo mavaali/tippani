@@ -15,6 +15,9 @@ import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
 import os from "os";
+import { EDITOR_JS } from "./client/editor.bundle.js";
+import { isConflict } from "./conflict.js";
+import { decideCanEdit } from "./canedit.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -124,6 +127,11 @@ function addPending(prId, action) {
   pending.push(action);
   savePending(prId, pending);
   return action;
+}
+
+function removePending(prId, actionId) {
+  const pending = loadPending(prId).filter((p) => p.id !== actionId);
+  savePending(prId, pending);
 }
 
 // --- ADO error helper ---
@@ -257,6 +265,80 @@ async function replyToThread(conn, prId, threadId, content) {
 async function resolveThread(conn, prId, threadId) {
   const gitApi = await conn.getGitApi();
   return gitApi.updateThread({ status: 2 }, ADO_REPO, prId, threadId, ADO_PROJECT);
+}
+
+// Current tip commit (objectId) of a branch ref like "refs/heads/feature/x".
+async function getBranchTip(conn, branchRef) {
+  const gitApi = await conn.getGitApi();
+  const shortBranch = branchRef.replace("refs/heads/", "");
+  const refs = await gitApi.getRefs(ADO_REPO, ADO_PROJECT, `heads/${shortBranch}`);
+  const ref = (refs || []).find((r) => r.name === branchRef);
+  if (!ref) throw new Error(`Branch ref not found: ${branchRef}`);
+  return ref.objectId;
+}
+
+// Commit an edited file to a branch via the ADO push API. expectedOldObjectId, when
+// provided, is used as the push's oldObjectId (optimistic concurrency — the conflict
+// guard in #49 passes the load-time SHA); otherwise the live tip is used.
+async function pushFileToBranch(conn, branchRef, filePath, content, message, expectedOldObjectId) {
+  const gitApi = await conn.getGitApi();
+  const oldObjectId = expectedOldObjectId || (await getBranchTip(conn, branchRef));
+  const push = {
+    refUpdates: [{ name: branchRef, oldObjectId }],
+    commits: [
+      {
+        comment: message,
+        changes: [
+          {
+            changeType: 2, // VersionControlChangeType.Edit
+            item: { path: filePath },
+            newContent: { content, contentType: 0 }, // ItemContentType.RawText
+          },
+        ],
+      },
+    ],
+  };
+  const result = await gitApi.createPush(push, ADO_REPO, ADO_PROJECT);
+  return result?.commits?.[0]?.commitId || result?.refUpdates?.[0]?.newObjectId || null;
+}
+
+// ADO security namespace + permission bit for Git "Contribute" (push) access.
+const GIT_SECURITY_NAMESPACE = "2e9eb7ed-3c0a-47d4-87c1-0ffdd275fd87";
+const GIT_PERMISSION_GENERIC_CONTRIBUTE = 4;
+
+// Whether the Edit affordance should be offered, gating push access. Decided without a
+// network call when it can be: a non-active PR is never editable; offline is allowed
+// (edits queue and sync on reconnect, per #48); online-but-unauthenticated can't push.
+// If the installed ADO SDK exposes a generic security namespace API, probe ADO for
+// GenericContribute at the repository level. azure-devops-node-api@15 does not expose
+// that API, so those builds fall through as indeterminate (fail open) and the save path
+// surfaces any real rejection. Probe errors also fail open. See decideCanEdit
+// (canedit.js) for the gate.
+async function computeCanEdit(conn, pr, isOffline) {
+  if (isOffline || !conn || pr?.status !== 1) {
+    return decideCanEdit({ isOffline, hasConn: !!conn, prStatus: pr?.status, probe: null });
+  }
+  const projectId = pr?.repository?.project?.id;
+  const repoId = pr?.repository?.id;
+  let probe = null; // indeterminate => fail open
+  if (projectId && repoId) {
+    try {
+      if (typeof conn.getSecurityApi !== "function") {
+        return decideCanEdit({ isOffline, hasConn: true, prStatus: pr.status, probe: null });
+      }
+      const securityApi = await conn.getSecurityApi();
+      const results = await securityApi.hasPermissions(
+        GIT_SECURITY_NAMESPACE,
+        GIT_PERMISSION_GENERIC_CONTRIBUTE,
+        `repoV2/${projectId}/${repoId}`
+      );
+      probe = Array.isArray(results) ? results[0] === true : results === true;
+    } catch (e) {
+      console.log("  ⚠ Could not verify push permission; Edit left enabled. (" + e.message + ")");
+      probe = null;
+    }
+  }
+  return decideCanEdit({ isOffline, hasConn: true, prStatus: pr.status, probe });
 }
 
 // --- Markdown rendering ---
@@ -457,7 +539,7 @@ function buildPickerPage(pr, changedFiles) {
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>FabricSpecs Review — PR #${prId}</title>
+<title>Tippani — PR #${prId}</title>
 <style>
 ${cssVariables()}
 * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -469,7 +551,8 @@ body { font-family: "Segoe UI", Aptos, Calibri, -apple-system, BlinkMacSystemFon
 
 .brand-bar { display: flex; align-items: center; gap: 10px; margin-bottom: 32px; }
 .logo { width: 32px; height: 32px; border-radius: 8px; background: var(--cp-accent); display: flex; align-items: center; justify-content: center; color: var(--cp-accent-fg); font-size: 12px; font-weight: 700; }
-.brand-text { font-size: 15px; font-weight: 600; color: var(--cp-text-muted); }
+.brand-text { font-size: 15px; font-weight: 600; color: var(--cp-text); }
+.brand-text-sub { font-size: 13px; font-weight: 400; color: var(--cp-text-muted); }
 
 .container { width: 100%; max-width: 720px; }
 
@@ -501,7 +584,7 @@ body { font-family: "Segoe UI", Aptos, Calibri, -apple-system, BlinkMacSystemFon
 <body>
   <div class="brand-bar">
     <div class="logo">FS</div>
-    <span class="brand-text">FabricSpecs Review Portal</span>
+    <span class="brand-text">Tippani</span><span class="brand-text-sub"> · read · annotate · edit</span>
   </div>
   <div class="container">
     <div class="pr-card">
@@ -523,7 +606,7 @@ body { font-family: "Segoe UI", Aptos, Calibri, -apple-system, BlinkMacSystemFon
 }
 
 // --- Spec review page (3-column layout) ---
-function buildSpecPage(specHtml, toc, metadata, pr, threads, specPath, sourceMap, changedFiles, currentFileIndex) {
+function buildSpecPage(specHtml, toc, metadata, pr, threads, specPath, sourceMap, changedFiles, currentFileIndex, rawMarkdown, canEdit, baseObjectId) {
   const tocHtml = toc
     .map(
       (t) =>
@@ -594,7 +677,7 @@ function buildSpecPage(specHtml, toc, metadata, pr, threads, specPath, sourceMap
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>${prTitle} — FabricSpecs Review</title>
+<title>${prTitle} — Tippani</title>
 <style>
 ${cssVariables()}
 * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -610,8 +693,20 @@ button:focus-visible { outline: 2px solid var(--cp-accent); outline-offset: 2px;
 /* Header */
 .header { height: 52px; display: flex; align-items: center; justify-content: space-between; padding: 0 20px; background: var(--cp-surface); border-bottom: 1px solid var(--cp-border); flex-shrink: 0; z-index: 50; }
 .header-left { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.header-right { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
+.edit-toggle { font-family: inherit; font-size: 12px; font-weight: 600; padding: 6px 14px; border-radius: 6px; border: 1px solid var(--cp-border); background: var(--cp-bg); color: var(--cp-text); cursor: pointer; transition: background 0.12s, border-color 0.12s; }
+.edit-toggle:hover { background: var(--cp-surface-soft); border-color: var(--cp-border-strong); }
+.edit-pane-controls { display: none; align-items: center; gap: 4px; padding-right: 2px; border-right: 1px solid var(--cp-border); margin-right: 2px; }
+.edit-pane-controls.visible { display: flex; }
+.pane-toggle { width: 30px; height: 30px; display: inline-flex; align-items: center; justify-content: center; padding: 0; border-radius: 6px; border: 1px solid var(--cp-border); background: var(--cp-bg); color: var(--cp-text-muted); cursor: pointer; font-family: inherit; font-size: 12px; font-weight: 700; transition: background 0.12s, border-color 0.12s, color 0.12s; }
+.pane-toggle:hover { background: var(--cp-surface-soft); border-color: var(--cp-border-strong); color: var(--cp-text); }
+.pane-toggle.active { background: var(--cp-accent-soft); border-color: var(--cp-accent); color: var(--cp-accent); }
+/* Edit-mode visual distinction on the center column */
+.main-content.editing { box-shadow: inset 0 0 0 2px var(--cp-accent-soft); background: var(--cp-accent-soft); }
+.main-content.editing #spec-editor { background: var(--cp-bg); }
 .logo { width: 26px; height: 26px; border-radius: 6px; background: var(--cp-accent); display: flex; align-items: center; justify-content: center; color: var(--cp-accent-fg); font-size: 10px; font-weight: 700; flex-shrink: 0; }
-.brand { font-size: 13px; font-weight: 600; color: var(--cp-text-muted); flex-shrink: 0; }
+.brand { font-size: 13px; font-weight: 600; color: var(--cp-text); flex-shrink: 0; }
+.brand-sub { font-size: 11px; font-weight: 400; color: var(--cp-text-muted); flex-shrink: 0; white-space: nowrap; }
 .hdr-sep { color: var(--cp-border); margin: 0 2px; }
 .pr-info { min-width: 0; }
 .pr-info h1 { font-size: 14px; font-weight: 600; line-height: 1.3; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -643,6 +738,10 @@ body.col-resizing * { cursor: col-resize !important; user-select: none !importan
 /* Left sidebar */
 .sidebar-left { width: 260px; flex-shrink: 0; display: flex; flex-direction: column; border-right: 1px solid var(--cp-border); background: var(--cp-bg-elevated); overflow: hidden; }
 .sidebar-left-scroll { flex: 1; overflow-y: auto; padding: 16px; }
+.layout.edit-mode.left-collapsed .sidebar-left { width: 42px !important; align-items: center; }
+.layout.edit-mode.left-collapsed .sidebar-left-scroll { display: none; }
+.layout.edit-mode.left-collapsed .sidebar-left::before { content: 'TOC'; writing-mode: vertical-rl; text-orientation: mixed; margin-top: 16px; font-size: 11px; font-weight: 700; letter-spacing: 0.08em; color: var(--cp-text-muted); }
+.layout.edit-mode.left-collapsed #resizeLeft { display: none; }
 .sidebar-section-label { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; color: var(--cp-text-muted); margin-bottom: 8px; margin-top: 16px; }
 .sidebar-section-label:first-child { margin-top: 0; }
 
@@ -686,6 +785,10 @@ body.col-resizing * { cursor: col-resize !important; user-select: none !importan
 
 /* Right sidebar — comments */
 .sidebar-right { width: 320px; flex-shrink: 0; border-left: 1px solid var(--cp-border); background: var(--cp-bg-elevated); overflow-y: auto; padding: 16px; }
+.layout.edit-mode.right-collapsed .sidebar-right { width: 42px !important; padding: 0; display: flex; align-items: center; justify-content: flex-start; overflow: hidden; }
+.layout.edit-mode.right-collapsed .sidebar-right > * { display: none; }
+.layout.edit-mode.right-collapsed .sidebar-right::before { content: 'Comments'; writing-mode: vertical-rl; text-orientation: mixed; margin-top: 16px; font-size: 11px; font-weight: 700; letter-spacing: 0.08em; color: var(--cp-text-muted); }
+.layout.edit-mode.right-collapsed #resizeRight { display: none; }
 .empty-comments { font-size: 13px; color: var(--cp-text-muted); font-style: italic; padding: 12px 0; }
 .comment-thread { background: var(--cp-surface); border: 1px solid var(--cp-border); border-radius: 16px; padding: 16px; margin-bottom: 10px; font-size: 13px; transition: box-shadow 0.15s; overflow: hidden; min-width: 0; }
 .comment-thread:hover { box-shadow: 0 4px 16px rgba(0,0,0,0.08); }
@@ -746,6 +849,29 @@ details[open] .resolved-summary::before { content: '▾ '; }
 .modal-btn-primary { background: var(--cp-accent); color: var(--cp-accent-fg); border-color: var(--cp-accent); }
 .modal-btn-primary:hover { background: var(--cp-accent-hover); }
 
+/* Diff-on-save preview (#46) */
+.diff-modal-inner { background: var(--cp-surface); border: 1px solid var(--cp-border); border-radius: 16px; padding: 20px; width: min(720px, 90vw); box-shadow: var(--cp-shadow); display: flex; flex-direction: column; max-height: 80vh; }
+.diff-modal-head { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 12px; }
+.diff-modal-head h3 { font-size: 14px; font-weight: 600; }
+.diff-stats { font-size: 12px; font-weight: 600; color: var(--cp-text-muted); font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+.diff-body { flex: 1; overflow: auto; border: 1px solid var(--cp-border); border-radius: 8px; background: var(--cp-bg); font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12.5px; line-height: 1.5; }
+.diff-line { display: flex; white-space: pre-wrap; word-break: break-word; }
+.diff-gutter { flex: 0 0 22px; text-align: center; user-select: none; color: var(--cp-text-muted); }
+.diff-text { flex: 1; padding-right: 8px; }
+.diff-add { background: color-mix(in srgb, var(--cp-success) 14%, transparent); }
+.diff-add .diff-gutter { color: var(--cp-success); }
+.diff-del { background: color-mix(in srgb, #d93f0b 14%, transparent); }
+.diff-del .diff-gutter { color: #d93f0b; }
+.diff-empty { padding: 24px; text-align: center; color: var(--cp-text-muted); }
+.diff-msg-row { display: flex; align-items: center; gap: 10px; margin-top: 12px; }
+.diff-msg-row label { font-size: 12px; font-weight: 600; color: var(--cp-text-muted); white-space: nowrap; }
+.diff-msg-row input { flex: 1; font-family: inherit; font-size: 13px; padding: 7px 10px; border-radius: 8px; border: 1px solid var(--cp-border); background: var(--cp-bg); color: var(--cp-text); }
+.save-btn { background: var(--cp-accent); color: var(--cp-accent-fg); border-color: var(--cp-accent); }
+.save-btn:hover:not(:disabled) { background: var(--cp-accent-hover); }
+.save-btn:disabled { opacity: 0.5; cursor: default; }
+.dirty-dot { color: var(--cp-accent); font-size: 12px; line-height: 1; margin-right: 2px; }
+.conflict-msg { font-size: 13px; line-height: 1.55; color: var(--cp-text); margin-bottom: 6px; }
+
 /* Toast */
 .toast { position: fixed; bottom: 80px; right: 24px; background: var(--cp-surface); color: var(--cp-text); padding: 10px 18px; border-radius: 10px; font-size: 13px; display: none; z-index: 200; border: 1px solid var(--cp-border); box-shadow: var(--cp-shadow); }
 .toast.show { display: block; }
@@ -760,7 +886,7 @@ details[open] .resolved-summary::before { content: '▾ '; }
   <div class="header-left">
     <a href="/" style="text-decoration:none;display:flex;align-items:center;gap:10px;">
       <div class="logo">FS</div>
-      <span class="brand">Review Portal</span>
+      <span class="brand">Tippani</span><span class="brand-sub"> · read · annotate · edit</span>
     </a>
     <span class="hdr-sep">|</span>
     <div class="pr-info">
@@ -771,6 +897,16 @@ details[open] .resolved-summary::before { content: '▾ '; }
         ${resolvedThreads.length > 0 ? `<span class="comment-count-resolved">· ${resolvedThreads.length} resolved</span>` : ""}
       </div>
     </div>
+  </div>
+  <div class="header-right">
+    <span class="dirty-dot" id="dirtyDot" style="display:none" title="Unsaved changes">●</span>
+    ${canEdit ? `<div class="edit-pane-controls" id="editPaneControls" aria-label="Edit layout controls">
+      <button class="pane-toggle" id="toggleTocPane" onclick="tippani.togglePane('left')" title="Minimize contents pane" aria-label="Minimize contents pane" aria-pressed="false">T</button>
+      <button class="pane-toggle" id="toggleCommentsPane" onclick="tippani.togglePane('right')" title="Minimize comments pane" aria-label="Minimize comments pane" aria-pressed="false">C</button>
+      <button class="pane-toggle" id="focusEditPane" onclick="tippani.toggleFocusEdit()" title="Focus editor" aria-label="Focus editor" aria-pressed="false">F</button>
+    </div>` : ""}
+    ${canEdit ? `<button class="edit-toggle save-btn" id="saveBtn" onclick="tippani.save()" style="display:none" disabled>Save</button>` : ""}
+    ${canEdit ? `<button class="edit-toggle" id="editToggle" onclick="tippani.toggle()" title="Toggle edit mode (${"⌘"}/Ctrl+E)">Edit</button>` : ""}
   </div>
 </div>
 
@@ -790,6 +926,7 @@ details[open] .resolved-summary::before { content: '▾ '; }
     <div class="spec" id="spec-content">
       ${specHtml}
     </div>
+    <div class="spec spec-edit" id="spec-editor" style="display:none"></div>
   </main>
 
   <div class="resize-handle" id="resizeRight"></div>
@@ -822,8 +959,351 @@ details[open] .resolved-summary::before { content: '▾ '; }
   </div>
 </div>
 
+<div class="comment-modal" id="diffModal">
+  <div class="diff-modal-inner">
+    <div class="diff-modal-head">
+      <h3>Review changes</h3>
+      <span class="diff-stats" id="diffStats"></span>
+    </div>
+    <div class="diff-body" id="diffBody"></div>
+    <div class="diff-msg-row" id="diffMsgRow" style="display:none">
+      <label for="commitMsg">Commit message</label>
+      <input type="text" id="commitMsg" autocomplete="off" />
+    </div>
+    <div class="comment-modal-actions">
+      <button class="modal-btn" id="diffCancel">Cancel</button>
+      <button class="modal-btn modal-btn-primary" id="diffConfirm">Confirm &amp; Save</button>
+    </div>
+  </div>
+</div>
+
+<div class="comment-modal" id="conflictModal">
+  <div class="comment-modal-inner">
+    <h3>File changed on the server</h3>
+    <p class="conflict-msg">This file was updated by someone else since you started editing, so your save was not applied. Copy your changes, then reload to get the latest version and re-apply them. Tippani never overwrites someone else's edits automatically.</p>
+    <div class="comment-modal-actions">
+      <button class="modal-btn" id="conflictCancel">Keep editing</button>
+      <button class="modal-btn" id="conflictCopy">Copy my changes</button>
+      <button class="modal-btn modal-btn-primary" id="conflictReload">Reload</button>
+    </div>
+  </div>
+</div>
+
 <div class="toast" id="toast"></div>
 
+<script>${EDITOR_JS}</script>
+<script>
+// #47 edit/view toggle. Read-only rendered view is the default; editing is opt-in.
+// The CM editor is mounted lazily on first entry and reused, so edits persist
+// across toggle cycles within the session. Cmd/Ctrl+E toggles.
+window.tippani = (function () {
+  // Mutable baseline: updated after a successful save so the editor is no longer
+  // dirty and the next diff is measured against the saved state.
+  let RAW_MARKDOWN = ${JSON.stringify(rawMarkdown || "")};
+  const SPEC_FILE_PATH = ${JSON.stringify(specPath)};
+  const FILENAME = SPEC_FILE_PATH.split("/").pop();
+  // Branch tip at load time — sent on save so ADO rejects a stale push (#49).
+  const BASE_OBJECT_ID = ${JSON.stringify(baseObjectId || null)};
+  const ORIG_TITLE = document.title;
+  let editor = null;
+  let editMode = false;
+  let saving = false;
+  const paneState = {
+    left: localStorage.getItem("fsrp-edit-left-collapsed") === "1",
+    right: localStorage.getItem("fsrp-edit-right-collapsed") === "1",
+  };
+
+  const el = (id) => document.getElementById(id);
+  const isDirty = () => !!editor && editor.getMarkdown() !== RAW_MARKDOWN;
+  const toast = (m) => window.showToast && window.showToast(m);
+
+  // Save button is enabled only when there are unsaved changes.
+  function updateSaveState() {
+    const btn = el("saveBtn");
+    if (btn) btn.disabled = saving || !isDirty();
+  }
+
+  // Dirty indicator: a dot in the header + an asterisk-equivalent in the title (#49).
+  function updateDirtyIndicator() {
+    const dirty = isDirty();
+    document.title = (dirty ? "● " : "") + ORIG_TITLE;
+    const dot = el("dirtyDot");
+    if (dot) dot.style.display = dirty ? "" : "none";
+  }
+
+  function onEditorChange() {
+    updateSaveState();
+    updateDirtyIndicator();
+  }
+
+  function ensureEditor() {
+    if (!editor && window.TippaniEditor)
+      editor = window.TippaniEditor.mount(el("spec-editor"), RAW_MARKDOWN, {
+        onChange: onEditorChange,
+      });
+    return editor;
+  }
+
+  function updatePaneControls() {
+    const controls = el("editPaneControls");
+    if (controls) controls.classList.toggle("visible", editMode);
+    const toc = el("toggleTocPane");
+    const comments = el("toggleCommentsPane");
+    const focus = el("focusEditPane");
+    if (toc) {
+      toc.classList.toggle("active", paneState.left);
+      toc.setAttribute("aria-pressed", paneState.left ? "true" : "false");
+      toc.title = paneState.left ? "Restore contents pane" : "Minimize contents pane";
+      toc.setAttribute("aria-label", toc.title);
+    }
+    if (comments) {
+      comments.classList.toggle("active", paneState.right);
+      comments.setAttribute("aria-pressed", paneState.right ? "true" : "false");
+      comments.title = paneState.right ? "Restore comments pane" : "Minimize comments pane";
+      comments.setAttribute("aria-label", comments.title);
+    }
+    if (focus) {
+      const focused = paneState.left && paneState.right;
+      focus.classList.toggle("active", focused);
+      focus.setAttribute("aria-pressed", focused ? "true" : "false");
+      focus.title = focused ? "Restore edit panes" : "Focus editor";
+      focus.setAttribute("aria-label", focus.title);
+    }
+  }
+
+  function applyEditPaneState() {
+    const layout = el("layout");
+    if (!layout) return;
+    layout.classList.toggle("edit-mode", editMode);
+    layout.classList.toggle("left-collapsed", paneState.left);
+    layout.classList.toggle("right-collapsed", paneState.right);
+    updatePaneControls();
+  }
+
+  function setPaneCollapsed(side, collapsed, persist = true) {
+    paneState[side] = collapsed;
+    if (persist) localStorage.setItem("fsrp-edit-" + side + "-collapsed", collapsed ? "1" : "0");
+    applyEditPaneState();
+  }
+
+  function togglePane(side) {
+    if (!editMode) return;
+    setPaneCollapsed(side, !paneState[side]);
+  }
+
+  function toggleFocusEdit() {
+    if (!editMode) return;
+    const collapseBoth = !(paneState.left && paneState.right);
+    setPaneCollapsed("left", collapseBoth);
+    setPaneCollapsed("right", collapseBoth);
+  }
+
+  function enterEdit() {
+    if (!ensureEditor()) return;
+    el("spec-content").style.display = "none";
+    el("spec-editor").style.display = "";
+    el("mainContent").classList.add("editing");
+    const btn = el("editToggle");
+    if (btn) btn.textContent = "View";
+    const save = el("saveBtn");
+    if (save) save.style.display = "";
+    updateSaveState();
+    updateDirtyIndicator();
+    editMode = true;
+    applyEditPaneState();
+    editor.view.focus();
+  }
+  function exitEdit() {
+    // Unsaved-changes prompt on mode switch. Edits are kept for the session (not
+    // discarded) so they survive toggle cycles; saving is via the Save button.
+    // Cancel keeps you in edit mode.
+    if (isDirty() && !confirm("You have unsaved changes. Switch to read view? Your edits are kept for this session.")) return;
+    el("spec-editor").style.display = "none";
+    el("spec-content").style.display = "";
+    el("mainContent").classList.remove("editing");
+    const btn = el("editToggle");
+    if (btn) btn.textContent = "Edit";
+    const save = el("saveBtn");
+    if (save) save.style.display = "none";
+    editMode = false;
+    applyEditPaneState();
+  }
+  function toggle() {
+    editMode ? exitEdit() : enterEdit();
+  }
+
+  // Diff-on-save preview (#46). Resolves true (confirm) / false (cancel). Called
+  // by the write path (#48) before committing.
+  function showDiff(oldMd, newMd) {
+    return new Promise((resolve) => {
+      const modal = el("diffModal");
+      const body = el("diffBody");
+      const stats = el("diffStats");
+      const diff = window.TippaniEditor.diffLines(oldMd, newMd);
+      const s = window.TippaniEditor.diffStats(diff);
+      const noChange = s.added + s.removed === 0;
+      stats.textContent = noChange ? "No changes" : "+" + s.added + "  −" + s.removed;
+      body.textContent = "";
+      if (noChange) {
+        const p = document.createElement("div");
+        p.className = "diff-empty";
+        p.textContent = "No changes to save.";
+        body.appendChild(p);
+      } else {
+        for (const d of diff) {
+          const line = document.createElement("div");
+          line.className = "diff-line diff-" + d.type;
+          const gutter = document.createElement("span");
+          gutter.className = "diff-gutter";
+          gutter.textContent = d.type === "add" ? "+" : d.type === "del" ? "−" : " ";
+          const text = document.createElement("span");
+          text.className = "diff-text";
+          text.textContent = d.text === "" ? " " : d.text; // build via textContent — XSS-safe
+          line.appendChild(gutter);
+          line.appendChild(text);
+          body.appendChild(line);
+        }
+      }
+      modal.style.display = "flex";
+      const done = (result) => {
+        modal.style.display = "none";
+        el("diffConfirm").onclick = null;
+        el("diffCancel").onclick = null;
+        resolve(result);
+      };
+      el("diffConfirm").onclick = () => done(true);
+      el("diffCancel").onclick = () => done(false);
+    });
+  }
+
+  // Save (#48): diff preview (with editable commit message) → commit to PR branch.
+  async function save() {
+    if (saving || !isDirty()) return;
+    const newMd = editor.getMarkdown();
+    const msgRow = el("diffMsgRow");
+    const msgInput = el("commitMsg");
+    const defaultMsg = "tippani: update " + FILENAME;
+    if (msgInput) msgInput.value = defaultMsg;
+    if (msgRow) msgRow.style.display = "flex";
+    const ok = await showDiff(RAW_MARKDOWN, newMd);
+    if (msgRow) msgRow.style.display = "none";
+    if (!ok) return;
+    const message = (msgInput && msgInput.value.trim()) || defaultMsg;
+
+    saving = true;
+    const btn = el("saveBtn");
+    if (btn) btn.textContent = "Saving…";
+    updateSaveState();
+    try {
+      const r = await fetch("/api/save", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ filePath: SPEC_FILE_PATH, content: newMd, message, baseObjectId: BASE_OBJECT_ID }),
+      });
+      const data = await r.json();
+      if (data.ok && data.synced) {
+        RAW_MARKDOWN = newMd; // new saved baseline → no longer dirty
+        toast("Saved — commit " + (data.commitId ? String(data.commitId).slice(0, 8) : "ok"));
+      } else if (data.conflict) {
+        // Branch moved underneath us — never overwrite blindly (#49).
+        showConflict();
+      } else if (data.queued) {
+        RAW_MARKDOWN = newMd; // safely persisted to the queue; will retry on sync
+        toast(data.error ? "Push failed (" + data.error + ") — queued, will retry on sync" : (data.message || "Saved locally — will sync"));
+      } else {
+        toast("Save failed: " + (data.error || "unknown") + " — your edits are kept");
+      }
+    } catch (e) {
+      toast("Save failed: " + e.message + " — your edits are kept");
+    } finally {
+      saving = false;
+      if (btn) btn.textContent = "Save";
+      updateSaveState();
+      updateDirtyIndicator();
+    }
+  }
+
+  // Conflict dialog (#49): the branch moved; offer reload or copy-to-clipboard.
+  // Never auto-merge — specs are prose.
+  function showConflict() {
+    const m = el("conflictModal");
+    if (!m) {
+      toast("This file was changed on the server — reload before saving.");
+      return;
+    }
+    m.style.display = "flex";
+    el("conflictCancel").onclick = () => { m.style.display = "none"; };
+    el("conflictCopy").onclick = async () => {
+      try {
+        await navigator.clipboard.writeText(editor.getMarkdown());
+        toast("Your changes copied to the clipboard");
+      } catch {
+        toast("Copy failed — select the text and copy manually");
+      }
+    };
+    el("conflictReload").onclick = () => location.reload();
+  }
+
+  document.addEventListener("keydown", (e) => {
+    if ((e.metaKey || e.ctrlKey) && (e.key === "e" || e.key === "E")) {
+      // Only when an Edit affordance exists (write access).
+      if (!el("editToggle")) return;
+      e.preventDefault();
+      toggle();
+    }
+  });
+  // Warn before closing/reloading the tab with unsaved edits (#49).
+  window.addEventListener("beforeunload", (e) => {
+    if (isDirty()) {
+      e.preventDefault();
+      e.returnValue = "";
+      return "";
+    }
+  });
+
+  // Warn before navigating to another file (home or file picker) with unsaved
+  // edits (#49). Capture phase so it runs before the link navigates.
+  document.addEventListener(
+    "click",
+    (e) => {
+      const a = e.target.closest && e.target.closest("a[href]");
+      if (!a) return;
+      const href = a.getAttribute("href") || "";
+      const leavesFile = href === "/" || href.startsWith("/file/");
+      if (leavesFile && isDirty() &&
+          !confirm("You have unsaved changes. Leave this file and discard them?")) {
+        e.preventDefault();
+      }
+    },
+    true
+  );
+
+  // ?edit=1 still auto-enters edit mode (convenient for testing).
+  if (new URLSearchParams(location.search).get("edit") === "1") {
+    if (document.readyState === "loading")
+      document.addEventListener("DOMContentLoaded", enterEdit);
+    else enterEdit();
+  }
+  return {
+    toggle,
+    togglePane,
+    toggleFocusEdit,
+    enterEdit,
+    exitEdit,
+    isDirty,
+    save,
+    showDiff,
+    showConflict,
+    updateDirtyIndicator,
+    // Original (last-loaded) markdown — the baseline a save diffs against.
+    getOriginal: () => RAW_MARKDOWN,
+    // For the write path (#48): current editor buffer (or the original if the
+    // editor was never opened).
+    getMarkdown: () => (editor ? editor.getMarkdown() : RAW_MARKDOWN),
+    getEditor: () => editor,
+  };
+})();
+</script>
 <script>
 const SPEC_PATH = ${JSON.stringify(specPath)};
 const SOURCE_MAP = ${JSON.stringify(sourceMap)};
@@ -1118,7 +1598,7 @@ setInterval(updateSyncStatus, 30000);
 }
 
 // --- Module-level state ---
-let _conn, _pr, _prId, _branch, _changedFiles, _cache, _isOffline;
+let _conn, _pr, _prId, _branch, _changedFiles, _cache, _isOffline, _canEdit = false;
 
 // --- Express server ---
 async function main() {
@@ -1285,6 +1765,9 @@ async function main() {
     process.exit(1);
   }
 
+  // Determine push access once — gates the Edit affordance in every spec view.
+  _canEdit = await computeCanEdit(_conn, _pr, _isOffline);
+
   // Resolve explicit file to an index
   let openIndex = null;
   if (explicitFile) {
@@ -1375,7 +1858,16 @@ async function main() {
         }
       }
 
-      res.type("html").send(buildSpecPage(specHtml, toc, metadata, _pr, allThreads, filePath, sourceMap, _changedFiles, idx));
+      // canEdit gates the Edit affordance; resolved once at startup from the
+      // identity's push access to the PR repo (see computeCanEdit).
+      const canEdit = _canEdit;
+      // Conflict guard (#49): capture the branch tip at load time. Saving passes
+      // this back as oldObjectId so ADO rejects the push if the branch has moved.
+      let baseObjectId = null;
+      if (!_isOffline && _conn) {
+        try { baseObjectId = await getBranchTip(_conn, _branch); } catch { /* non-fatal */ }
+      }
+      res.type("html").send(buildSpecPage(specHtml, toc, metadata, _pr, allThreads, filePath, sourceMap, _changedFiles, idx, body, canEdit, baseObjectId));
     } catch (e) {
       res.status(500).send("Error rendering spec. Check the server console for details.");
       console.error("Spec render error:", e.message);
@@ -1439,6 +1931,45 @@ async function main() {
     }
   });
 
+  // Save an edited spec: commit the markdown to the PR source branch (#48).
+  app.post("/api/save", async (req, res) => {
+    const { filePath, content, message, baseObjectId } = req.body || {};
+    if (typeof content !== "string" || !filePath) {
+      return res.status(400).json({ ok: false, error: "filePath and content are required" });
+    }
+    const commitMessage = (message && String(message).trim()) || `tippani: update ${filePath.split("/").pop()}`;
+    // Queue first so a failure/offline never loses the edit.
+    const action = addPending(_prId, { type: "save", filePath, content, message: commitMessage });
+
+    if (_isOffline || !_conn) {
+      return res.json({ ok: true, synced: false, queued: true, message: "Saved locally (offline) — will push on sync." });
+    }
+    try {
+      // Pass the load-time tip as oldObjectId (#49) — ADO rejects the push if the
+      // branch moved underneath the editor (optimistic concurrency).
+      const commitId = await pushFileToBranch(_conn, _branch, filePath, content, commitMessage, baseObjectId || undefined);
+      const pending = loadPending(_prId);
+      const idx = pending.findIndex((p) => p.id === action.id);
+      if (idx >= 0) pending[idx].synced = true;
+      savePending(_prId, pending);
+      // Refresh the local cache so a reload shows the saved content.
+      if (_cache && _cache.fileContents) {
+        _cache.fileContents[filePath] = content;
+        saveCache(_prId, _cache);
+      }
+      res.json({ ok: true, synced: true, commitId });
+    } catch (e) {
+      if (isConflict(e)) {
+        // Branch moved — drop the queued action so it is never blindly re-pushed
+        // by a later sync. The editor keeps the content; the user reloads or copies.
+        removePending(_prId, action.id);
+        return res.json({ ok: false, conflict: true, error: "This file was updated by someone else since you started editing." });
+      }
+      // Other failure: edit stays queued (no data loss). Surface an actionable error.
+      res.json({ ok: false, synced: false, queued: true, error: friendlyAdoError(e, "save") });
+    }
+  });
+
   app.post("/api/review", async (req, res) => {
     try {
       const gitApi = await _conn.getGitApi();
@@ -1467,6 +1998,9 @@ async function main() {
           await replyToThread(_conn, _prId, action.threadId, action.content);
         } else if (action.type === 'resolve') {
           await resolveThread(_conn, _prId, action.threadId);
+        } else if (action.type === 'save') {
+          await pushFileToBranch(_conn, _branch, action.filePath, action.content, action.message);
+          if (_cache && _cache.fileContents) _cache.fileContents[action.filePath] = action.content;
         }
         action.synced = true;
         synced++;
@@ -1497,7 +2031,7 @@ async function main() {
   const server = app.listen(PORT, "127.0.0.1", () => {
     const base = `http://localhost:${PORT}`;
     const url = openIndex !== null ? `${base}/file/${openIndex}` : base;
-    console.log(`\n  Review portal running at ${base}\n`);
+    console.log(`\n  Tippani running at ${base}\n`);
     open(url);
   });
   server.on("error", (err) => {

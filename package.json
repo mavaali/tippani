@@ -1,7 +1,7 @@
 {
   "name": "tippani",
   "version": "1.2.0",
-  "description": "Offline-capable CLI that renders Azure DevOps PR markdown files as a clean review portal",
+  "description": "Offline-capable CLI to read, annotate, and edit Azure DevOps PR markdown specs",
   "type": "module",
   "bin": {
     "tippani": "./src/index.js"
@@ -14,6 +14,13 @@
   ],
   "scripts": {
     "start": "node src/index.js",
+    "test:table": "node src/client/table.test.mjs",
+    "test:diff": "node src/client/diff.test.mjs",
+    "test:invariant": "node src/client/invariant.test.mjs",
+    "test:conflict": "node src/conflict.test.mjs",
+    "test:canedit": "node src/canedit.test.mjs",
+    "test": "node src/client/table.test.mjs && node src/client/diff.test.mjs && node src/client/invariant.test.mjs && node src/conflict.test.mjs && node src/canedit.test.mjs",
+    "build:client": "node scripts/build-client.js",
     "build": "node scripts/build.js"
   },
   "keywords": [
@@ -33,6 +40,12 @@
   "homepage": "https://github.com/mavaali/tippani",
   "author": "Mihir Wagle",
   "dependencies": {
+    "@codemirror/commands": "^6.10.3",
+    "@codemirror/lang-markdown": "^6.5.0",
+    "@codemirror/language": "^6.12.3",
+    "@codemirror/state": "^6.6.0",
+    "@codemirror/view": "^6.43.0",
+    "@lezer/markdown": "^1.6.4",
     "azure-devops-node-api": "15.1.2",
     "express": "5.2.1",
     "open": "^11.0.0",
@@ -47,6 +60,7 @@
   },
   "devDependencies": {
     "esbuild": "^0.25.0",
+    "jsdom": "^29.1.1",
     "postject": "^1.0.0-alpha.6"
   },
   "license": "MIT"
