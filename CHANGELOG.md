@@ -1,5 +1,20 @@
 # Changelog
 
+## 1.3.0-beta.0 (2026-06-04)
+
+### Added — WYSIWYG editing & write path (beta)
+- **Live-preview editor** — Typora-style CodeMirror 6 editor in the spec view. The buffer *is* the markdown file ("buffer-is-the-file"), so diffs stay clean and YAML frontmatter, HTML comments, and ADO macros (`[[_TOC_]]`, `::: mermaid`, mentions) pass through untouched. Headings, emphasis, inline/fenced code, links, lists, blockquotes, and rules render inline with reveal-on-cursor; fenced-code fences collapse off-cursor.
+- **WYSIWYG tables** — pipe tables render as an editable grid (Tab/Shift-Tab/Enter/arrow navigation, add/delete row+column, column alignment) that round-trips to canonical pipe markdown. An unedited table is never reformatted.
+- **Edit / view toggle** — read-only render stays the default; editing is opt-in via the header button or `Cmd`/`Ctrl`+`E`. Edit mode is visually distinct; the comment panel and TOC stay visible in both modes.
+- **Save to PR branch** — commit edits straight to the PR source branch via the ADO push API, with a diff-on-save preview and an editable commit message. Explicit save only (no auto-save).
+- **Dirty state & conflict guard** — dirty indicator (header dot + title marker), warnings on tab close / file switch with unsaved edits, and optimistic-concurrency protection: a push made stale by someone else's commit is rejected, and you're offered reload / copy-to-clipboard. Never auto-merges.
+- **Edit gating** — the Edit affordance is offered only when the identity has repo push access (offline edits queue and sync on reconnect); a completed/abandoned PR isn't editable.
+
+### Notes
+- **Beta.** This is the first release that *writes* to ADO branches. Verified end-to-end against a live PR, but treat important specs with care and report issues.
+- The per-branch push ACL isn't pre-checked — the permission probe is repo-level and fails open; a real push rejection still surfaces gracefully at save time, and the edit is never lost.
+- The editor is bundled and inlined into the offline binary — no external assets.
+
 ## 1.2.0 (2026-06-03)
 
 ### Security
