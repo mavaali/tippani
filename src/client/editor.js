@@ -13,11 +13,40 @@ import {
   keymap,
 } from "@codemirror/view";
 import { syntaxTree } from "@codemirror/language";
+import { StateField } from "@codemirror/state";
 import { markdown } from "@codemirror/lang-markdown";
 import { GFM } from "@lezer/markdown";
 import { defaultKeymap, history, historyKeymap } from "@codemirror/commands";
 import { tableField } from "./table-widget.js";
 import { diffLines, diffStats } from "./diff.js";
+import {
+  toggleBold, toggleItalic, toggleStrikethrough, toggleInlineCode,
+  setHeading,
+  toggleBulletList, toggleOrderedList, toggleTaskList, toggleBlockquote,
+  toggleCodeBlock,
+  insertLink, insertImage, insertHorizontalRule,
+  indentMore, indentLess,
+} from "./editor-commands.js";
+
+// --- Formatting keyboard shortcuts -------------------------------------------
+// Mod = ⌘ on Mac, Ctrl on Windows/Linux. CM6 handles this automatically.
+
+const formatKeymap = [
+  { key: "Mod-b", run: toggleBold },
+  { key: "Mod-i", run: toggleItalic },
+  { key: "Mod-Shift-s", run: toggleStrikethrough },
+  // Mod-e: captures before the host page's edit-mode toggle (Ctrl+E / ⌘E) when
+  // the CM6 editor is focused. Host shortcut only fires when editor is blurred.
+  { key: "Mod-e", run: toggleInlineCode },
+  // Mod-k: overrides Chrome address-bar shortcut when editor is focused.
+  // Matches VS Code / Notion convention.
+  { key: "Mod-k", run: insertLink },
+  { key: "Mod-Shift-8", run: toggleBulletList },
+  { key: "Mod-Shift-7", run: toggleOrderedList },
+  { key: "Mod-Shift-9", run: toggleTaskList },
+  { key: "Mod-Shift-.", run: toggleBlockquote },
+  { key: "Mod-Shift-k", run: toggleCodeBlock },
+];
 
 // --- Live-preview decorations -------------------------------------------------
 
@@ -322,6 +351,94 @@ const tippaniTheme = EditorView.theme({
   ".cm-pv-tbar button:hover": { background: "var(--cp-surface-soft)" },
 });
 
+// --- Active-state detection (#55) --------------------------------------------
+// StateField computes which formatting is active at the cursor by walking the
+// syntax tree ancestors. ViewPlugin reads the field and syncs DOM toolbar buttons.
+
+function detectActiveFormats(state) {
+  const result = {
+    heading: 0, bold: false, italic: false, strike: false,
+    code: false, link: false, bulletList: false, orderedList: false,
+    taskList: false, blockquote: false, codeBlock: false,
+  };
+  const pos = state.selection.main.head;
+  const tree = syntaxTree(state);
+
+  // Walk ancestors from cursor position upward.
+  let cur = tree.resolveInner(pos, -1);
+  while (cur) {
+    const headingMatch = /^ATXHeading(\d)$/.exec(cur.name);
+    if (headingMatch) result.heading = Number(headingMatch[1]);
+    switch (cur.name) {
+      case "StrongEmphasis": result.bold = true; break;
+      case "Emphasis": result.italic = true; break;
+      case "Strikethrough": result.strike = true; break;
+      case "InlineCode": result.code = true; break;
+      case "Link": result.link = true; break;
+      case "FencedCode": result.codeBlock = true; break;
+      case "Blockquote": result.blockquote = true; break;
+    }
+    cur = cur.parent;
+  }
+
+  // List detection from line prefix (not always in tree ancestors for cursor).
+  const line = state.doc.lineAt(pos);
+  const text = line.text;
+  if (/^\s*[-*+]\s\[[ x]\]\s/.test(text)) result.taskList = true;
+  else if (/^\s*[-*+]\s/.test(text)) result.bulletList = true;
+  else if (/^\s*\d+\.\s/.test(text)) result.orderedList = true;
+
+  return result;
+}
+
+const activeFormatsField = StateField.define({
+  create: detectActiveFormats,
+  update(value, tr) {
+    // Recompute on any doc or selection change.
+    if (tr.docChanged || tr.selection) return detectActiveFormats(tr.state);
+    return value;
+  },
+});
+
+// ViewPlugin syncs the StateField to toolbar DOM (.active + aria-pressed).
+const toolbarSync = ViewPlugin.fromClass(class {
+  constructor(view) { this.sync(view); }
+  update(update) {
+    if (update.docChanged || update.selectionSet) this.sync(update.view);
+  }
+  sync(view) {
+    const fmt = view.state.field(activeFormatsField, false);
+    if (!fmt) return;
+    const map = {
+      fmtBold: fmt.bold, fmtItalic: fmt.italic, fmtStrike: fmt.strike,
+      fmtCode: fmt.code, fmtQuote: fmt.blockquote, fmtCodeBlock: fmt.codeBlock,
+      fmtBullet: fmt.bulletList, fmtOrdered: fmt.orderedList, fmtTask: fmt.taskList,
+    };
+    for (const [id, active] of Object.entries(map)) {
+      const btn = document.getElementById(id);
+      if (!btn) continue;
+      btn.classList.toggle("active", active);
+      if (btn.hasAttribute("aria-pressed")) {
+        btn.setAttribute("aria-pressed", active ? "true" : "false");
+      }
+    }
+    // Heading dropdown label.
+    const headBtn = document.getElementById("fmtHeading");
+    if (headBtn) {
+      const labels = ["¶", "H1", "H2", "H3", "H4"];
+      headBtn.textContent = labels[fmt.heading] || "¶";
+    }
+    // Heading dropdown aria-selected.
+    const headMenu = document.getElementById("fmtHeadingMenu");
+    if (headMenu) {
+      for (const li of headMenu.querySelectorAll("li[data-level]")) {
+        li.setAttribute("aria-selected",
+          Number(li.dataset.level) === fmt.heading ? "true" : "false");
+      }
+    }
+  }
+});
+
 // --- Public API ---------------------------------------------------------------
 
 function mount(el, markdownText, opts = {}) {
@@ -330,9 +447,11 @@ function mount(el, markdownText, opts = {}) {
     doc: markdownText,
     extensions: [
       history(),
-      keymap.of([...defaultKeymap, ...historyKeymap]),
+      keymap.of([...formatKeymap, ...defaultKeymap, ...historyKeymap]),
       markdown({ extensions: GFM }),
       livePreview,
+      activeFormatsField,
+      toolbarSync,
       tableField,
       tippaniTheme,
       EditorView.lineWrapping,
@@ -352,4 +471,14 @@ function mount(el, markdownText, opts = {}) {
   };
 }
 
-window.TippaniEditor = { mount, diffLines, diffStats };
+// Toolbar-callable command map. Each entry is (EditorView) → boolean.
+const commands = {
+  toggleBold, toggleItalic, toggleStrikethrough, toggleInlineCode,
+  setHeading,
+  toggleBulletList, toggleOrderedList, toggleTaskList, toggleBlockquote,
+  toggleCodeBlock,
+  insertLink, insertImage, insertHorizontalRule,
+  indentMore, indentLess,
+};
+
+window.TippaniEditor = { mount, commands, diffLines, diffStats };
