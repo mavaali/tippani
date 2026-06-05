@@ -704,6 +704,24 @@ button:focus-visible { outline: 2px solid var(--cp-accent); outline-offset: 2px;
 /* Edit-mode visual distinction on the center column */
 .main-content.editing { box-shadow: inset 0 0 0 2px var(--cp-accent-soft); background: var(--cp-accent-soft); }
 .main-content.editing #spec-editor { background: var(--cp-bg); }
+/* --- Formatting toolbar (#55) --- */
+.fmt-toolbar { display: flex; align-items: center; gap: 2px; padding: 4px 8px; background: var(--cp-surface, #fff); border-bottom: 1px solid var(--cp-border, #e0e0e0); position: sticky; top: 0; z-index: 10; flex-shrink: 0; flex-wrap: wrap; }
+.fmt-group { display: inline-flex; align-items: center; gap: 2px; }
+.fmt-sep { width: 1px; height: 20px; background: var(--cp-border, #e0e0e0); margin: 0 4px; }
+.fmt-btn { font-family: inherit; font-size: 13px; line-height: 1; min-width: 28px; height: 28px; display: inline-flex; align-items: center; justify-content: center; padding: 0 5px; border: 1px solid transparent; border-radius: 4px; background: transparent; color: var(--cp-text, #1a1a1a); cursor: pointer; transition: background 0.1s, border-color 0.1s; }
+.fmt-btn:hover { background: var(--cp-surface-soft, #f5f5f5); border-color: var(--cp-border, #e0e0e0); }
+.fmt-btn.active, .fmt-btn[aria-pressed="true"] { background: var(--cp-accent-soft, #e8f0fe); border-color: var(--cp-accent, #1a73e8); color: var(--cp-accent, #1a73e8); }
+.fmt-btn code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 11px; pointer-events: none; }
+.fmt-heading-btn { font-weight: 600; min-width: 32px; }
+.fmt-dropdown { position: absolute; top: 100%; left: 0; margin: 2px 0 0; padding: 4px 0; list-style: none; background: var(--cp-surface, #fff); border: 1px solid var(--cp-border, #e0e0e0); border-radius: 6px; box-shadow: 0 4px 12px rgba(0,0,0,0.12); z-index: 30; min-width: 140px; }
+.fmt-dropdown li { padding: 6px 12px; cursor: pointer; font-size: 13px; color: var(--cp-text, #1a1a1a); }
+.fmt-dropdown li:hover { background: var(--cp-surface-soft, #f5f5f5); }
+.fmt-dropdown li[aria-selected="true"] { font-weight: 600; color: var(--cp-accent, #1a73e8); }
+.fmt-group { position: relative; }
+/* Styled tooltip — replaces slow native title tooltip */
+.fmt-btn { position: relative; }
+.fmt-btn::after { content: attr(title); position: absolute; bottom: -30px; left: 50%; transform: translateX(-50%); padding: 3px 8px; font-size: 11px; font-weight: 500; white-space: nowrap; color: var(--cp-accent-fg, #fff); background: var(--cp-text, #1a1a1a); border-radius: 4px; pointer-events: none; opacity: 0; transition: opacity 0.12s; z-index: 40; }
+.fmt-btn:hover::after { opacity: 1; }
 .logo { width: 26px; height: 26px; border-radius: 6px; background: var(--cp-accent); display: flex; align-items: center; justify-content: center; color: var(--cp-accent-fg); font-size: 10px; font-weight: 700; flex-shrink: 0; }
 .brand { font-size: 13px; font-weight: 600; color: var(--cp-text); flex-shrink: 0; }
 .brand-sub { font-size: 11px; font-weight: 400; color: var(--cp-text-muted); flex-shrink: 0; white-space: nowrap; }
@@ -923,6 +941,47 @@ details[open] .resolved-summary::before { content: '▾ '; }
   <div class="resize-handle" id="resizeLeft"></div>
 
   <main class="main-content" id="mainContent">
+    ${canEdit ? `<div class="fmt-toolbar" id="fmtToolbar" role="toolbar" aria-label="Formatting" aria-orientation="horizontal" style="display:none">
+      <span class="fmt-group">
+        <button class="fmt-btn fmt-heading-btn" id="fmtHeading" aria-haspopup="listbox" aria-expanded="false" title="Block type" aria-label="Block type">¶</button>
+        <ul class="fmt-dropdown" id="fmtHeadingMenu" role="listbox" aria-label="Block type" style="display:none">
+          <li role="option" data-level="0" aria-selected="true">Paragraph</li>
+          <li role="option" data-level="1">Heading 1</li>
+          <li role="option" data-level="2">Heading 2</li>
+          <li role="option" data-level="3">Heading 3</li>
+          <li role="option" data-level="4">Heading 4</li>
+        </ul>
+      </span>
+      <span class="fmt-sep" role="separator"></span>
+      <span class="fmt-group">
+        <button class="fmt-btn" id="fmtBold" aria-pressed="false" title="Bold (⌘B)" aria-label="Bold" tabindex="-1"><b>B</b></button>
+        <button class="fmt-btn" id="fmtItalic" aria-pressed="false" title="Italic (⌘I)" aria-label="Italic" tabindex="-1"><i>I</i></button>
+        <button class="fmt-btn" id="fmtStrike" aria-pressed="false" title="Strikethrough (⌘⇧S)" aria-label="Strikethrough" tabindex="-1"><s>S</s></button>
+        <button class="fmt-btn" id="fmtCode" aria-pressed="false" title="Inline code (⌘E)" aria-label="Inline code" tabindex="-1"><code>&lt;&gt;</code></button>
+      </span>
+      <span class="fmt-sep" role="separator"></span>
+      <span class="fmt-group">
+        <button class="fmt-btn" id="fmtBullet" aria-pressed="false" title="Bullet list (⌘⇧8)" aria-label="Bullet list" tabindex="-1">•</button>
+        <button class="fmt-btn" id="fmtOrdered" aria-pressed="false" title="Ordered list (⌘⇧7)" aria-label="Ordered list" tabindex="-1">1.</button>
+        <button class="fmt-btn" id="fmtTask" aria-pressed="false" title="Task list (⌘⇧9)" aria-label="Task list" tabindex="-1">☐</button>
+      </span>
+      <span class="fmt-sep" role="separator"></span>
+      <span class="fmt-group">
+        <button class="fmt-btn" id="fmtQuote" aria-pressed="false" title="Blockquote (⌘⇧.)" aria-label="Blockquote" tabindex="-1">❝</button>
+        <button class="fmt-btn" id="fmtCodeBlock" aria-pressed="false" title="Code block (⌘⇧K)" aria-label="Code block" tabindex="-1">▤</button>
+        <button class="fmt-btn" id="fmtHR" title="Horizontal rule" aria-label="Horizontal rule" tabindex="-1">―</button>
+      </span>
+      <span class="fmt-sep" role="separator"></span>
+      <span class="fmt-group">
+        <button class="fmt-btn" id="fmtLink" title="Link (⌘K)" aria-label="Insert link" tabindex="-1">🔗</button>
+        <button class="fmt-btn" id="fmtImage" title="Image" aria-label="Insert image" tabindex="-1">🖼</button>
+      </span>
+      <span class="fmt-sep" role="separator"></span>
+      <span class="fmt-group">
+        <button class="fmt-btn" id="fmtIndent" title="Indent (Tab)" aria-label="Indent" tabindex="-1">⇥</button>
+        <button class="fmt-btn" id="fmtOutdent" title="Outdent (⇧Tab)" aria-label="Outdent" tabindex="-1">⇤</button>
+      </span>
+    </div>` : ""}
     <div class="spec" id="spec-content">
       ${specHtml}
     </div>
@@ -1044,6 +1103,102 @@ window.tippani = (function () {
     return editor;
   }
 
+  // --- Formatting toolbar wiring (#55) ----------------------------------------
+  // Each button dispatches a command via window.TippaniEditor.commands and
+  // refocuses the editor so the user can keep typing.
+  function fmtCmd(cmdName, ...args) {
+    if (!editor) return;
+    const cmds = window.TippaniEditor.commands;
+    const fn = typeof cmds[cmdName] === "function" ? cmds[cmdName] : null;
+    if (!fn) return;
+    // setHeading returns a command function, others are direct commands.
+    if (cmdName === "setHeading") {
+      cmds.setHeading(args[0])(editor.view);
+    } else {
+      fn(editor.view);
+    }
+    editor.view.focus();
+  }
+
+  // Wire toolbar buttons after DOM is ready.
+  function wireToolbar() {
+    const bindings = {
+      fmtBold: "toggleBold", fmtItalic: "toggleItalic",
+      fmtStrike: "toggleStrikethrough", fmtCode: "toggleInlineCode",
+      fmtBullet: "toggleBulletList", fmtOrdered: "toggleOrderedList",
+      fmtTask: "toggleTaskList", fmtQuote: "toggleBlockquote",
+      fmtCodeBlock: "toggleCodeBlock", fmtHR: "insertHorizontalRule",
+      fmtLink: "insertLink", fmtImage: "insertImage",
+      fmtIndent: "indentMore", fmtOutdent: "indentLess",
+    };
+    for (const [id, cmd] of Object.entries(bindings)) {
+      const btn = el(id);
+      if (btn) btn.addEventListener("click", () => fmtCmd(cmd));
+    }
+
+    // Heading dropdown.
+    const headBtn = el("fmtHeading");
+    const headMenu = el("fmtHeadingMenu");
+    if (headBtn && headMenu) {
+      headBtn.addEventListener("click", () => {
+        const open = headMenu.style.display !== "none";
+        headMenu.style.display = open ? "none" : "";
+        headBtn.setAttribute("aria-expanded", open ? "false" : "true");
+        if (!open) {
+          // Close on click-outside.
+          const close = (e) => {
+            if (!headMenu.contains(e.target) && e.target !== headBtn) {
+              headMenu.style.display = "none";
+              headBtn.setAttribute("aria-expanded", "false");
+              document.removeEventListener("pointerdown", close);
+            }
+          };
+          setTimeout(() => document.addEventListener("pointerdown", close), 0);
+          // Close on Escape.
+          const esc = (e) => {
+            if (e.key === "Escape") {
+              headMenu.style.display = "none";
+              headBtn.setAttribute("aria-expanded", "false");
+              headBtn.focus();
+              document.removeEventListener("keydown", esc);
+            }
+          };
+          document.addEventListener("keydown", esc);
+        }
+      });
+      headMenu.addEventListener("click", (e) => {
+        const li = e.target.closest("li[data-level]");
+        if (!li) return;
+        fmtCmd("setHeading", Number(li.dataset.level));
+        headMenu.style.display = "none";
+        headBtn.setAttribute("aria-expanded", "false");
+      });
+    }
+
+    // Roving tabindex: arrow keys move focus within toolbar.
+    const tb = el("fmtToolbar");
+    if (tb) {
+      tb.addEventListener("keydown", (e) => {
+        if (e.key !== "ArrowLeft" && e.key !== "ArrowRight" && e.key !== "Home" && e.key !== "End") return;
+        const btns = Array.from(tb.querySelectorAll(".fmt-btn"));
+        const idx = btns.indexOf(document.activeElement);
+        if (idx < 0) return;
+        e.preventDefault();
+        let next;
+        if (e.key === "ArrowRight") next = (idx + 1) % btns.length;
+        else if (e.key === "ArrowLeft") next = (idx - 1 + btns.length) % btns.length;
+        else if (e.key === "Home") next = 0;
+        else next = btns.length - 1;
+        btns[idx].tabIndex = -1;
+        btns[next].tabIndex = 0;
+        btns[next].focus();
+      });
+    }
+  }
+
+  // Initialize toolbar wiring on first load.
+  wireToolbar();
+
   function updatePaneControls() {
     const controls = el("editPaneControls");
     if (controls) controls.classList.toggle("visible", editMode);
@@ -1102,6 +1257,8 @@ window.tippani = (function () {
     if (!ensureEditor()) return;
     el("spec-content").style.display = "none";
     el("spec-editor").style.display = "";
+    const tb = el("fmtToolbar");
+    if (tb) tb.style.display = "";
     el("mainContent").classList.add("editing");
     const btn = el("editToggle");
     if (btn) btn.textContent = "View";
@@ -1120,6 +1277,8 @@ window.tippani = (function () {
     if (isDirty() && !confirm("You have unsaved changes. Switch to read view? Your edits are kept for this session.")) return;
     el("spec-editor").style.display = "none";
     el("spec-content").style.display = "";
+    const tb = el("fmtToolbar");
+    if (tb) tb.style.display = "none";
     el("mainContent").classList.remove("editing");
     const btn = el("editToggle");
     if (btn) btn.textContent = "Edit";

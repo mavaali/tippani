@@ -17,6 +17,7 @@
     "test:table": "node src/client/table.test.mjs",
     "test:diff": "node src/client/diff.test.mjs",
     "test:invariant": "node src/client/invariant.test.mjs",
+    "test:commands": "node src/client/editor-commands.test.mjs",
     "test:conflict": "node src/conflict.test.mjs",
     "test:canedit": "node src/canedit.test.mjs",
     "test": "node src/client/table.test.mjs && node src/client/diff.test.mjs && node src/client/invariant.test.mjs && node src/conflict.test.mjs && node src/canedit.test.mjs",
