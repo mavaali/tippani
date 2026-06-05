@@ -15,6 +15,9 @@
   "scripts": {
     "start": "node src/index.js",
     "test:table": "node src/client/table.test.mjs",
+    "test:diff": "node src/client/diff.test.mjs",
+    "test:invariant": "node src/client/invariant.test.mjs",
+    "test": "node src/client/table.test.mjs && node src/client/diff.test.mjs && node src/client/invariant.test.mjs",
     "build:client": "node scripts/build-client.js",
     "build": "node scripts/build.js"
   },
@@ -55,6 +58,7 @@
   },
   "devDependencies": {
     "esbuild": "^0.25.0",
+    "jsdom": "^29.1.1",
     "postject": "^1.0.0-alpha.6"
   },
   "license": "MIT"

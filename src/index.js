@@ -753,6 +753,21 @@ details[open] .resolved-summary::before { content: '▾ '; }
 .modal-btn-primary { background: var(--cp-accent); color: var(--cp-accent-fg); border-color: var(--cp-accent); }
 .modal-btn-primary:hover { background: var(--cp-accent-hover); }
 
+/* Diff-on-save preview (#46) */
+.diff-modal-inner { background: var(--cp-surface); border: 1px solid var(--cp-border); border-radius: 16px; padding: 20px; width: min(720px, 90vw); box-shadow: var(--cp-shadow); display: flex; flex-direction: column; max-height: 80vh; }
+.diff-modal-head { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 12px; }
+.diff-modal-head h3 { font-size: 14px; font-weight: 600; }
+.diff-stats { font-size: 12px; font-weight: 600; color: var(--cp-text-muted); font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+.diff-body { flex: 1; overflow: auto; border: 1px solid var(--cp-border); border-radius: 8px; background: var(--cp-bg); font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12.5px; line-height: 1.5; }
+.diff-line { display: flex; white-space: pre-wrap; word-break: break-word; }
+.diff-gutter { flex: 0 0 22px; text-align: center; user-select: none; color: var(--cp-text-muted); }
+.diff-text { flex: 1; padding-right: 8px; }
+.diff-add { background: color-mix(in srgb, var(--cp-success) 14%, transparent); }
+.diff-add .diff-gutter { color: var(--cp-success); }
+.diff-del { background: color-mix(in srgb, #d93f0b 14%, transparent); }
+.diff-del .diff-gutter { color: #d93f0b; }
+.diff-empty { padding: 24px; text-align: center; color: var(--cp-text-muted); }
+
 /* Toast */
 .toast { position: fixed; bottom: 80px; right: 24px; background: var(--cp-surface); color: var(--cp-text); padding: 10px 18px; border-radius: 10px; font-size: 13px; display: none; z-index: 200; border: 1px solid var(--cp-border); box-shadow: var(--cp-shadow); }
 .toast.show { display: block; }
@@ -833,6 +848,20 @@ details[open] .resolved-summary::before { content: '▾ '; }
   </div>
 </div>
 
+<div class="comment-modal" id="diffModal">
+  <div class="diff-modal-inner">
+    <div class="diff-modal-head">
+      <h3>Review changes</h3>
+      <span class="diff-stats" id="diffStats"></span>
+    </div>
+    <div class="diff-body" id="diffBody"></div>
+    <div class="comment-modal-actions">
+      <button class="modal-btn" id="diffCancel">Cancel</button>
+      <button class="modal-btn modal-btn-primary" id="diffConfirm">Confirm &amp; Save</button>
+    </div>
+  </div>
+</div>
+
 <div class="toast" id="toast"></div>
 
 <script>${EDITOR_JS}</script>
@@ -879,6 +908,50 @@ window.tippani = (function () {
     editMode ? exitEdit() : enterEdit();
   }
 
+  // Diff-on-save preview (#46). Resolves true (confirm) / false (cancel). Called
+  // by the write path (#48) before committing.
+  function showDiff(oldMd, newMd) {
+    return new Promise((resolve) => {
+      const modal = el("diffModal");
+      const body = el("diffBody");
+      const stats = el("diffStats");
+      const diff = window.TippaniEditor.diffLines(oldMd, newMd);
+      const s = window.TippaniEditor.diffStats(diff);
+      const noChange = s.added + s.removed === 0;
+      stats.textContent = noChange ? "No changes" : "+" + s.added + "  −" + s.removed;
+      body.textContent = "";
+      if (noChange) {
+        const p = document.createElement("div");
+        p.className = "diff-empty";
+        p.textContent = "No changes to save.";
+        body.appendChild(p);
+      } else {
+        for (const d of diff) {
+          const line = document.createElement("div");
+          line.className = "diff-line diff-" + d.type;
+          const gutter = document.createElement("span");
+          gutter.className = "diff-gutter";
+          gutter.textContent = d.type === "add" ? "+" : d.type === "del" ? "−" : " ";
+          const text = document.createElement("span");
+          text.className = "diff-text";
+          text.textContent = d.text === "" ? " " : d.text; // build via textContent — XSS-safe
+          line.appendChild(gutter);
+          line.appendChild(text);
+          body.appendChild(line);
+        }
+      }
+      modal.style.display = "flex";
+      const done = (result) => {
+        modal.style.display = "none";
+        el("diffConfirm").onclick = null;
+        el("diffCancel").onclick = null;
+        resolve(result);
+      };
+      el("diffConfirm").onclick = () => done(true);
+      el("diffCancel").onclick = () => done(false);
+    });
+  }
+
   document.addEventListener("keydown", (e) => {
     if ((e.metaKey || e.ctrlKey) && (e.key === "e" || e.key === "E")) {
       // Only when an Edit affordance exists (write access).
@@ -898,6 +971,9 @@ window.tippani = (function () {
     enterEdit,
     exitEdit,
     isDirty,
+    showDiff,
+    // Original (last-loaded) markdown — the baseline a save diffs against.
+    getOriginal: () => RAW_MARKDOWN,
     // For the write path (#48): current editor buffer (or the original if the
     // editor was never opened).
     getMarkdown: () => (editor ? editor.getMarkdown() : RAW_MARKDOWN),

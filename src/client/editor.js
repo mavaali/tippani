@@ -17,6 +17,7 @@ import { markdown } from "@codemirror/lang-markdown";
 import { GFM } from "@lezer/markdown";
 import { defaultKeymap, history, historyKeymap } from "@codemirror/commands";
 import { tableField } from "./table-widget.js";
+import { diffLines, diffStats } from "./diff.js";
 
 // --- Live-preview decorations -------------------------------------------------
 
@@ -326,4 +327,4 @@ function mount(el, markdownText, opts = {}) {
   };
 }
 
-window.TippaniEditor = { mount };
+window.TippaniEditor = { mount, diffLines, diffStats };
