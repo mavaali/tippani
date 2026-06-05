@@ -15,6 +15,7 @@ import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
 import os from "os";
+import { EDITOR_JS } from "./client/editor.bundle.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -523,7 +524,7 @@ body { font-family: "Segoe UI", Aptos, Calibri, -apple-system, BlinkMacSystemFon
 }
 
 // --- Spec review page (3-column layout) ---
-function buildSpecPage(specHtml, toc, metadata, pr, threads, specPath, sourceMap, changedFiles, currentFileIndex) {
+function buildSpecPage(specHtml, toc, metadata, pr, threads, specPath, sourceMap, changedFiles, currentFileIndex, rawMarkdown) {
   const tocHtml = toc
     .map(
       (t) =>
@@ -790,6 +791,7 @@ details[open] .resolved-summary::before { content: '▾ '; }
     <div class="spec" id="spec-content">
       ${specHtml}
     </div>
+    <div class="spec spec-edit" id="spec-editor" style="display:none"></div>
   </main>
 
   <div class="resize-handle" id="resizeRight"></div>
@@ -824,6 +826,26 @@ details[open] .resolved-summary::before { content: '▾ '; }
 
 <div class="toast" id="toast"></div>
 
+<script>${EDITOR_JS}</script>
+<script>
+// #44 dev hatch: ?edit=1 mounts the live-preview editor in place of the rendered
+// spec. The real edit/view toggle is #47.
+(function () {
+  const RAW_MARKDOWN = ${JSON.stringify(rawMarkdown || "")};
+  function initEditor() {
+    if (new URLSearchParams(location.search).get("edit") !== "1") return;
+    const host = document.getElementById("spec-editor");
+    const read = document.getElementById("spec-content");
+    if (!host || !read || !window.TippaniEditor) return;
+    read.style.display = "none";
+    host.style.display = "";
+    window.__tippaniEditor = window.TippaniEditor.mount(host, RAW_MARKDOWN, {});
+  }
+  if (document.readyState === "loading")
+    document.addEventListener("DOMContentLoaded", initEditor);
+  else initEditor();
+})();
+</script>
 <script>
 const SPEC_PATH = ${JSON.stringify(specPath)};
 const SOURCE_MAP = ${JSON.stringify(sourceMap)};
@@ -1375,7 +1397,7 @@ async function main() {
         }
       }
 
-      res.type("html").send(buildSpecPage(specHtml, toc, metadata, _pr, allThreads, filePath, sourceMap, _changedFiles, idx));
+      res.type("html").send(buildSpecPage(specHtml, toc, metadata, _pr, allThreads, filePath, sourceMap, _changedFiles, idx, body));
     } catch (e) {
       res.status(500).send("Error rendering spec. Check the server console for details.");
       console.error("Spec render error:", e.message);

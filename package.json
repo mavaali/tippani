@@ -14,6 +14,7 @@
   ],
   "scripts": {
     "start": "node src/index.js",
+    "build:client": "node scripts/build-client.js",
     "build": "node scripts/build.js"
   },
   "keywords": [
@@ -33,6 +34,12 @@
   "homepage": "https://github.com/mavaali/tippani",
   "author": "Mihir Wagle",
   "dependencies": {
+    "@codemirror/commands": "^6.10.3",
+    "@codemirror/lang-markdown": "^6.5.0",
+    "@codemirror/language": "^6.12.3",
+    "@codemirror/state": "^6.6.0",
+    "@codemirror/view": "^6.43.0",
+    "@lezer/markdown": "^1.6.4",
     "azure-devops-node-api": "15.1.2",
     "express": "5.2.1",
     "open": "^11.0.0",
