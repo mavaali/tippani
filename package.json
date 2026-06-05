@@ -17,7 +17,8 @@
     "test:table": "node src/client/table.test.mjs",
     "test:diff": "node src/client/diff.test.mjs",
     "test:invariant": "node src/client/invariant.test.mjs",
-    "test": "node src/client/table.test.mjs && node src/client/diff.test.mjs && node src/client/invariant.test.mjs",
+    "test:conflict": "node src/conflict.test.mjs",
+    "test": "node src/client/table.test.mjs && node src/client/diff.test.mjs && node src/client/invariant.test.mjs && node src/conflict.test.mjs",
     "build:client": "node scripts/build-client.js",
     "build": "node scripts/build.js"
   },

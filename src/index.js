@@ -16,6 +16,7 @@ import path from "path";
 import { fileURLToPath } from "url";
 import os from "os";
 import { EDITOR_JS } from "./client/editor.bundle.js";
+import { isConflict } from "./conflict.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -125,6 +126,11 @@ function addPending(prId, action) {
   pending.push(action);
   savePending(prId, pending);
   return action;
+}
+
+function removePending(prId, actionId) {
+  const pending = loadPending(prId).filter((p) => p.id !== actionId);
+  savePending(prId, pending);
 }
 
 // --- ADO error helper ---
@@ -559,7 +565,7 @@ body { font-family: "Segoe UI", Aptos, Calibri, -apple-system, BlinkMacSystemFon
 }
 
 // --- Spec review page (3-column layout) ---
-function buildSpecPage(specHtml, toc, metadata, pr, threads, specPath, sourceMap, changedFiles, currentFileIndex, rawMarkdown, canEdit) {
+function buildSpecPage(specHtml, toc, metadata, pr, threads, specPath, sourceMap, changedFiles, currentFileIndex, rawMarkdown, canEdit, baseObjectId) {
   const tocHtml = toc
     .map(
       (t) =>
@@ -808,6 +814,8 @@ details[open] .resolved-summary::before { content: '▾ '; }
 .save-btn { background: var(--cp-accent); color: var(--cp-accent-fg); border-color: var(--cp-accent); }
 .save-btn:hover:not(:disabled) { background: var(--cp-accent-hover); }
 .save-btn:disabled { opacity: 0.5; cursor: default; }
+.dirty-dot { color: var(--cp-accent); font-size: 12px; line-height: 1; margin-right: 2px; }
+.conflict-msg { font-size: 13px; line-height: 1.55; color: var(--cp-text); margin-bottom: 6px; }
 
 /* Toast */
 .toast { position: fixed; bottom: 80px; right: 24px; background: var(--cp-surface); color: var(--cp-text); padding: 10px 18px; border-radius: 10px; font-size: 13px; display: none; z-index: 200; border: 1px solid var(--cp-border); box-shadow: var(--cp-shadow); }
@@ -836,6 +844,7 @@ details[open] .resolved-summary::before { content: '▾ '; }
     </div>
   </div>
   <div class="header-right">
+    <span class="dirty-dot" id="dirtyDot" style="display:none" title="Unsaved changes">●</span>
     ${canEdit ? `<button class="edit-toggle save-btn" id="saveBtn" onclick="tippani.save()" style="display:none" disabled>Save</button>` : ""}
     ${canEdit ? `<button class="edit-toggle" id="editToggle" onclick="tippani.toggle()" title="Toggle edit mode (${"⌘"}/Ctrl+E)">Edit</button>` : ""}
   </div>
@@ -908,6 +917,18 @@ details[open] .resolved-summary::before { content: '▾ '; }
   </div>
 </div>
 
+<div class="comment-modal" id="conflictModal">
+  <div class="comment-modal-inner">
+    <h3>File changed on the server</h3>
+    <p class="conflict-msg">This file was updated by someone else since you started editing, so your save was not applied. Copy your changes, then reload to get the latest version and re-apply them. Tippani never overwrites someone else's edits automatically.</p>
+    <div class="comment-modal-actions">
+      <button class="modal-btn" id="conflictCancel">Keep editing</button>
+      <button class="modal-btn" id="conflictCopy">Copy my changes</button>
+      <button class="modal-btn modal-btn-primary" id="conflictReload">Reload</button>
+    </div>
+  </div>
+</div>
+
 <div class="toast" id="toast"></div>
 
 <script>${EDITOR_JS}</script>
@@ -921,12 +942,16 @@ window.tippani = (function () {
   let RAW_MARKDOWN = ${JSON.stringify(rawMarkdown || "")};
   const SPEC_FILE_PATH = ${JSON.stringify(specPath)};
   const FILENAME = SPEC_FILE_PATH.split("/").pop();
+  // Branch tip at load time — sent on save so ADO rejects a stale push (#49).
+  const BASE_OBJECT_ID = ${JSON.stringify(baseObjectId || null)};
+  const ORIG_TITLE = document.title;
   let editor = null;
   let editMode = false;
   let saving = false;
 
   const el = (id) => document.getElementById(id);
   const isDirty = () => !!editor && editor.getMarkdown() !== RAW_MARKDOWN;
+  const toast = (m) => window.showToast && window.showToast(m);
 
   // Save button is enabled only when there are unsaved changes.
   function updateSaveState() {
@@ -934,10 +959,23 @@ window.tippani = (function () {
     if (btn) btn.disabled = saving || !isDirty();
   }
 
+  // Dirty indicator: a dot in the header + an asterisk-equivalent in the title (#49).
+  function updateDirtyIndicator() {
+    const dirty = isDirty();
+    document.title = (dirty ? "● " : "") + ORIG_TITLE;
+    const dot = el("dirtyDot");
+    if (dot) dot.style.display = dirty ? "" : "none";
+  }
+
+  function onEditorChange() {
+    updateSaveState();
+    updateDirtyIndicator();
+  }
+
   function ensureEditor() {
     if (!editor && window.TippaniEditor)
       editor = window.TippaniEditor.mount(el("spec-editor"), RAW_MARKDOWN, {
-        onChange: updateSaveState,
+        onChange: onEditorChange,
       });
     return editor;
   }
@@ -951,6 +989,7 @@ window.tippani = (function () {
     const save = el("saveBtn");
     if (save) save.style.display = "";
     updateSaveState();
+    updateDirtyIndicator();
     editMode = true;
     editor.view.focus();
   }
@@ -1034,17 +1073,19 @@ window.tippani = (function () {
     const btn = el("saveBtn");
     if (btn) btn.textContent = "Saving…";
     updateSaveState();
-    const toast = (m) => window.showToast && window.showToast(m);
     try {
       const r = await fetch("/api/save", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ filePath: SPEC_FILE_PATH, content: newMd, message }),
+        body: JSON.stringify({ filePath: SPEC_FILE_PATH, content: newMd, message, baseObjectId: BASE_OBJECT_ID }),
       });
       const data = await r.json();
       if (data.ok && data.synced) {
         RAW_MARKDOWN = newMd; // new saved baseline → no longer dirty
         toast("Saved — commit " + (data.commitId ? String(data.commitId).slice(0, 8) : "ok"));
+      } else if (data.conflict) {
+        // Branch moved underneath us — never overwrite blindly (#49).
+        showConflict();
       } else if (data.queued) {
         RAW_MARKDOWN = newMd; // safely persisted to the queue; will retry on sync
         toast(data.error ? "Push failed (" + data.error + ") — queued, will retry on sync" : (data.message || "Saved locally — will sync"));
@@ -1057,7 +1098,29 @@ window.tippani = (function () {
       saving = false;
       if (btn) btn.textContent = "Save";
       updateSaveState();
+      updateDirtyIndicator();
     }
+  }
+
+  // Conflict dialog (#49): the branch moved; offer reload or copy-to-clipboard.
+  // Never auto-merge — specs are prose.
+  function showConflict() {
+    const m = el("conflictModal");
+    if (!m) {
+      toast("This file was changed on the server — reload before saving.");
+      return;
+    }
+    m.style.display = "flex";
+    el("conflictCancel").onclick = () => { m.style.display = "none"; };
+    el("conflictCopy").onclick = async () => {
+      try {
+        await navigator.clipboard.writeText(editor.getMarkdown());
+        toast("Your changes copied to the clipboard");
+      } catch {
+        toast("Copy failed — select the text and copy manually");
+      }
+    };
+    el("conflictReload").onclick = () => location.reload();
   }
 
   document.addEventListener("keydown", (e) => {
@@ -1068,6 +1131,32 @@ window.tippani = (function () {
       toggle();
     }
   });
+  // Warn before closing/reloading the tab with unsaved edits (#49).
+  window.addEventListener("beforeunload", (e) => {
+    if (isDirty()) {
+      e.preventDefault();
+      e.returnValue = "";
+      return "";
+    }
+  });
+
+  // Warn before navigating to another file (home or file picker) with unsaved
+  // edits (#49). Capture phase so it runs before the link navigates.
+  document.addEventListener(
+    "click",
+    (e) => {
+      const a = e.target.closest && e.target.closest("a[href]");
+      if (!a) return;
+      const href = a.getAttribute("href") || "";
+      const leavesFile = href === "/" || href.startsWith("/file/");
+      if (leavesFile && isDirty() &&
+          !confirm("You have unsaved changes. Leave this file and discard them?")) {
+        e.preventDefault();
+      }
+    },
+    true
+  );
+
   // ?edit=1 still auto-enters edit mode (convenient for testing).
   if (new URLSearchParams(location.search).get("edit") === "1") {
     if (document.readyState === "loading")
@@ -1081,6 +1170,8 @@ window.tippani = (function () {
     isDirty,
     save,
     showDiff,
+    showConflict,
+    updateDirtyIndicator,
     // Original (last-loaded) markdown — the baseline a save diffs against.
     getOriginal: () => RAW_MARKDOWN,
     // For the write path (#48): current editor buffer (or the original if the
@@ -1642,10 +1733,16 @@ async function main() {
       }
 
       // canEdit gates the Edit affordance. Real ADO push-permission detection for
-      // the PR source branch lands with the write path (#48); for now, editing is
-      // offered whenever a PR was loaded.
+      // the PR source branch is tracked separately; for now, editing is offered
+      // whenever a PR was loaded.
       const canEdit = true;
-      res.type("html").send(buildSpecPage(specHtml, toc, metadata, _pr, allThreads, filePath, sourceMap, _changedFiles, idx, body, canEdit));
+      // Conflict guard (#49): capture the branch tip at load time. Saving passes
+      // this back as oldObjectId so ADO rejects the push if the branch has moved.
+      let baseObjectId = null;
+      if (!_isOffline && _conn) {
+        try { baseObjectId = await getBranchTip(_conn, _branch); } catch { /* non-fatal */ }
+      }
+      res.type("html").send(buildSpecPage(specHtml, toc, metadata, _pr, allThreads, filePath, sourceMap, _changedFiles, idx, body, canEdit, baseObjectId));
     } catch (e) {
       res.status(500).send("Error rendering spec. Check the server console for details.");
       console.error("Spec render error:", e.message);
@@ -1711,7 +1808,7 @@ async function main() {
 
   // Save an edited spec: commit the markdown to the PR source branch (#48).
   app.post("/api/save", async (req, res) => {
-    const { filePath, content, message } = req.body || {};
+    const { filePath, content, message, baseObjectId } = req.body || {};
     if (typeof content !== "string" || !filePath) {
       return res.status(400).json({ ok: false, error: "filePath and content are required" });
     }
@@ -1723,7 +1820,9 @@ async function main() {
       return res.json({ ok: true, synced: false, queued: true, message: "Saved locally (offline) — will push on sync." });
     }
     try {
-      const commitId = await pushFileToBranch(_conn, _branch, filePath, content, commitMessage);
+      // Pass the load-time tip as oldObjectId (#49) — ADO rejects the push if the
+      // branch moved underneath the editor (optimistic concurrency).
+      const commitId = await pushFileToBranch(_conn, _branch, filePath, content, commitMessage, baseObjectId || undefined);
       const pending = loadPending(_prId);
       const idx = pending.findIndex((p) => p.id === action.id);
       if (idx >= 0) pending[idx].synced = true;
@@ -1735,7 +1834,13 @@ async function main() {
       }
       res.json({ ok: true, synced: true, commitId });
     } catch (e) {
-      // Edit stays queued (unsynced) — no data loss. Surface an actionable error.
+      if (isConflict(e)) {
+        // Branch moved — drop the queued action so it is never blindly re-pushed
+        // by a later sync. The editor keeps the content; the user reloads or copies.
+        removePending(_prId, action.id);
+        return res.json({ ok: false, conflict: true, error: "This file was updated by someone else since you started editing." });
+      }
+      // Other failure: edit stays queued (no data loss). Surface an actionable error.
       res.json({ ok: false, synced: false, queued: true, error: friendlyAdoError(e, "save") });
     }
   });
