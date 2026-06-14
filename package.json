@@ -1,6 +1,6 @@
 {
   "name": "tippani",
-  "version": "1.3.0-beta.0",
+  "version": "1.4.0-beta.0",
   "description": "Offline-capable CLI to read, annotate, and edit Azure DevOps PR markdown specs",
   "type": "module",
   "bin": {

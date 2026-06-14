@@ -1,5 +1,20 @@
 # Changelog
 
+## 1.4.0-beta.0 (2026-06-13)
+
+### Added — AI / MCP integration (beta)
+- **Keyboard navigation across comment threads** — `J`/`K` next/prev, `R` reply, `S` skip, `⌘`/`Ctrl`+`Enter` to post and auto-advance, `Esc` to cancel. Inline reply textarea replaces the old `prompt()` dialog. Focused-thread state survives the post-reply reload.
+- **HTTP control API** under `/api/v1/*` — read endpoints (`/threads`, `/threads/:id`, `/specs/:fileIndex`), draft staging (`PUT/DELETE /threads/:id/draft`), focus RPC (`POST /commands/focus`), reply/resolve (`POST /threads/:id/{reply,resolve}`), and a polling state endpoint (`/state`). Designed for LLM tools and scripts to drive tippani's UI without an embedded LLM.
+- **Session-token auth** — random 24-byte token generated at startup, written to `~/.tippani/session-token` (mode 0600, cleaned up on shutdown). External clients send `Authorization: Bearer <token>` plus `X-Tippani-Client: <name>`. Browser uses same-origin and needs neither.
+- **Conflict guards** — `409` on a second concurrent reply to the same thread (catches double-clicks and competing LLM+human posts); `409` on draft staging when the user is actively typing in that thread's textarea (10-second sliding window touched by every keystroke).
+- **Externally-staged drafts in the UI** — when an external client stages a draft, the browser picks it up via 1.5s polling, populates the reply textarea, and shows a "✨ Draft from external client" badge. The user always edits or posts; tippani never auto-posts.
+- **`tippani-mcp` — MCP server** exposing 8 tools: `list_threads`, `get_thread`, `focus_thread`, `stage_draft`, `clear_draft`, `post_reply`, `resolve_thread`, `get_spec`. Stdio transport; proxies tool calls to the HTTP control API. One-line setup in `claude_desktop_config.json` (see README).
+
+### Notes
+- **Beta.** The MCP path has zero real-world miles yet. Test on non-critical PRs first.
+- Issue [#42](https://github.com/mavaali/tippani/issues/42) tracks the full design and phasing.
+- Test suite grew from 56 → 183 across `src/api-state.test.mjs` (39), `src/control-api.test.mjs` (48), and `src/mcp.test.mjs` (40).
+
 ## 1.3.0-beta.0 (2026-06-04)
 
 ### Added — WYSIWYG editing & write path (beta)
