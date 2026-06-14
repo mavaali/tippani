@@ -2158,49 +2158,59 @@ async function main() {
     }
   });
 
-  app.post("/api/reply", async (req, res) => {
-    const tid = Number(req.body.threadId);
+  // Shared reply/resolve helpers — wraps the inflight guard + pending-queue
+  // bookkeeping so both /api/reply (legacy) and /api/v1/threads/:id/reply
+  // (control API) share one path.
+  async function doReply(threadId, content) {
+    const tid = Number(threadId);
     if (Number.isFinite(tid) && !_inflight.acquire(tid)) {
-      return res.status(409).json({ error: "another reply is already in flight for this thread" });
+      return { ok: false, status: 409, body: { error: "another reply is already in flight for this thread" } };
     }
-    const action = addPending(_prId, { type: 'reply', threadId: req.body.threadId, content: req.body.content });
+    const action = addPending(_prId, { type: 'reply', threadId, content });
     if (!_isOffline && _conn) {
       try {
-        await replyToThread(_conn, _prId, req.body.threadId, req.body.content);
+        await replyToThread(_conn, _prId, threadId, content);
         action.synced = true;
         const pending = loadPending(_prId);
-        const idx = pending.findIndex(p => p.id === action.id);
-        if (idx >= 0) pending[idx].synced = true;
+        const i = pending.findIndex(p => p.id === action.id);
+        if (i >= 0) pending[i].synced = true;
         savePending(_prId, pending);
         if (Number.isFinite(tid)) { _drafts.delete(tid); _inflight.release(tid); }
-        res.json({ ok: true, synced: true });
+        return { ok: true, status: 200, body: { ok: true, synced: true } };
       } catch {
         if (Number.isFinite(tid)) _inflight.release(tid);
-        res.json({ ok: true, synced: false, queued: true });
+        return { ok: true, status: 200, body: { ok: true, synced: false, queued: true } };
       }
-    } else {
-      if (Number.isFinite(tid)) { _drafts.delete(tid); _inflight.release(tid); }
-      res.json({ ok: true, synced: false, queued: true });
     }
+    if (Number.isFinite(tid)) { _drafts.delete(tid); _inflight.release(tid); }
+    return { ok: true, status: 200, body: { ok: true, synced: false, queued: true } };
+  }
+  async function doResolve(threadId) {
+    const action = addPending(_prId, { type: 'resolve', threadId });
+    if (!_isOffline && _conn) {
+      try {
+        await resolveThread(_conn, _prId, threadId);
+        action.synced = true;
+        const pending = loadPending(_prId);
+        const i = pending.findIndex(p => p.id === action.id);
+        if (i >= 0) pending[i].synced = true;
+        savePending(_prId, pending);
+        return { ok: true, status: 200, body: { ok: true, synced: true } };
+      } catch {
+        return { ok: true, status: 200, body: { ok: true, synced: false, queued: true } };
+      }
+    }
+    return { ok: true, status: 200, body: { ok: true, synced: false, queued: true } };
+  }
+
+  app.post("/api/reply", async (req, res) => {
+    const r = await doReply(req.body.threadId, req.body.content);
+    res.status(r.status).json(r.body);
   });
 
   app.post("/api/resolve", async (req, res) => {
-    const action = addPending(_prId, { type: 'resolve', threadId: req.body.threadId });
-    if (!_isOffline && _conn) {
-      try {
-        await resolveThread(_conn, _prId, req.body.threadId);
-        action.synced = true;
-        const pending = loadPending(_prId);
-        const idx = pending.findIndex(p => p.id === action.id);
-        if (idx >= 0) pending[idx].synced = true;
-        savePending(_prId, pending);
-        res.json({ ok: true, synced: true });
-      } catch {
-        res.json({ ok: true, synced: false, queued: true });
-      }
-    } else {
-      res.json({ ok: true, synced: false, queued: true });
-    }
+    const r = await doResolve(req.body.threadId);
+    res.status(r.status).json(r.body);
   });
 
   // Save an edited spec: commit the markdown to the PR source branch (#48).
@@ -2323,7 +2333,26 @@ async function main() {
       }
       return "";
     },
+    postReply: doReply,
+    resolveThread: doResolve,
   });
+
+  // Persist session token to ~/.tippani/session-token so the MCP shim
+  // (and other local helpers) can authenticate without copy/paste.
+  // 0600 perms; overwritten on each startup.
+  try {
+    fs.mkdirSync(CONFIG_DIR, { recursive: true, mode: 0o700 });
+    const tokenPath = path.join(CONFIG_DIR, "session-token");
+    fs.writeFileSync(tokenPath, _sessionToken + "\n", { mode: 0o600 });
+    // Best-effort cleanup on graceful shutdown so the token doesn't outlive
+    // the server process for any meaningful window.
+    const cleanup = () => { try { fs.unlinkSync(tokenPath); } catch {} };
+    process.on("exit", cleanup);
+    process.on("SIGINT", () => { cleanup(); process.exit(0); });
+    process.on("SIGTERM", () => { cleanup(); process.exit(0); });
+  } catch (e) {
+    console.warn(`  Warning: could not persist session token: ${e.message}`);
+  }
 
   const server = app.listen(PORT, "127.0.0.1", () => {
     const base = `http://localhost:${PORT}`;

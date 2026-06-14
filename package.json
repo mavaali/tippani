@@ -4,7 +4,8 @@
   "description": "Offline-capable CLI to read, annotate, and edit Azure DevOps PR markdown specs",
   "type": "module",
   "bin": {
-    "tippani": "./src/index.js"
+    "tippani": "./src/index.js",
+    "tippani-mcp": "./src/mcp.js"
   },
   "files": [
     "src/",
@@ -21,7 +22,8 @@
     "test:canedit": "node src/canedit.test.mjs",
     "test:apistate": "node src/api-state.test.mjs",
     "test:controlapi": "node src/control-api.test.mjs",
-    "test": "node src/client/table.test.mjs && node src/client/diff.test.mjs && node src/client/invariant.test.mjs && node src/conflict.test.mjs && node src/canedit.test.mjs && node src/api-state.test.mjs && node src/control-api.test.mjs",
+    "test:mcp": "node src/mcp.test.mjs",
+    "test": "node src/client/table.test.mjs && node src/client/diff.test.mjs && node src/client/invariant.test.mjs && node src/conflict.test.mjs && node src/canedit.test.mjs && node src/api-state.test.mjs && node src/control-api.test.mjs && node src/mcp.test.mjs",
     "build:client": "node scripts/build-client.js",
     "build": "node scripts/build.js"
   },
@@ -48,6 +50,7 @@
     "@codemirror/state": "^6.6.0",
     "@codemirror/view": "^6.43.0",
     "@lezer/markdown": "^1.6.4",
+    "@modelcontextprotocol/sdk": "^1.29.0",
     "azure-devops-node-api": "15.1.2",
     "express": "5.2.1",
     "open": "^11.0.0",

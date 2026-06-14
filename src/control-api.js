@@ -15,6 +15,8 @@ export function registerControlApi(app, deps) {
     getThreads,         // () => Array<thread>
     getChangedFiles,    // () => Array<{path, changeType}>
     readFileMarkdown,   // async (filePath) => string
+    postReply,          // async (threadId, content) => {ok, status, body}
+    resolveThread: doResolveDep, // async (threadId) => {ok, status, body}
   } = deps;
 
   const LOCAL_PREFIXES = [
@@ -161,5 +163,33 @@ export function registerControlApi(app, deps) {
       version: f.version,
       drafts: drafts.list(),
     });
+  });
+
+  // POST /api/v1/threads/:id/reply — token-gated wrapper over the same
+  // pending-queue path as legacy /api/reply. Returns 409 if a concurrent
+  // reply for the same thread is already in flight.
+  app.post("/api/v1/threads/:id/reply", requireAuth({ mutation: true }), async (req, res) => {
+    const t = findThread(req.params.id);
+    if (!t) return res.status(404).json({ error: "thread not found" });
+    const { content } = req.body || {};
+    if (typeof content !== "string" || !content.trim()) {
+      return res.status(400).json({ error: "content (non-empty string) required" });
+    }
+    if (typeof postReply !== "function") {
+      return res.status(501).json({ error: "reply not wired in this deployment" });
+    }
+    const r = await postReply(t.id, content);
+    res.status(r.status).json(r.body);
+  });
+
+  // POST /api/v1/threads/:id/resolve — token-gated wrapper.
+  app.post("/api/v1/threads/:id/resolve", requireAuth({ mutation: true }), async (req, res) => {
+    const t = findThread(req.params.id);
+    if (!t) return res.status(404).json({ error: "thread not found" });
+    if (typeof doResolveDep !== "function") {
+      return res.status(501).json({ error: "resolve not wired in this deployment" });
+    }
+    const r = await doResolveDep(t.id);
+    res.status(r.status).json(r.body);
   });
 }

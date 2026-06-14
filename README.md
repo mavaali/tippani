@@ -137,6 +137,24 @@ Single-file CLI (`src/index.js`) that:
 
 Comments are written to a local queue first, then synced to ADO. If offline, they stay in the queue until the next sync.
 
+## AI / MCP integration
+
+Tippani exposes a [Model Context Protocol](https://modelcontextprotocol.io) server so LLM clients (Claude Desktop, GitHub Copilot, etc.) can drive the review workflow — list threads, stage drafts, scroll to comments — while you stay in tippani's browser UI and approve each action. See issue [#42](https://github.com/mavaali/tippani/issues/42) for the design.
+
+**Setup (Claude Desktop):** add to your `claude_desktop_config.json`:
+
+```json
+{
+  "mcpServers": {
+    "tippani": { "command": "npx", "args": ["-y", "tippani-mcp"] }
+  }
+}
+```
+
+Start tippani first (it writes a session token to `~/.tippani/session-token` that the MCP shim reads). The shim exposes 8 tools: `list_threads`, `get_thread`, `focus_thread`, `stage_draft`, `clear_draft`, `post_reply`, `resolve_thread`, `get_spec`.
+
+The underlying HTTP control API is also directly usable for scripts and IDE extensions — see `src/control-api.js`.
+
 ## License
 
 MIT — see [LICENSE](LICENSE)
