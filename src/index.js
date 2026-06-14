@@ -15,9 +15,16 @@ import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
 import os from "os";
+import crypto from "crypto";
 import { EDITOR_JS } from "./client/editor.bundle.js";
 import { isConflict } from "./conflict.js";
 import { decideCanEdit } from "./canedit.js";
+import {
+  createFocusStore,
+  createDraftStore,
+  createLockStore,
+  createInflightStore,
+} from "./api-state.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -836,6 +843,7 @@ details[open] .resolved-summary::before { content: '▾ '; }
 .reply-btn-post:hover { opacity: 0.9; }
 .reply-btn-cancel { background: none; border: 1px solid var(--cp-border); color: var(--cp-text-muted); font-size: 12px; padding: 5px 12px; border-radius: 6px; cursor: pointer; }
 .reply-btn-cancel:hover { color: var(--cp-text); }
+.reply-external-badge { font-size: 11px; color: var(--cp-accent); background: color-mix(in srgb, var(--cp-accent) 12%, transparent); border: 1px solid color-mix(in srgb, var(--cp-accent) 30%, transparent); border-radius: 6px; padding: 4px 8px; margin-bottom: 6px; }
 .comment-thread.thread-focused { box-shadow: 0 0 0 2px var(--cp-accent); }
 .kbd-hint { font-size: 11px; color: var(--cp-text-muted); padding: 6px 12px; border-top: 1px solid var(--cp-border); background: var(--cp-surface-soft); }
 .kbd-hint kbd { background: var(--cp-surface); border: 1px solid var(--cp-border); border-bottom-width: 2px; border-radius: 3px; padding: 0 4px; font-family: ui-monospace, monospace; font-size: 10px; }
@@ -1630,6 +1638,102 @@ document.addEventListener('keydown', (e) => {
   }
 });
 
+// --- Control-API integration (#42 Phase 1) ---
+// Poll the server's control-API state every 1.5s. When focus changes from
+// an external client (LLM/script), scroll to that thread; when a draft is
+// staged externally, populate the textarea and badge it.
+(function() {
+  let lastVersion = -1;
+  const seenDraftKey = (id, d) => id + ':' + (d ? d.updatedAt : '0');
+  const lastDraftSeen = new Map();
+
+  function applyExternalDraft(threadId, draft) {
+    const form = document.querySelector('.reply-form[data-thread-id="' + threadId + '"]');
+    if (!form) return;
+    const ta = form.querySelector('.reply-textarea');
+    if (!ta) return;
+    // Don't clobber user-typed content: only fill if textarea is empty OR the
+    // existing content matches a prior external draft (i.e., user hasn't touched it).
+    const priorKey = lastDraftSeen.get(threadId);
+    const userTouched = ta.value && (!priorKey || !ta.dataset.externalContent || ta.dataset.externalContent !== ta.value);
+    if (userTouched) return;
+    form.classList.add('open');
+    ta.value = draft.content;
+    ta.dataset.externalContent = draft.content;
+    let badge = form.querySelector('.reply-external-badge');
+    if (!badge) {
+      badge = document.createElement('div');
+      badge.className = 'reply-external-badge';
+      badge.textContent = '✨ Draft from external client — edit or post';
+      form.insertBefore(badge, form.firstChild);
+    }
+  }
+
+  function clearExternalBadge(threadId) {
+    const form = document.querySelector('.reply-form[data-thread-id="' + threadId + '"]');
+    if (!form) return;
+    const badge = form.querySelector('.reply-external-badge');
+    if (badge) badge.remove();
+    const ta = form.querySelector('.reply-textarea');
+    if (ta) delete ta.dataset.externalContent;
+  }
+
+  async function poll() {
+    try {
+      const r = await fetch('/api/v1/state');
+      if (!r.ok) return;
+      const s = await r.json();
+      if (s.version !== lastVersion) {
+        lastVersion = s.version;
+        // Focus change from external client.
+        if (s.focusedThreadId != null && s.focusedThreadId !== _focusedThreadId) {
+          focusThread(s.focusedThreadId);
+        }
+        // Apply / clear drafts.
+        const seenThisRound = new Set();
+        Object.entries(s.drafts || {}).forEach(([id, d]) => {
+          const tid = Number(id);
+          seenThisRound.add(tid);
+          const k = seenDraftKey(tid, d);
+          if (lastDraftSeen.get(tid) !== k) {
+            lastDraftSeen.set(tid, k);
+            applyExternalDraft(tid, d);
+          }
+        });
+        // Drafts that disappeared server-side.
+        for (const tid of Array.from(lastDraftSeen.keys())) {
+          if (!seenThisRound.has(tid)) {
+            lastDraftSeen.delete(tid);
+            clearExternalBadge(tid);
+          }
+        }
+      }
+    } catch {}
+  }
+  setInterval(poll, 1500);
+  poll();
+})();
+
+// User-editing lock heartbeat: while the user types in a reply textarea,
+// touch the server-side lock every 3s so external clients get a 409 if they
+// try to PUT a draft. Lock TTL on the server is 10s.
+(function() {
+  let lastTouchTid = null;
+  let lastTouchAt = 0;
+  document.addEventListener('input', (e) => {
+    const ta = e.target.closest && e.target.closest('.reply-textarea');
+    if (!ta) return;
+    const form = ta.closest('.reply-form');
+    const tid = Number(form?.getAttribute('data-thread-id'));
+    if (!Number.isFinite(tid)) return;
+    const now = Date.now();
+    if (tid === lastTouchTid && (now - lastTouchAt) < 3000) return;
+    lastTouchTid = tid;
+    lastTouchAt = now;
+    fetch('/api/v1/threads/' + tid + '/lock', { method: 'POST' }).catch(() => {});
+  });
+})();
+
 async function resolveThread(threadId) {
   try {
     const res = await fetch('/api/resolve', {
@@ -1750,6 +1854,15 @@ setInterval(updateSyncStatus, 30000);
 
 // --- Module-level state ---
 let _conn, _pr, _prId, _branch, _changedFiles, _cache, _isOffline, _canEdit = false;
+
+// Control API state (#42 Phase 1). All in-memory, ephemeral by design.
+const _focus = createFocusStore();
+const _drafts = createDraftStore({ onChange: () => _focus.bumpVersion() });
+const _locks = createLockStore({ ttlMs: 10_000 });
+const _inflight = createInflightStore();
+// Session token authorises external (non-browser-same-origin) mutations.
+// Generated fresh per process and printed to stdout at startup.
+const _sessionToken = crypto.randomBytes(24).toString("base64url");
 
 // --- Express server ---
 async function main() {
@@ -2045,6 +2158,10 @@ async function main() {
   });
 
   app.post("/api/reply", async (req, res) => {
+    const tid = Number(req.body.threadId);
+    if (Number.isFinite(tid) && !_inflight.acquire(tid)) {
+      return res.status(409).json({ error: "another reply is already in flight for this thread" });
+    }
     const action = addPending(_prId, { type: 'reply', threadId: req.body.threadId, content: req.body.content });
     if (!_isOffline && _conn) {
       try {
@@ -2054,11 +2171,14 @@ async function main() {
         const idx = pending.findIndex(p => p.id === action.id);
         if (idx >= 0) pending[idx].synced = true;
         savePending(_prId, pending);
+        if (Number.isFinite(tid)) { _drafts.delete(tid); _inflight.release(tid); }
         res.json({ ok: true, synced: true });
       } catch {
+        if (Number.isFinite(tid)) _inflight.release(tid);
         res.json({ ok: true, synced: false, queued: true });
       }
     } else {
+      if (Number.isFinite(tid)) { _drafts.delete(tid); _inflight.release(tid); }
       res.json({ ok: true, synced: false, queued: true });
     }
   });
@@ -2179,10 +2299,191 @@ async function main() {
     res.json({ count: unsynced.length, isOffline: _isOffline });
   });
 
+  // ----- Control API (#42 Phase 1) ---------------------------------------
+  // External clients (LLM tools, scripts, IDE extensions) must:
+  //   1) send an `X-Tippani-Client: <name>` header on every /api/v1/* call
+  //      (acts as a CORS-style guard — browsers can't set this cross-origin
+  //      without preflight, so a same-origin Origin/Referer is the only way
+  //      to omit it), AND
+  //   2) for mutations, send `Authorization: Bearer <session-token>` where
+  //      the token was printed to stdout at startup.
+  // The browser uses same-origin and doesn't need the token.
+  const PORT_LOCAL_PREFIXES = [
+    `http://localhost:${PORT}`,
+    `http://127.0.0.1:${PORT}`,
+  ];
+  function isSameOrigin(req) {
+    const origin = req.headers.origin || req.headers.referer || "";
+    return PORT_LOCAL_PREFIXES.some((p) => origin.startsWith(p));
+  }
+  function requireExternalAuth(opts = { mutation: false }) {
+    return (req, res, next) => {
+      const sameOrigin = isSameOrigin(req);
+      if (!sameOrigin) {
+        if (!req.headers["x-tippani-client"]) {
+          return res.status(403).json({ error: "missing X-Tippani-Client header" });
+        }
+      }
+      if (opts.mutation && !sameOrigin) {
+        const auth = req.headers.authorization || "";
+        const m = auth.match(/^Bearer\s+(.+)$/);
+        if (!m || m[1] !== _sessionToken) {
+          return res.status(401).json({ error: "invalid or missing session token" });
+        }
+      }
+      next();
+    };
+  }
+
+  function summarizeThread(t) {
+    return {
+      id: t.id,
+      status: t.status,
+      resolved: t.status === 2 || t.status === 4,
+      file: t.threadContext?.filePath || null,
+      line: t.threadContext?.rightFileStart?.line || null,
+      count: (t.comments || []).length,
+      lastUpdated: t.lastUpdatedDate || null,
+      hasDraft: !!_drafts.get(t.id),
+    };
+  }
+  function fullThread(t) {
+    return {
+      ...summarizeThread(t),
+      comments: (t.comments || []).map((c) => ({
+        id: c.id,
+        author: c.author?.displayName || null,
+        publishedDate: c.publishedDate || null,
+        content: c.content || "",
+      })),
+      draft: _drafts.get(t.id),
+    };
+  }
+  function findThread(id) {
+    const tid = Number(id);
+    if (!Number.isFinite(tid)) return null;
+    return (_cache?.threads || []).find((t) => t.id === tid) || null;
+  }
+
+  // GET /api/v1/threads — list all threads (summary).
+  app.get("/api/v1/threads", requireExternalAuth(), (_req, res) => {
+    const all = (_cache?.threads || []).filter((t) => t.comments?.length > 0);
+    res.json({
+      threads: all.map(summarizeThread),
+      focus: _focus.get(),
+    });
+  });
+
+  // GET /api/v1/threads/:id — full thread + draft.
+  app.get("/api/v1/threads/:id", requireExternalAuth(), (req, res) => {
+    const t = findThread(req.params.id);
+    if (!t) return res.status(404).json({ error: "thread not found" });
+    res.json(fullThread(t));
+  });
+
+  // PUT /api/v1/threads/:id/draft — stage a reply draft.
+  // 409 if the user is currently typing in that thread's textarea.
+  app.put("/api/v1/threads/:id/draft", requireExternalAuth({ mutation: true }), (req, res) => {
+    const t = findThread(req.params.id);
+    if (!t) return res.status(404).json({ error: "thread not found" });
+    if (_locks.isLocked(t.id)) {
+      return res.status(409).json({
+        error: "user is editing this thread",
+        retryAfterMs: 10_000,
+      });
+    }
+    const { content, source } = req.body || {};
+    if (typeof content !== "string") {
+      return res.status(400).json({ error: "content (string) required" });
+    }
+    const d = _drafts.put(t.id, content, { source: source || "external" });
+    res.json({ ok: true, threadId: t.id, draft: d, version: _focus.get().version });
+  });
+
+  // DELETE /api/v1/threads/:id/draft — clear staged draft.
+  app.delete("/api/v1/threads/:id/draft", requireExternalAuth({ mutation: true }), (req, res) => {
+    const t = findThread(req.params.id);
+    if (!t) return res.status(404).json({ error: "thread not found" });
+    const had = _drafts.delete(t.id);
+    res.json({ ok: true, removed: had, version: _focus.get().version });
+  });
+
+  // POST /api/v1/threads/:id/lock — sliding-window "user is typing" lock.
+  // Called by the browser on every keystroke in a reply textarea.
+  app.post("/api/v1/threads/:id/lock", requireExternalAuth({ mutation: true }), (req, res) => {
+    const t = findThread(req.params.id);
+    if (!t) return res.status(404).json({ error: "thread not found" });
+    const exp = _locks.touch(t.id);
+    res.json({ ok: true, threadId: t.id, expiresAt: exp });
+  });
+
+  // POST /api/v1/commands/focus — RPC: scroll browser to thread.
+  app.post("/api/v1/commands/focus", requireExternalAuth({ mutation: true }), (req, res) => {
+    const { threadId } = req.body || {};
+    if (threadId !== null && !Number.isFinite(Number(threadId))) {
+      return res.status(400).json({ error: "threadId (number|null) required" });
+    }
+    if (threadId !== null) {
+      const t = findThread(threadId);
+      if (!t) return res.status(404).json({ error: "thread not found" });
+    }
+    const next = _focus.set(threadId);
+    res.json({ ok: true, focus: next });
+  });
+
+  // GET /api/v1/specs/:fileIndex — structured JSON for the spec.
+  // Returns raw markdown + a flat heading list. (Section bodies are derivable
+  // from the markdown + line ranges, which is enough for Phase 1 LLM context.)
+  app.get("/api/v1/specs/:fileIndex", requireExternalAuth(), async (req, res) => {
+    const idx = parseInt(req.params.fileIndex);
+    if (!Number.isFinite(idx) || idx < 0 || idx >= _changedFiles.length) {
+      return res.status(404).json({ error: "file index out of range" });
+    }
+    const file = _changedFiles[idx];
+    let markdown = "";
+    try {
+      if (_cache?.fileContents?.[file.path]) {
+        markdown = _cache.fileContents[file.path];
+      } else if (!_isOffline && _conn) {
+        markdown = await getFileContent(_conn, file.path, _branch);
+        _cache.fileContents = _cache.fileContents || {};
+        _cache.fileContents[file.path] = markdown;
+      }
+    } catch (e) {
+      return res.status(502).json({ error: "failed to read file: " + (e?.message || e) });
+    }
+    const sections = [];
+    const lines = markdown.split("\n");
+    for (let i = 0; i < lines.length; i++) {
+      const m = lines[i].match(/^(#{1,6})\s+(.+?)\s*#*\s*$/);
+      if (m) sections.push({ level: m[1].length, text: m[2], line: i + 1 });
+    }
+    res.json({
+      fileIndex: idx,
+      path: file.path,
+      changeType: file.changeType || null,
+      markdown,
+      sections,
+    });
+  });
+
+  // GET /api/v1/state — single endpoint the browser polls every ~1.5s to
+  // pick up external focus changes and externally-staged drafts.
+  app.get("/api/v1/state", requireExternalAuth(), (_req, res) => {
+    const f = _focus.get();
+    res.json({
+      focusedThreadId: f.focusedThreadId,
+      version: f.version,
+      drafts: _drafts.list(),
+    });
+  });
+
   const server = app.listen(PORT, "127.0.0.1", () => {
     const base = `http://localhost:${PORT}`;
     const url = openIndex !== null ? `${base}/file/${openIndex}` : base;
-    console.log(`\n  Tippani running at ${base}\n`);
+    console.log(`\n  Tippani running at ${base}`);
+    console.log(`  Control API token: ${_sessionToken}`);
+    console.log(`  External clients: set Authorization: Bearer <token> and X-Tippani-Client: <name>\n`);
     open(url);
   });
   server.on("error", (err) => {
