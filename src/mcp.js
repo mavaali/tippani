@@ -22,11 +22,21 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { buildTools, createHttpClient } from "./mcp-tools.js";
 import { createPortalSession } from "./portal-launcher.js";
 import { inspectAdoToken, tokenRejectionMessage } from "./ado-token-check.js";
+import { cliFallbackEnabled, acquireAdoTokenFromCli } from "./ado-token-cli.js";
 
 // Give MCP "Test connection" real meaning: validate the bound account's ADO
 // token before serving. If it isn't an Azure DevOps git/REST token (wrong
 // account bound, e.g. GitHub), exit so Test fails with a clear reason instead
 // of a false success.
+//
+// When no token was injected, mint one from the user's already-signed-in CLI
+// first (Git Credential Manager, then Azure CLI). This is on by default and lets
+// a standalone VS Code user run Tippani without a host injecting a token; disable
+// it with TIPPANI_ADO_TOKEN_CLI_FALLBACK=0 in the MCP server's env.
+if (!process.env.TIPPANI_ADO_TOKEN && cliFallbackEnabled()) {
+  const cliToken = await acquireAdoTokenFromCli({ audience: process.env.TIPPANI_ADO_AUDIENCE });
+  if (cliToken) process.env.TIPPANI_ADO_TOKEN = cliToken;
+}
 const adoCheck = inspectAdoToken(process.env.TIPPANI_ADO_TOKEN, process.env.TIPPANI_ADO_AUDIENCE);
 if (!adoCheck.ok) {
   console.error(tokenRejectionMessage(adoCheck));
