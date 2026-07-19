@@ -122,6 +122,42 @@ async function main() {
     check("local-branches flags exactly one current branch",
       lb.json?.ok === true && lb.json.branches.filter((b) => b.current).length === 1 && typeof lb.json.current === "string",
       JSON.stringify({ current: lb.json?.current }));
+
+    // ---- Branches tab wires remote cards to the in-app /branch page ----
+    check("remote branch cards open the in-app /branch page",
+      /\/branch\?project=/.test(disc.html));
+    check("no 'Open in Azure DevOps' link anywhere on the discovery page",
+      !/Open in Azure DevOps/.test(disc.html));
+
+    // ---- GET /branch : the branch file-list review page ----
+    const FAKE_REPO = "00000000-0000-0000-0000-000000000000";
+    const bp = await getPage(`/branch?repo=${FAKE_REPO}&repoName=specs-repo&project=SmokeProject&ref=dev/kay/x`);
+    check("/branch renders (200)", bp.status === 200, `status=${bp.status}`);
+    const bpDoc = new JSDOM(bp.html).window.document;
+    check("/branch has a back-to-Branches link", !!bpDoc.querySelector(".ro-back") && /Branches/.test(bpDoc.querySelector(".ro-back")?.textContent || ""));
+    check("/branch shows the repo \u00b7 branch title", /specs-repo/.test(bp.html) && /dev\/kay\/x/.test(bp.html));
+    check("/branch degrades gracefully offline (empty/error state, no crash)", !!bpDoc.querySelector(".bp-wrap") && !!bpDoc.querySelector(".bp-empty"));
+    check("/branch has no 'Open in Azure DevOps' link", !/Open in Azure DevOps/.test(bp.html));
+
+    // Guard: the branch page's inline README-toggle script must PARSE (same
+    // template-literal backslash hazard as the Branches tab script).
+    const bpScripts = [...bp.html.matchAll(/<script>([\s\S]*?)<\/script>/g)].map((m) => m[1]);
+    const bpScript = bpScripts.find((s) => s.includes("bpShowReadme"));
+    let bpErr = null;
+    try { new Function(bpScript || ""); } catch (e) { bpErr = String(e); }
+    check("/branch README-toggle script parses", !!bpScript && bpErr === null, bpErr);
+    check("/branch README toggle persists under tippani.brShowReadme", /tippani\.brShowReadme/.test(bp.html));
+    check("/branch applies the dark theme (prefers-color-scheme script)", /prefers-color-scheme: dark/.test(bp.html) && /document\.documentElement\.dataset\.theme/.test(bp.html));
+    check("/branch hides files via [hidden] (not overridden by display:block)", /\.bp-file\[hidden\]\s*\{\s*display:\s*none/.test(bp.html));
+
+    // Missing ref -> redirected back to the Branches tab (not a crash).
+    const bpNoRef = await getPage(`/branch?repo=${FAKE_REPO}&repoName=specs-repo`);
+    check("/branch with no ref redirects to the Branches tab",
+      bpNoRef.status === 200 && /data-pane="branches"/.test(bpNoRef.html), `status=${bpNoRef.status}`);
+    // A repo name (local-origin mapping) is accepted, not just a GUID; offline it
+    // still renders the branch page shell gracefully.
+    const bpByName = await getPage("/branch?project=SmokeProject&repoName=some-repo&ref=dev/x");
+    check("/branch accepts a repo name (local-origin mapping)", bpByName.status === 200 && /bp-wrap/.test(bpByName.html), `status=${bpByName.status}`);
   } catch (e) {
     fail++; failures.push("UNEXPECTED THROW: " + (e?.message || e));
     console.error("UNEXPECTED THROW:", e?.stack || e);
