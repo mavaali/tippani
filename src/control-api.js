@@ -32,6 +32,9 @@ export function registerControlApi(app, deps) {
     searchWorkItems,    // async ({project, wiql}) => {workItems, ...} (optional) — Discovery WIQL search
     searchSpecs,        // async ({project, query}) => {specs, ...} (optional) — Discovery spec full-text search
     getFileCommits,     // async ({files, top}) => {files:[{repo,path,branch,commits}]} (optional) — bulk commit info
+    listMyBranches,     // async ({project}) => {branches, ...} (optional) — Discovery Branches tab
+    openLocalRepo,      // async ({path}) => {ok, path, branch} (optional) — Discovery local-repo tile
+    listLocalBranches,  // async ({path}) => {ok, path, branches} (optional) — Discovery Branches tab (Local)
   } = deps;
 
   const ALLOWED_ORIGINS = new Set([
@@ -422,6 +425,42 @@ export function registerControlApi(app, deps) {
     try {
       const { files, top } = req.body || {};
       res.json(await getFileCommits({ files, top }));
+    } catch (e) {
+      res.status(502).json({ error: String(e?.message || e) });
+    }
+  });
+
+  // Discovery Branches tab: POST { project } -> the signed-in user's branches
+  // across that project's repos. same-origin (browser) or bearer (MCP).
+  app.post("/api/v1/branches", requireAuth({ mutation: true }), async (req, res) => {
+    if (typeof listMyBranches !== "function") return res.status(501).json({ error: "branch listing not wired" });
+    try {
+      const { project } = req.body || {};
+      res.json(await listMyBranches({ project }));
+    } catch (e) {
+      res.status(502).json({ error: String(e?.message || e) });
+    }
+  });
+
+  // Discovery local-repo tile: POST { path } -> validate a local clone and
+  // report its current branch. same-origin (browser) or bearer (MCP).
+  app.post("/api/v1/local-repo", requireAuth({ mutation: true }), async (req, res) => {
+    if (typeof openLocalRepo !== "function") return res.status(501).json({ error: "local repo not wired" });
+    try {
+      const { path: repoPath } = req.body || {};
+      res.json(await openLocalRepo({ path: repoPath }));
+    } catch (e) {
+      res.status(502).json({ error: String(e?.message || e) });
+    }
+  });
+
+  // Discovery Branches tab (Local mode): POST { path } -> the local clone's
+  // branches (loose + packed refs), current flagged. same-origin or bearer.
+  app.post("/api/v1/local-branches", requireAuth({ mutation: true }), async (req, res) => {
+    if (typeof listLocalBranches !== "function") return res.status(501).json({ error: "local branches not wired" });
+    try {
+      const { path: repoPath } = req.body || {};
+      res.json(await listLocalBranches({ path: repoPath }));
     } catch (e) {
       res.status(502).json({ error: String(e?.message || e) });
     }

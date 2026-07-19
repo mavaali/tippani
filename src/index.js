@@ -46,6 +46,8 @@ import {
 import { resolveImagePath, imageContentType, isLfsPointer, secureImageHeaders, isValidRepoId } from "./image-src.js";
 import { cssVariables, changeTypeBadge, escHtml, stripMarkdown } from "./html-util.js";
 import { getSpecContentAt, getSpecBlobAt, buildSpecWebUrl, getLastCommitAuthor } from "./ado-read.js";
+import { branchesForRepo, sortBranches } from "./branch-list.js";
+import { validateLocalRepo, resolveGitDir, parseGitHead, parsePackedRefs, mergeLocalBranches } from "./local-repo.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -1314,6 +1316,14 @@ table.wi-results { width: 100%; table-layout: fixed; border-collapse: collapse; 
 .wi-title, .wi-asg { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .wi-id { font-weight: 700; color: var(--cp-accent); white-space: nowrap; }
 .wi-open { color: var(--cp-accent); text-decoration: none; font-weight: 700; }
+.br-modes { display: inline-flex; gap: 2px; margin-bottom: 16px; border: 1px solid var(--cp-border); border-radius: 8px; padding: 2px; }
+.br-mode-btn { font-family: inherit; font-size: 13px; font-weight: 600; padding: 6px 18px; border: none; background: none; color: var(--cp-text-muted); border-radius: 6px; cursor: pointer; }
+.br-mode-btn.active { background: var(--cp-accent); color: var(--cp-accent-fg); }
+.br-local-input { flex: 1; font-family: inherit; font-size: 13px; padding: 8px 2px; border: none; border-radius: 0; background: transparent; color: var(--cp-text); outline: none; cursor: default; }
+.br-ws-field { flex: 1; display: flex; align-items: center; border-bottom: 1px solid var(--cp-border); background: var(--cp-bg); }
+.br-ws-clear { flex: 0 0 auto; border: none; background: none; color: var(--cp-text-muted); font-size: 16px; line-height: 1; cursor: pointer; padding: 0 6px; }
+.br-ws-clear:hover { color: var(--cp-text); }
+.br-current { font-size: 10px; font-weight: 700; padding: 1px 8px; border-radius: 99px; background: var(--cp-accent-soft); color: var(--cp-accent); text-transform: uppercase; letter-spacing: 0.3px; margin-left: 8px; }
 .sp-searchrow { display: flex; gap: 10px; margin-bottom: 8px; }
 .sp-query { flex: 1; font-family: inherit; font-size: 13px; padding: 8px 12px; border: 1px solid var(--cp-border); border-radius: 8px; background: var(--cp-surface); color: var(--cp-text); }
 .sp-layout { display: flex; gap: 20px; align-items: flex-start; }
@@ -1680,11 +1690,125 @@ table.wi-results { width: 100%; table-layout: fixed; border-collapse: collapse; 
       updateFacets(); // initial: README/index exclusion + cross-filter
     } catch (e) { status.textContent = 'Search failed: ' + e.message; }
   }
+  var brMode = 'remote';
+  function renderBranchCards(items, kind) {
+    var out = document.getElementById('brResults');
+    if (!items.length) { out.innerHTML = '<div class="empty">No branches found.</div>'; return; }
+    var h = '<div class="pr-list">';
+    items.forEach(function (b) {
+      if (kind === 'remote') {
+        var top = '<div class="pr-top"><span class="pr-id">' + esc(b.repo) + '</span></div>';
+        if (b.url) h += '<a class="pr-card" href="' + esc(b.url) + '" target="_blank" rel="noopener">' + top + '<div class="pr-title">' + esc(b.name) + '</div></a>';
+        else h += '<div class="pr-card">' + top + '<div class="pr-title">' + esc(b.name) + '</div></div>';
+      } else {
+        var badge = b.current ? '<span class="br-current">current</span>' : '';
+        h += '<div class="pr-card"><div class="pr-title">' + esc(b.name) + badge + '</div></div>';
+      }
+    });
+    h += '</div>';
+    out.innerHTML = h;
+  }
+  async function runBranches() {
+    var project = document.getElementById('brProject').value;
+    var status = document.getElementById('brStatus');
+    status.textContent = 'Loading\u2026'; document.getElementById('brResults').innerHTML = '';
+    try {
+      var r = await fetch('/api/v1/branches', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ project: project }) });
+      var d = await r.json();
+      if (d.error) { status.textContent = d.error; return; }
+      var items = d.branches || [];
+      status.textContent = items.length + ' branch' + (items.length === 1 ? '' : 'es');
+      renderBranchCards(items, 'remote');
+      saveBranchCache('remote');
+    } catch (e) { status.textContent = 'Failed: ' + e.message; }
+  }
+  var brLocalHandle = null;
+  // Per-mode result cache so switching Remote/Local restores the last view
+  // instead of refetching (Refresh forces a reload).
+  var brCache = { remote: null, local: null };
+  function saveBranchCache(mode) {
+    brCache[mode] = { results: document.getElementById('brResults').innerHTML, status: document.getElementById('brStatus').textContent };
+  }
+  function restoreBranchCache(mode) {
+    var c = brCache[mode]; if (!c) return false;
+    document.getElementById('brResults').innerHTML = c.results;
+    document.getElementById('brStatus').textContent = c.status;
+    return true;
+  }
+  function clientParseGitHead(s) { s = String(s || '').trim(); var p = 'ref: refs/heads/'; return s.indexOf(p) === 0 ? s.slice(p.length).trim() : null; }
+  function clientParsePackedRefs(s) { var out = [], LF = String.fromCharCode(10), CR = String.fromCharCode(13), tag = ' refs/heads/'; String(s || '').split(LF).forEach(function (line) { var l = line.split(CR).join('').trim(); if (!l || l[0] === '#' || l[0] === '^') return; var i = l.indexOf(tag); if (i >= 0) out.push(l.slice(i + tag.length).trim()); }); return out; }
+  function clientMergeBranches(loose, packed, head) { var set = {}; loose.concat(packed).forEach(function (n) { set[n] = 1; }); return Object.keys(set).sort(function (a, b) { return a.toLowerCase().localeCompare(b.toLowerCase()); }).map(function (n) { return { name: n, current: n === head }; }); }
+  async function walkRefs(handle, prefix, out) {
+    for await (var entry of handle.values()) {
+      var name = prefix ? prefix + '/' + entry.name : entry.name;
+      if (entry.kind === 'directory') await walkRefs(entry, name, out); else out.push(name);
+    }
+  }
+  // Read a picked workspace's branches straight from its .git via the File System
+  // Access API \u2014 no server path needed (browsers never expose the absolute path).
+  async function readLocalBranchesFromHandle(dir) {
+    var status = document.getElementById('brStatus');
+    status.textContent = 'Reading\u2026'; document.getElementById('brResults').innerHTML = '';
+    try {
+      var git;
+      try { git = await dir.getDirectoryHandle('.git'); }
+      catch (e) { status.textContent = 'Not a git workspace (no .git folder).'; return; }
+      var head = '';
+      try { head = await (await (await git.getFileHandle('HEAD')).getFile()).text(); } catch (e) { }
+      var current = clientParseGitHead(head);
+      var loose = [];
+      try { var heads = await (await git.getDirectoryHandle('refs')).getDirectoryHandle('heads'); await walkRefs(heads, '', loose); } catch (e) { }
+      var packed = [];
+      try { packed = clientParsePackedRefs(await (await (await git.getFileHandle('packed-refs')).getFile()).text()); } catch (e) { }
+      var branches = clientMergeBranches(loose, packed, current);
+      status.textContent = branches.length + ' branch' + (branches.length === 1 ? '' : 'es');
+      renderBranchCards(branches, 'local');
+      saveBranchCache('local');
+    } catch (e) { status.textContent = 'Failed: ' + e.message; }
+  }
+  function setLocalNote(picked) {
+    var n = document.getElementById('brLocalNote');
+    if (n) n.innerHTML = picked ? 'Every branch in the workspace is listed; the checked-out one is marked <b>current</b>.' : 'Pick a local workspace to list its branches.';
+  }
+  function updateBranchesActions() {
+    var show = (brMode === 'remote') || (brMode === 'local' && !!brLocalHandle);
+    var a = document.getElementById('brActions'); if (a) a.style.display = show ? '' : 'none';
+  }
+  function clearWorkspace() {
+    brLocalHandle = null;
+    brCache.local = null;
+    document.getElementById('brLocalPath').value = '';
+    var c = document.getElementById('brLocalClear'); if (c) c.hidden = true;
+    document.getElementById('brResults').innerHTML = '';
+    document.getElementById('brStatus').textContent = '';
+    setLocalNote(false);
+    updateBranchesActions();
+  }
+  async function pickWorkspace() {
+    var status = document.getElementById('brStatus');
+    if (!window.showDirectoryPicker) { status.textContent = 'This browser has no folder picker.'; return; }
+    var dir;
+    try { dir = await window.showDirectoryPicker(); } catch (e) { return; } // cancelled
+    brLocalHandle = dir;
+    document.getElementById('brLocalPath').value = dir.name;
+    var c = document.getElementById('brLocalClear'); if (c) c.hidden = false;
+    setLocalNote(true);
+    updateBranchesActions();
+    await readLocalBranchesFromHandle(dir);
+  }
+  async function runLocalBranches() {
+    // Local mode is Browse-only: branches are read client-side from the picked
+    // workspace's File System Access handle (the browser never exposes the path).
+    if (brLocalHandle) { return readLocalBranchesFromHandle(brLocalHandle); }
+    document.getElementById('brStatus').textContent = 'Click Browse to select a workspace folder.';
+    document.getElementById('brResults').innerHTML = '';
+  }
+  function runActiveBranches() { if (brMode === 'local') runLocalBranches(); else runBranches(); }
   window.addEventListener('DOMContentLoaded', function () {
     document.querySelectorAll('.tab').forEach(function (t) { t.addEventListener('click', function () { activateTab(t.dataset.tab); }); });
     var params = new URLSearchParams(location.search);
     var t = params.get('tab');
-    activateTab(t === 'workitems' || t === 'specs' ? t : 'queue');
+    activateTab(t === 'workitems' || t === 'specs' || t === 'branches' ? t : 'queue');
     // Review queue slicers (client-side faceted filter, same engine as Specs).
     mountFacets(
       document.querySelector('.pane[data-pane="queue"] .pr-list'),
@@ -1715,6 +1839,33 @@ table.wi-results { width: 100%; table-layout: fixed; border-collapse: collapse; 
       if (savedSpProj) { for (var spk = 0; spk < spProjSel.options.length; spk++) { if (spProjSel.options[spk].value === savedSpProj) { spProjSel.selectedIndex = spk; break; } } }
       spProjSel.addEventListener('change', function () { try { localStorage.setItem('tippani.spProject', spProjSel.value); } catch (e) { } });
     }
+    // Branches tab: Remote/Local toggle + per-mode source; list on load/change.
+    var brProjSel = document.getElementById('brProject');
+    if (brProjSel) {
+      var savedBrProj = null; try { savedBrProj = localStorage.getItem('tippani.brProject'); } catch (e) { }
+      if (savedBrProj) { for (var brk = 0; brk < brProjSel.options.length; brk++) { if (brProjSel.options[brk].value === savedBrProj) { brProjSel.selectedIndex = brk; break; } } }
+      brProjSel.addEventListener('change', function () { try { localStorage.setItem('tippani.brProject', brProjSel.value); } catch (e) { } if (brMode === 'remote') runBranches(); });
+    }
+    document.querySelectorAll('.br-mode-btn').forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        brMode = btn.dataset.mode;
+        document.querySelectorAll('.br-mode-btn').forEach(function (b) { b.classList.toggle('active', b === btn); });
+        document.querySelectorAll('.br-source').forEach(function (s) { s.hidden = (s.dataset.source !== brMode); });
+        try { localStorage.setItem('tippani.brMode', brMode); } catch (e) { }
+        if (brMode === 'local') setLocalNote(!!brLocalHandle);
+        updateBranchesActions();
+        // Restore the last view for this mode; only fetch if never loaded.
+        if (!restoreBranchCache(brMode)) runActiveBranches();
+      });
+    });
+    var brRefresh = document.getElementById('brRefreshBtn'); if (brRefresh) brRefresh.addEventListener('click', runActiveBranches);
+    var brBrowse = document.getElementById('brBrowseBtn'); if (brBrowse) brBrowse.addEventListener('click', pickWorkspace);
+    var brClear = document.getElementById('brLocalClear'); if (brClear) brClear.addEventListener('click', clearWorkspace);
+    // Restore last mode; default remote. Remote lists on load.
+    var savedMode = null; try { savedMode = localStorage.getItem('tippani.brMode'); } catch (e) { }
+    if (savedMode === 'local') { var lb = document.querySelector('.br-mode-btn[data-mode="local"]'); if (lb) lb.click(); }
+    else { runBranches(); }
+    updateBranchesActions();
     // Deep-link a query (e.g. from the search_work_items tool): prefill + run.
     var qWiql = params.get('wiql');
     if (qWiql) {
@@ -1747,6 +1898,7 @@ table.wi-results { width: 100%; table-layout: fixed; border-collapse: collapse; 
       <button class="tab" data-tab="specs" type="button">Specs</button>
       <button class="tab" data-tab="queue" type="button">Review queue</button>
       <button class="tab" data-tab="workitems" type="button">Work items</button>
+      <button class="tab" data-tab="branches" type="button">Branches</button>
     </div>
 
     <div class="pane" data-pane="queue">
@@ -1779,6 +1931,33 @@ table.wi-results { width: 100%; table-layout: fixed; border-collapse: collapse; 
       <div class="wi-actions"><span id="spStatus" class="wi-status"></span><button id="spSearchBtn" class="wi-search" type="button">Search</button></div>
       <div id="spResults"></div>
       <div class="wi-note" style="margin-top:12px">Results are <code>.md</code> specs from Azure DevOps Code Search. Opening a result shows it read-only at <code>main</code> (\u2197 opens it read-only in Tippani).</div>
+    </div>
+
+    <div class="pane" data-pane="branches">
+      <div class="br-modes">
+        <button class="br-mode-btn active" data-mode="remote" type="button">Remote</button>
+        <button class="br-mode-btn" data-mode="local" type="button">Local</button>
+      </div>
+      <div class="br-source" data-source="remote">
+        <div class="wi-row">
+          <span class="wi-label">Project</span>
+          <select id="brProject" class="wi-project">${projectOptions || `<option value="${escHtml(project || "")}">${escHtml(project || "(configured project)")}</option>`}</select>
+          <span class="wi-note">Your branches across the repos in the selected project.</span>
+        </div>
+      </div>
+      <div class="br-source" data-source="local" hidden>
+        <div class="wi-row">
+          <span class="wi-label">Workspace</span>
+          <div class="br-ws-field">
+            <input id="brLocalPath" class="br-local-input" type="text" readonly tabindex="-1" placeholder="Click Browse to select a workspace">
+            <button id="brLocalClear" class="br-ws-clear" type="button" title="Clear workspace" hidden>×</button>
+          </div>
+          <button id="brBrowseBtn" class="wi-search" type="button">Browse…</button>
+        </div>
+        <div id="brLocalNote" class="wi-note">Pick a local workspace to list its branches.</div>
+      </div>
+      <div class="wi-actions" id="brActions"><span id="brStatus" class="wi-status"></span><button id="brRefreshBtn" class="wi-search" type="button">Refresh</button></div>
+      <div id="brResults"></div>
     </div>
   </div>
 ${NAV_WATCHER}
@@ -4975,6 +5154,81 @@ async function main() {
     return { files: out, count: out.length };
   }
 
+  // Discovery Branches tab: list the signed-in user's branches across the repos
+  // in a project. ADO's getRefs(includeMyBranches=true) returns the caller's
+  // own/favorited branches (+ default) per repo; branchesForRepo drops the
+  // default and shapes rows. Repos are queried with bounded concurrency.
+  async function listMyBranches({ project } = {}) {
+    if (_isOffline || !_conn) return { branches: [], error: "offline" };
+    const proj = (project && String(project).trim()) || ADO_PROJECT;
+    const gitApi = await _conn.getGitApi();
+    let repos;
+    try {
+      repos = await gitApi.getRepositories(proj);
+    } catch (e) {
+      console.error("List repositories failed:", friendlyAdoError(e, "List repositories"));
+      return { branches: [], project: proj, error: "Could not list repositories. Check the server console." };
+    }
+    const list = (repos || []).filter((r) => r && r.id);
+    const all = [];
+    let cursor = 0;
+    const worker = async () => {
+      for (;;) {
+        const i = cursor++;
+        if (i >= list.length) break;
+        const repo = list[i];
+        try {
+          // getRefs(repoId, project, filter, includeLinks, includeStatuses, includeMyBranches)
+          const refs = await gitApi.getRefs(repo.id, proj, undefined, false, false, true);
+          for (const row of branchesForRepo(refs, repo, ADO_ORG)) all.push(row);
+        } catch (e) {
+          console.error(`getRefs failed for ${repo.name}:`, friendlyAdoError(e, "List branches"));
+        }
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(8, list.length) }, worker));
+    const branches = sortBranches(all);
+    return { branches, project: proj, count: branches.length };
+  }
+
+  // Discovery "local repo" tile: validate a local clone path and report its
+  // current branch (the local-mode entry point; reading the working tree itself
+  // is a later step). Pure validation lives in local-repo.js.
+  async function openLocalRepo({ path: repoPath } = {}) {
+    return validateLocalRepo(repoPath);
+  }
+
+  // Discovery Branches tab (Local mode): list the branches of a local clone by
+  // reading its refs from disk — loose refs under .git/refs/heads plus
+  // .git/packed-refs — and flagging the checked-out branch. No `git` shell-out;
+  // pure parsing lives in local-repo.js.
+  async function listLocalBranches({ path: repoPath } = {}) {
+    const resolved = resolveGitDir(repoPath);
+    if (!resolved.ok) return { ok: false, error: resolved.error };
+    const gitDir = resolved.gitDir;
+    let headBranch = null;
+    try { headBranch = parseGitHead(fs.readFileSync(path.join(gitDir, "HEAD"), "utf8")); } catch { /* detached / unreadable */ }
+    // Loose refs: every file under refs/heads is a branch; its path (with '/')
+    // is the branch name.
+    const loose = [];
+    const walk = (dir, prefix) => {
+      let entries;
+      try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
+      for (const e of entries) {
+        const full = path.join(dir, e.name);
+        const name = prefix ? `${prefix}/${e.name}` : e.name;
+        if (e.isDirectory()) walk(full, name);
+        else loose.push(name);
+      }
+    };
+    walk(path.join(gitDir, "refs", "heads"), "");
+    // Packed refs (branches git has packed away).
+    let packed = [];
+    try { packed = parsePackedRefs(fs.readFileSync(path.join(gitDir, "packed-refs"), "utf8")); } catch { /* none */ }
+    const branches = mergeLocalBranches(loose, packed, headBranch);
+    return { ok: true, path: String(repoPath || "").trim(), branches, count: branches.length, current: headBranch };
+  }
+
   app.post("/api/comment", async (req, res) => {
     const action = addPending(_prId, { type: 'comment', filePath: req.body.filePath, line: req.body.line, content: req.body.content });
     if (!_isOffline && _conn) {
@@ -5294,6 +5548,9 @@ async function main() {
     searchWorkItems,
     searchSpecs,
     getFileCommits,
+    listMyBranches,
+    openLocalRepo,
+    listLocalBranches,
   });
 
   const server = app.listen(PORT, "127.0.0.1", () => {
