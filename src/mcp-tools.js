@@ -69,6 +69,16 @@ export function buildTools(http, session) {
       try { await http.post("/api/v1/nav", { path }); } catch {}
     }
   }
+  // POST that first makes sure a browse portal is live, self-healing a dropped
+  // session. Used by the reviewing / personal-comment tools which operate on an
+  // already-open portal but — unlike open_branch* — have no natural launch step,
+  // so without this they hard-fail "No tippani session yet" once a portal is
+  // reaped. (Context-defaulting tools still need a file open to resolve which
+  // comment/file they target; this only guarantees the portal itself is up.)
+  async function ensuredPost(path, body) {
+    if (session && typeof session.ensureBrowsePortal === "function") await session.ensureBrowsePortal();
+    return http.post(path, body || {});
+  }
   return [
     {
       name: "open_pr",
@@ -513,7 +523,8 @@ export function buildTools(http, session) {
         branch: z.string().optional().describe("Branch (defaults to the open file)"),
         path: z.string().optional().describe("File path (defaults to the open file)"),
       },
-      handler: ({ repo, branch, path }) => {
+      handler: async ({ repo, branch, path }) => {
+        if (session && typeof session.ensureBrowsePortal === "function") await session.ensureBrowsePortal();
         const q = [["repo", repo], ["branch", branch], ["path", path]]
           .filter(([, v]) => v).map(([k, v]) => `${k}=${encodeURIComponent(v)}`).join("&");
         return http.get("/api/v1/personal-comments/all" + (q ? "?" + q : ""));
@@ -530,7 +541,7 @@ export function buildTools(http, session) {
         line: z.number().int().positive().optional().describe("1-based source line to anchor to"),
         repo: z.string().optional(), branch: z.string().optional(), path: z.string().optional(),
       },
-      handler: (args) => http.post("/api/v1/personal-comments/mcp/add", args),
+      handler: (args) => ensuredPost("/api/v1/personal-comments/mcp/add", args),
     },
     {
       name: "edit_personal_comment",
@@ -541,27 +552,52 @@ export function buildTools(http, session) {
       inputSchema: {
         content: z.string().describe("New comment text"),
         id: z.string().optional().describe("Comment id (defaults to the selected comment)"),
+        repo: z.string().optional(), branch: z.string().optional(), path: z.string().optional(),
       },
-      handler: (args) => http.post("/api/v1/personal-comments/mcp/edit", args),
+      handler: (args) => ensuredPost("/api/v1/personal-comments/mcp/edit", args),
     },
     {
       name: "delete_personal_comment",
       description:
         "Delete an personal comment. Defaults to the SELECTED comment; pass id to " +
         "target a specific one.",
-      inputSchema: { id: z.string().optional().describe("Comment id (defaults to the selected comment)") },
-      handler: (args) => http.post("/api/v1/personal-comments/mcp/delete", args),
+      inputSchema: { id: z.string().optional().describe("Comment id (defaults to the selected comment)"), repo: z.string().optional(), branch: z.string().optional(), path: z.string().optional() },
+      handler: (args) => ensuredPost("/api/v1/personal-comments/mcp/delete", args),
+    },
+    {
+      name: "reply_personal_comment",
+      description:
+        "Post a reply on a personal comment — a follow-up note recorded under the " +
+        "comment (e.g. how you addressed the feedback). Defaults to the SELECTED " +
+        "comment; pass id to target a specific one. Reflects live in the open page.",
+      inputSchema: {
+        content: z.string().describe("The reply text (Markdown), e.g. what you changed to address the comment"),
+        id: z.string().optional().describe("Comment id (defaults to the selected comment)"),
+        repo: z.string().optional(), branch: z.string().optional(), path: z.string().optional(),
+      },
+      handler: async (args) => {
+        if (session && typeof session.ensureBrowsePortal === "function") await session.ensureBrowsePortal();
+        return http.post("/api/v1/personal-comments/mcp/reply", args);
+      },
     },
     {
       name: "resolve_personal_comment",
       description:
-        "Mark an personal comment resolved (or reopen it with resolved=false). " +
-        "Defaults to the SELECTED comment; pass id to target a specific one.",
+        "Mark a personal comment resolved (or reopen it with resolved=false). " +
+        "Defaults to the SELECTED comment; pass id to target a specific one. When " +
+        "resolving after addressing feedback, pass `note` with a short summary of " +
+        "what you changed — it's posted as a reply on the comment BEFORE resolving, " +
+        "so the reviewer sees how it was handled (don't just silently resolve).",
       inputSchema: {
         id: z.string().optional().describe("Comment id (defaults to the selected comment)"),
         resolved: z.boolean().optional().describe("true = resolve (default), false = reopen"),
+        note: z.string().optional().describe("Short summary of how you addressed the comment; posted as a reply before resolving"),
+        repo: z.string().optional(), branch: z.string().optional(), path: z.string().optional(),
       },
-      handler: (args) => http.post("/api/v1/personal-comments/mcp/resolve", args),
+      handler: async (args) => {
+        if (session && typeof session.ensureBrowsePortal === "function") await session.ensureBrowsePortal();
+        return http.post("/api/v1/personal-comments/mcp/resolve", args);
+      },
     },
     {
       name: "delete_resolved_personal_comments",
@@ -569,7 +605,7 @@ export function buildTools(http, session) {
         "Delete ALL resolved personal comments on the open spec file. Returns how " +
         "many were removed. Reflects live in the open page.",
       inputSchema: {},
-      handler: (args) => http.post("/api/v1/personal-comments/mcp/delete-resolved", args || {}),
+      handler: (args) => ensuredPost("/api/v1/personal-comments/mcp/delete-resolved", args || {}),
     },
     {
       name: "delete_all_personal_comments",
@@ -577,7 +613,7 @@ export function buildTools(http, session) {
         "Delete EVERY personal comment on the open spec file (resolved or not). " +
         "Irreversible. Reflects live in the open page.",
       inputSchema: {},
-      handler: (args) => http.post("/api/v1/personal-comments/mcp/clear", args || {}),
+      handler: (args) => ensuredPost("/api/v1/personal-comments/mcp/clear", args || {}),
     },
     {
       name: "navigate_personal_comments",
@@ -587,7 +623,7 @@ export function buildTools(http, session) {
       inputSchema: {
         direction: z.enum(["next", "prev", "first", "last"]).describe("Which comment to select"),
       },
-      handler: ({ direction }) => http.post("/api/v1/personal-comments/mcp/nav", { direction }),
+      handler: ({ direction }) => ensuredPost("/api/v1/personal-comments/mcp/nav", { direction }),
     },
     {
       name: "jump_to_personal_comment",
@@ -598,7 +634,7 @@ export function buildTools(http, session) {
         id: z.string().optional().describe("Comment id"),
         line: z.number().int().positive().optional().describe("Anchor line to jump to"),
       },
-      handler: (args) => http.post("/api/v1/personal-comments/mcp/jump", args),
+      handler: (args) => ensuredPost("/api/v1/personal-comments/mcp/jump", args),
     },
     {
       name: "show_resolved_personal_comments",
@@ -606,7 +642,7 @@ export function buildTools(http, session) {
         "Hide or show resolved personal comments in the open reviewing page. " +
         "show=false hides resolved ones; show=true (default) shows them all.",
       inputSchema: { show: z.boolean().optional().describe("true = show resolved (default), false = hide") },
-      handler: ({ show }) => http.post("/api/v1/personal-comments/mcp/show-resolved", { show: show !== false }),
+      handler: ({ show }) => ensuredPost("/api/v1/personal-comments/mcp/show-resolved", { show: show !== false }),
     },
     {
       name: "open_branch",
@@ -658,7 +694,7 @@ export function buildTools(http, session) {
         "it from ADO so a push you made outside Tippani becomes visible. Use " +
         "after pushing a change the user asked for, to show them the result.",
       inputSchema: {},
-      handler: (args) => http.post("/api/v1/spec/refresh", args || {}),
+      handler: (args) => ensuredPost("/api/v1/spec/refresh", args || {}),
     },
   ];
 }

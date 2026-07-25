@@ -1,7 +1,8 @@
 // Pure helpers for the read-only spec page's "Personal Comments" — the file/branch
 // scoped notes a spec author leaves on their own draft (no PR). Disk I/O and the
 // on-disk key live in index.js; here we only shape the comment list so it stays
-// unit-tested. A comment: { id, line, author, content, createdAt, updatedAt }.
+// unit-tested. A comment: { id, line, author, content, resolved, createdAt,
+// updatedAt, replies }. A reply: { author, content, createdAt }.
 
 // Build a fresh comment record. `line` is the 1-based source line the anchored
 // block starts on (null for an unanchored note).
@@ -15,6 +16,7 @@ export function newComment({ id, line, author, content, now }) {
     resolved: false,
     createdAt: n,
     updatedAt: n,
+    replies: [],
   };
 }
 
@@ -35,6 +37,20 @@ export function setResolved(list, id, resolved, now) {
   const n = now || new Date().toISOString();
   return (list || []).map((c) =>
     c.id === id ? { ...c, resolved: !!resolved, updatedAt: n } : c
+  );
+}
+
+// Append a reply to a comment (and bump its updatedAt). A reply is a follow-up
+// note — e.g. the assistant recording how it addressed the feedback. Unknown id
+// or empty content -> unchanged.
+export function addReply(list, id, { author, content, now } = {}) {
+  const text = String(content == null ? "" : content).trim();
+  if (!text) return list || [];
+  const n = now || new Date().toISOString();
+  return (list || []).map((c) =>
+    c.id === id
+      ? { ...c, replies: [...(c.replies || []), { author: String(author || ""), content: text, createdAt: n }], updatedAt: n }
+      : c
   );
 }
 

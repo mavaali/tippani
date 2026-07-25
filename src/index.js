@@ -50,7 +50,7 @@ import { getSpecContentAt, getSpecBlobAt, buildSpecWebUrl, getLastCommitAuthor }
 import { branchesForRepo, sortBranches, shortBranchName } from "./branch-list.js";
 import { branchFileRows, visibleFileCount, mdPathsFromChanges, buildSpecHref } from "./branch-files.js";
 import { validateLocalRepo, resolveGitDir, parseGitHead, parsePackedRefs, mergeLocalBranches, parseOriginHeadDefault, userCreatedBranches } from "./local-repo.js";
-import { newComment as pcNew, addComment as pcAdd, updateComment as pcUpdate, removeComment as pcRemove, findComment as pcFind, sortComments as pcSort, setResolved as pcSetResolved, navTargetId as pcNavTarget } from "./personal-comments.js";
+import { newComment as pcNew, addComment as pcAdd, updateComment as pcUpdate, removeComment as pcRemove, findComment as pcFind, sortComments as pcSort, setResolved as pcSetResolved, addReply as pcAddReply, navTargetId as pcNavTarget } from "./personal-comments.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -2413,6 +2413,17 @@ body { font-family: "Segoe UI", Aptos, Calibri, -apple-system, sans-serif; backg
 .rh-thread.rh-expanded .rh-summary { display: none; }
 .rh-full { display: none; margin-top: 6px; }
 .rh-thread.rh-expanded .rh-full { display: block; }
+/* Personal comments always show their full text (not a clamped 2-line summary);
+   a single very long comment scrolls within the card rather than overflowing the
+   page's vertical space. */
+.pc-card .rh-summary { display: none; }
+.pc-card .rh-full { display: block; }
+.pc-card .pc-view .rh-body { max-height: calc(100vh - 160px); overflow-y: auto; }
+/* Replies (follow-up notes, e.g. the assistant recording how it addressed the comment). */
+.pc-replies { margin-top: 8px; border-top: 1px dashed var(--cp-border); padding-top: 6px; }
+.pc-reply { margin-top: 6px; padding-left: 8px; border-left: 2px solid var(--cp-accent); }
+.pc-reply-meta { font-size: 10px; font-weight: 700; color: var(--cp-accent); margin-bottom: 2px; }
+.pc-reply .rh-body { font-size: 12px; }
 .rh-anchor { font-size: 11px; color: var(--cp-text-muted); margin-bottom: 6px; }
 .rh-comment { margin: 6px 0; }
 .rh-comment + .rh-comment { border-top: 1px dashed var(--cp-border); padding-top: 6px; }
@@ -2725,6 +2736,15 @@ body.show-markers .rh-marker { display: inline-flex; }
           }
         }).catch(function () {});
       }
+      function pcRepliesHtml(c) {
+        var reps = (c && c.replies) || [];
+        if (!reps.length) return '';
+        var items = reps.map(function (r) {
+          return '<div class="pc-reply"><div class="pc-reply-meta">' + pcEsc(r.author || '') + ' \u00b7 ' + pcWhen(r.createdAt || new Date().toISOString()) + '</div>'
+            + '<div class="rh-body">' + (r.html || pcEsc(r.content || '')) + '</div></div>';
+        }).join('');
+        return '<div class="pc-replies">' + items + '</div>';
+      }
       function pcBuildCard(c, isDraft) {
         var card = document.createElement('div');
         card.className = 'rh-thread pc-card' + (isDraft ? ' pc-draft' : '') + (c.resolved ? ' pc-resolved' : '');
@@ -2742,7 +2762,7 @@ body.show-markers .rh-marker { display: inline-flex; }
           + '<button type="button" class="pc-ico pc-del" title="Delete">\u{1f5d1}</button></div>'
           + '<div class="rh-summary"><span class="rh-who"></span> ' + pcSnippet(c.content) + '</div>'
           + '<div class="rh-full">'
-          + '<div class="pc-view"><div class="rh-body">' + (c.html || pcEsc(c.content)) + '</div></div>'
+          + '<div class="pc-view"><div class="rh-body">' + (c.html || pcEsc(c.content)) + '</div>' + pcRepliesHtml(c) + '</div>'
           + '<div class="pc-editbox" hidden><textarea class="pc-text" placeholder="Add a comment\u2026 (saves when you click away)"></textarea></div>'
           + '</div>';
         pcWireCard(card);
@@ -5855,7 +5875,9 @@ async function main() {
     return _me;
   }
   async function _pcWithHtml(comment) {
-    return { ...comment, html: await renderMarkdownSafe(comment.content || "") };
+    const replies = [];
+    for (const r of comment.replies || []) replies.push({ ...r, html: await renderMarkdownSafe(r.content || "") });
+    return { ...comment, html: await renderMarkdownSafe(comment.content || ""), replies };
   }
   async function listPersonalComments({ repo, branch, path: filePath } = {}) {
     if (!repo || !branch || !filePath) return { ok: false, error: "Missing repo/branch/path." };
@@ -5898,13 +5920,25 @@ async function main() {
     savePersonalComments(repo, branch, filePath, list);
     return { ok: true, comment: await _pcWithHtml(pcFind(list, id)), dataSeq: _focus.bumpPcData() };
   }
+  // Append a reply (a follow-up note) to a comment — e.g. the assistant recording
+  // how it addressed the feedback before resolving.
+  async function replyPersonalComment({ repo, branch, path: filePath, id, author, content } = {}) {
+    if (!repo || !branch || !filePath || !id) return { ok: false, error: "Missing repo/branch/path/id." };
+    const cur = loadPersonalComments(repo, branch, filePath);
+    if (!pcFind(cur, id)) return { ok: false, error: "Not found." };
+    const text = String(content == null ? "" : content).trim();
+    if (!text) return { ok: false, error: "Empty reply." };
+    const list = pcAddReply(cur, id, { author: author || "You", content: text, now: new Date().toISOString() });
+    savePersonalComments(repo, branch, filePath, list);
+    return { ok: true, comment: await _pcWithHtml(pcFind(list, id)), dataSeq: _focus.bumpPcData() };
+  }
 
   // --- Personal Comments: MCP-facing operations ---------------------------------
   // These default to the file the open reviewing page reported (pcContext) and
   // to the selected comment (pcSelectedId), and push UI commands (focus a
   // comment, hide/show resolved) so MCP actions reflect live in the open page.
   function pcSummary(c) {
-    return { id: c.id, line: c.line == null ? null : c.line, author: c.author, content: c.content, resolved: !!c.resolved, createdAt: c.createdAt, updatedAt: c.updatedAt };
+    return { id: c.id, line: c.line == null ? null : c.line, author: c.author, content: c.content, resolved: !!c.resolved, createdAt: c.createdAt, updatedAt: c.updatedAt, replies: (c.replies || []).map((r) => ({ author: r.author, content: r.content, createdAt: r.createdAt })) };
   }
   function pcCtx(args = {}) {
     const cur = _focus.get().pcContext;
@@ -5943,8 +5977,23 @@ async function main() {
     const { repo, branch, path: filePath } = pcCtx(args);
     const id = args.id || _focus.get().pcSelectedId;
     if (!id) return { ok: false, error: "No comment id and none selected." };
+    // If a note is given, post it as a reply FIRST (so "how it was addressed" is
+    // recorded on the thread), then flip the resolved flag.
+    const note = String(args.note == null ? "" : args.note).trim();
+    if (note) {
+      const rr = await replyPersonalComment({ repo, branch, path: filePath, id, author: args.author || "Assistant", content: note });
+      if (!rr.ok) return rr;
+    }
     const r = await resolvePersonalComment({ repo, branch, path: filePath, id, resolved: args.resolved !== false });
     return r.ok ? { ok: true, comment: pcSummary(r.comment) } : r;
+  }
+  async function mcpReplyPersonalComment(args = {}) {
+    const { repo, branch, path: filePath } = pcCtx(args);
+    const id = args.id || _focus.get().pcSelectedId;
+    if (!id) return { ok: false, error: "No comment id and none selected." };
+    const r = await replyPersonalComment({ repo, branch, path: filePath, id, author: args.author || "Assistant", content: args.content });
+    if (r.ok) { _focus.setPcSelected(id); _focus.setPcCommand({ type: "focus", id }); return { ok: true, comment: pcSummary(r.comment) }; }
+    return r;
   }
   async function mcpDeleteResolvedPersonalComments(args = {}) {
     const { repo, branch, path: filePath } = pcCtx(args);
@@ -6626,11 +6675,13 @@ if ($path) { [Console]::Out.Write($path) }
     editPersonalComment,
     deletePersonalComment,
     resolvePersonalComment,
+    replyPersonalComment,
     mcpReadPersonalComments,
     mcpAddPersonalComment,
     mcpEditPersonalComment,
     mcpDeletePersonalComment,
     mcpResolvePersonalComment,
+    mcpReplyPersonalComment,
     mcpDeleteResolvedPersonalComments,
     mcpClearPersonalComments,
     mcpNavPersonalComment,

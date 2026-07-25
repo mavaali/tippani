@@ -42,7 +42,7 @@ export function registerControlApi(app, deps) {
     deletePersonalComment,  // async ({repo, branch, path, id}) => {ok, id} (optional)
     resolvePersonalComment, // async ({repo, branch, path, id, resolved}) => {ok, comment} (optional)
     mcpReadPersonalComments, mcpAddPersonalComment, mcpEditPersonalComment, mcpDeletePersonalComment,
-    mcpResolvePersonalComment, mcpDeleteResolvedPersonalComments, mcpClearPersonalComments,
+    mcpResolvePersonalComment, mcpReplyPersonalComment, mcpDeleteResolvedPersonalComments, mcpClearPersonalComments,
     mcpNavPersonalComment, mcpJumpPersonalComment, mcpSetPcResolvedVisibility, // MCP personal-comment ops
     mcpRefreshSpec, mcpOpenBranch, mcpOpenBranchFile, // MCP: refresh + open review surface
   } = deps;
@@ -561,6 +561,7 @@ export function registerControlApi(app, deps) {
   app.post("/api/v1/personal-comments/mcp/edit", requireAuth({ mutation: true }), mcpAc(mcpEditPersonalComment, "edit personal comment"));
   app.post("/api/v1/personal-comments/mcp/delete", requireAuth({ mutation: true }), mcpAc(mcpDeletePersonalComment, "delete personal comment"));
   app.post("/api/v1/personal-comments/mcp/resolve", requireAuth({ mutation: true }), mcpAc(mcpResolvePersonalComment, "resolve personal comment"));
+  app.post("/api/v1/personal-comments/mcp/reply", requireAuth({ mutation: true }), mcpAc(mcpReplyPersonalComment, "reply to personal comment"));
   app.post("/api/v1/personal-comments/mcp/delete-resolved", requireAuth({ mutation: true }), mcpAc(mcpDeleteResolvedPersonalComments, "delete resolved personal comments"));
   app.post("/api/v1/personal-comments/mcp/clear", requireAuth({ mutation: true }), mcpAc(mcpClearPersonalComments, "clear personal comments"));
   app.post("/api/v1/personal-comments/mcp/nav", requireAuth({ mutation: true }), mcpAc(mcpNavPersonalComment, "navigate personal comments"));

@@ -113,11 +113,11 @@ try {
     "edit_spec", "set_view", "set_feedback_filter",
     "list_prs", "search_work_items", "search_specs", "get_file_commits",
     "read_personal_comments", "add_personal_comment", "edit_personal_comment",
-    "delete_personal_comment", "resolve_personal_comment", "delete_resolved_personal_comments",
+    "delete_personal_comment", "resolve_personal_comment", "reply_personal_comment", "delete_resolved_personal_comments",
     "delete_all_personal_comments", "navigate_personal_comments", "jump_to_personal_comment",
     "show_resolved_personal_comments", "open_branch", "open_branch_file", "refresh_spec",
   ];
-  check("tools: exactly 39 registered", tools.length === 39);
+  check("tools: exactly 40 registered", tools.length === 40);
   for (const n of expected) {
     check(`tools: includes ${n}`, !!byName[n]);
     check(`tools: ${n} has description`, typeof byName[n].description === "string" && byName[n].description.length > 20);

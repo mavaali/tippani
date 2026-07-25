@@ -1,5 +1,5 @@
 // Tests for the Personal Comments store helpers (pure list operations).
-import { newComment, addComment, updateComment, removeComment, findComment, sortComments, setResolved, navTargetId } from "./personal-comments.js";
+import { newComment, addComment, updateComment, removeComment, findComment, sortComments, setResolved, addReply, navTargetId } from "./personal-comments.js";
 
 let pass = 0, fail = 0;
 function ok(name, cond) { if (cond) pass++; else { fail++; console.error("  FAIL: " + name); } }
@@ -7,7 +7,7 @@ function eq(name, a, b) { ok(name + ` (got ${JSON.stringify(a)})`, JSON.stringif
 
 // --- newComment --------------------------------------------------------------
 const c1 = newComment({ id: "a", line: 12, author: "Kay", content: "hi", now: "2026-01-01T00:00:00Z" });
-eq("newComment shape", c1, { id: "a", line: 12, author: "Kay", content: "hi", resolved: false, createdAt: "2026-01-01T00:00:00Z", updatedAt: "2026-01-01T00:00:00Z" });
+eq("newComment shape", c1, { id: "a", line: 12, author: "Kay", content: "hi", resolved: false, createdAt: "2026-01-01T00:00:00Z", updatedAt: "2026-01-01T00:00:00Z", replies: [] });
 eq("newComment null line", newComment({ id: "b", line: null, author: "", content: "", now: "t" }).line, null);
 eq("newComment coerces line", newComment({ id: "c", line: "7", author: "", content: "", now: "t" }).line, 7);
 
@@ -37,6 +37,17 @@ eq("setResolved unknown -> unchanged", setResolved(l1, "zzz", true, "t"), l1);
 // --- findComment -------------------------------------------------------------
 ok("findComment hit", findComment(l1, "a") != null);
 ok("findComment miss -> null", findComment(l1, "nope") === null);
+
+// --- addReply ----------------------------------------------------------------
+const lr = addReply(l1, "a", { author: "Assistant", content: "Addressed: added target user.", now: "2026-04-04T00:00:00Z" });
+eq("addReply appends a reply", findComment(lr, "a").replies, [{ author: "Assistant", content: "Addressed: added target user.", createdAt: "2026-04-04T00:00:00Z" }]);
+eq("addReply bumps updatedAt", findComment(lr, "a").updatedAt, "2026-04-04T00:00:00Z");
+eq("addReply keeps createdAt", findComment(lr, "a").createdAt, "2026-01-01T00:00:00Z");
+eq("addReply trims + keeps original list immutable", findComment(l1, "a").replies, []);
+eq("addReply empty content -> unchanged", addReply(l1, "a", { author: "x", content: "   " }), l1);
+eq("addReply unknown id -> unchanged", addReply(l1, "zzz", { author: "x", content: "y" }), l1);
+const lr2 = addReply(lr, "a", { author: "You", content: "second", now: "2026-05-05T00:00:00Z" });
+eq("addReply appends in order", findComment(lr2, "a").replies.map((r) => r.content), ["Addressed: added target user.", "second"]);
 
 // --- sortComments ------------------------------------------------------------
 const unsorted = [
