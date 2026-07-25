@@ -2380,6 +2380,7 @@ body { font-family: "Segoe UI", Aptos, Calibri, -apple-system, sans-serif; backg
 .ro-margin-head { position: sticky; top: 48px; z-index: 6; display: flex; align-items: center; gap: 8px; padding: 12px 14px; background: var(--cp-bg); border-bottom: 1px solid var(--cp-border); }
 .ro-margin-title { flex: 1 1 auto; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.3px; color: var(--cp-text-muted); }
 .ro-margin.collapsed .ro-margin-head, .ro-margin.collapsed .ro-margin-body { display: none; }
+.ro-margin-body { position: relative; }
 .ro-margin .ro-rail { display: none; }
 .ro-margin.collapsed .ro-rail { display: flex; position: sticky; top: 48px; width: 38px; height: calc(100vh - 48px); flex-direction: column; align-items: center; gap: 10px; padding-top: 12px; background: none; border: none; cursor: pointer; color: var(--cp-text-muted); font-size: 14px; }
 .ro-margin.collapsed .ro-rail:hover { color: var(--cp-text); }
@@ -2560,7 +2561,13 @@ body.show-markers .rh-marker { display: inline-flex; }
       // Position each card at its anchor's vertical offset; stack downward when
       // cards would overlap so every card stays as close to its anchor as it can.
       function layout() {
-        var mt = marginEl.getBoundingClientRect().top + window.scrollY;
+        // Cards are position:absolute inside .ro-margin-body (which is
+        // position:relative), so top is measured from the body — i.e. BELOW the
+        // sticky header. A card with no line anchor (file-level) lands at the top
+        // of the body, clear of the header (previously it sat at top:0 of
+        // .ro-margin, behind the header, and its first line clipped).
+        var bodyEl = document.getElementById('roMarginBody') || marginEl;
+        var mt = bodyEl.getBoundingClientRect().top + window.scrollY;
         var items = cards.map(function (card) {
           var line = parseInt(card.getAttribute('data-line'), 10);
           var b = Number.isFinite(line) ? blockForLine(line) : null;
@@ -2568,13 +2575,13 @@ body.show-markers .rh-marker { display: inline-flex; }
           return { card: card, y: Math.max(0, y) };
         });
         items.sort(function (a, b) { return a.y - b.y; });
-        var cursor = 0;
+        var cursor = 8;
         items.forEach(function (it) {
           var top = Math.max(it.y, cursor);
           it.card.style.top = top + 'px';
           cursor = top + it.card.offsetHeight + 8;
         });
-        marginEl.style.minHeight = cursor + 'px';
+        bodyEl.style.minHeight = cursor + 'px';
       }
       function clearFocus() {
         cards.forEach(function (c) { c.classList.remove('rh-focused', 'rh-expanded'); });

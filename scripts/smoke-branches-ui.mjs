@@ -154,6 +154,8 @@ async function main() {
       /RO_REVIEWING = true/.test(specLocal.html) && /Personal Comments/.test(specLocal.html) && /ro-mode-local/.test(specLocal.html));
     check("/spec local never proxies images via ADO",
       !/spec\/media\?repo=/.test(specLocal.html) && (!/spec\/media\?/.test(specLocal.html) || /spec\/media\?local=/.test(specLocal.html)));
+    check("/spec local anchors margin cards to the body (file-level comment can't clip under the header)",
+      /\.ro-margin-body \{ position: relative;/.test(specLocal.html) && /getElementById\('roMarginBody'\)/.test(specLocal.html));
 
     // ---- MCP open tools accept a local clone path (fully-local, no ADO) ----
     const mcpOpenLocal = await api("POST", "/api/v1/spec/open-branch", { localPath: ROOT, branch: curBranch });
