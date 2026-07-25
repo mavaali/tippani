@@ -43,7 +43,7 @@ export function registerControlApi(app, deps) {
     resolvePersonalComment, // async ({repo, branch, path, id, resolved}) => {ok, comment} (optional)
     mcpReadPersonalComments, mcpAddPersonalComment, mcpEditPersonalComment, mcpDeletePersonalComment,
     mcpResolvePersonalComment, mcpDeleteResolvedPersonalComments, mcpClearPersonalComments,
-    mcpNavPersonalComment, mcpJumpPersonalComment, mcpSetPcResolvedVisibility, // MCP author-comment ops
+    mcpNavPersonalComment, mcpJumpPersonalComment, mcpSetPcResolvedVisibility, // MCP personal-comment ops
     mcpRefreshSpec, mcpOpenBranch, mcpOpenBranchFile, // MCP: refresh + open review surface
   } = deps;
 
@@ -542,7 +542,7 @@ export function registerControlApi(app, deps) {
     res.json({ ok: true });
   });
 
-  // MCP-facing author-comment operations: default to the open reviewing file +
+  // MCP-facing personal-comment operations: default to the open reviewing file +
   // selected comment and push UI commands so actions reflect live in the page.
   // Registered BEFORE the parameterized "/:id/resolve" route so "/mcp/resolve"
   // isn't captured as id="mcp".

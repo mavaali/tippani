@@ -611,28 +611,33 @@ export function buildTools(http, session) {
     {
       name: "open_branch",
       description:
-        "Open the Branches file-list page for a repo + branch in the user's " +
-        "browser (the read-only review entry). Use to steer the user to a " +
-        "branch's changed specs. Pass the ADO project, repo (GUID or name) and " +
-        "branch.",
+        "Open the Branches file-list page for a branch in the user's browser " +
+        "(the read-only review entry). Use to steer the user to a branch's " +
+        "changed specs. For a remote (ADO) branch pass project, repo (GUID or " +
+        "name) and branch. For a fully-local clone pass localPath (the clone " +
+        "path on disk) and branch instead — no ADO is touched.",
       inputSchema: {
         project: z.string().optional().describe("ADO project (defaults to the portal's project)"),
-        repo: z.string().describe("Repo GUID or name"),
+        repo: z.string().optional().describe("Repo GUID or name (remote mode)"),
         branch: z.string().describe("Branch name (e.g. dev/kay/x)"),
+        localPath: z.string().optional().describe("Local clone path on disk (local mode; overrides repo/project)"),
       },
       handler: (args) => http.post("/api/v1/spec/open-branch", args),
     },
     {
       name: "open_branch_file",
       description:
-        "Open ONE spec file read-only in the reviewing view for a repo + branch, " +
-        "so the user can read it and the author-comment tools have a target. " +
-        "Pass project, repo (GUID or name), branch and the file path. Read-only.",
+        "Open ONE spec file read-only in the reviewing view for a branch, so the " +
+        "user can read it and the personal-comment tools have a target. For a " +
+        "remote (ADO) branch pass project, repo (GUID or name), branch and path. " +
+        "For a fully-local clone pass localPath, branch and path instead — the " +
+        "file is read from disk and no ADO is touched. Read-only.",
       inputSchema: {
         project: z.string().optional().describe("ADO project (defaults to the portal's project)"),
-        repo: z.string().describe("Repo GUID or name"),
+        repo: z.string().optional().describe("Repo GUID or name (remote mode)"),
         branch: z.string().describe("Branch name"),
         path: z.string().describe("File path within the repo (e.g. /Specs/Foo.md)"),
+        localPath: z.string().optional().describe("Local clone path on disk (local mode; overrides repo/project)"),
       },
       handler: (args) => http.post("/api/v1/spec/open-branch-file", args),
     },

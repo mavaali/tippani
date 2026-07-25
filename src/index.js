@@ -48,7 +48,7 @@ import { resolveImagePath, imageContentType, isLfsPointer, secureImageHeaders, i
 import { cssVariables, changeTypeBadge, escHtml, stripMarkdown } from "./html-util.js";
 import { getSpecContentAt, getSpecBlobAt, buildSpecWebUrl, getLastCommitAuthor } from "./ado-read.js";
 import { branchesForRepo, sortBranches, shortBranchName } from "./branch-list.js";
-import { branchFileRows, visibleFileCount, mdPathsFromChanges } from "./branch-files.js";
+import { branchFileRows, visibleFileCount, mdPathsFromChanges, buildSpecHref } from "./branch-files.js";
 import { validateLocalRepo, resolveGitDir, parseGitHead, parsePackedRefs, mergeLocalBranches, parseOriginHeadDefault, userCreatedBranches } from "./local-repo.js";
 import { newComment as pcNew, addComment as pcAdd, updateComment as pcUpdate, removeComment as pcRemove, findComment as pcFind, sortComments as pcSort, setResolved as pcSetResolved, navTargetId as pcNavTarget } from "./personal-comments.js";
 
@@ -1767,79 +1767,7 @@ table.wi-results { width: 100%; table-layout: fixed; border-collapse: collapse; 
       saveBranchCache('remote');
     } catch (e) { status.textContent = 'Failed: ' + e.message; }
   }
-  var brLocalHandle = null;
   var brLocalPathValue = '';
-  function leafOf(p) { var s = String(p || '').split(String.fromCharCode(92)).join('/'); var parts = s.split('/').filter(Boolean); return parts.length ? parts[parts.length - 1] : s; }
-  var brLocalOrigin = null; // { project, repo } parsed from the clone's ADO origin
-  // Persist the picked workspace handle across app restarts (IndexedDB — a
-  // FileSystemDirectoryHandle is structured-cloneable). Re-listing may need one
-  // click to re-grant read permission (the platform resets it per session).
-  function idbOpen() {
-    return new Promise(function (res, rej) {
-      var r = indexedDB.open('tippani', 1);
-      r.onupgradeneeded = function () { try { r.result.createObjectStore('kv'); } catch (e) {} };
-      r.onsuccess = function () { res(r.result); };
-      r.onerror = function () { rej(r.error); };
-    });
-  }
-  function idbGet(key) {
-    return idbOpen().then(function (db) {
-      return new Promise(function (res) {
-        try { var g = db.transaction('kv', 'readonly').objectStore('kv').get(key); g.onsuccess = function () { res(g.result || null); }; g.onerror = function () { res(null); }; }
-        catch (e) { res(null); }
-      });
-    }).catch(function () { return null; });
-  }
-  function idbSet(key, val) {
-    return idbOpen().then(function (db) {
-      return new Promise(function (res) {
-        try { var tx = db.transaction('kv', 'readwrite'); tx.objectStore('kv').put(val, key); tx.oncomplete = function () { res(true); }; tx.onerror = function () { res(false); }; }
-        catch (e) { res(false); }
-      });
-    }).catch(function () { return false; });
-  }
-  function idbDel(key) {
-    return idbOpen().then(function (db) {
-      return new Promise(function (res) {
-        try { var tx = db.transaction('kv', 'readwrite'); tx.objectStore('kv').delete(key); tx.oncomplete = function () { res(true); }; tx.onerror = function () { res(false); }; }
-        catch (e) { res(false); }
-      });
-    }).catch(function () { return false; });
-  }
-  // Parse a .git/config body -> origin remote url (client-side, backslash-free).
-  function clientParseOriginUrl(cfg) {
-    var lines = String(cfg || '').split(String.fromCharCode(10));
-    var inOrigin = false;
-    for (var i = 0; i < lines.length; i++) {
-      var line = lines[i].split(String.fromCharCode(13)).join('').trim();
-      if (!line) continue;
-      if (line.charAt(0) === '[') { inOrigin = line.toLowerCase().indexOf('remote "origin"') >= 0; continue; }
-      if (inOrigin && line.toLowerCase().indexOf('url') === 0) { var eq = line.indexOf('='); if (eq >= 0) return line.slice(eq + 1).trim() || null; }
-    }
-    return null;
-  }
-  // Parse an ADO remote url -> { project, repo } (client-side, backslash-free).
-  function clientParseAdoRemote(url) {
-    url = String(url || '').trim();
-    if (!url) return null;
-    if (url.toLowerCase().slice(-4) === '.git') url = url.slice(0, -4);
-    var project = '', repo = '';
-    var marker = '/_git/';
-    var gi = url.indexOf(marker);
-    if (gi >= 0) {
-      repo = url.slice(gi + marker.length).split('/')[0];
-      var before = url.slice(0, gi).split('/').filter(Boolean);
-      project = before.length ? before[before.length - 1] : '';
-    } else {
-      var ci = url.indexOf(':v3/');
-      if (ci >= 0) { var seg = url.slice(ci + 4).split('/').filter(Boolean); if (seg.length >= 3) { project = seg[seg.length - 2]; repo = seg[seg.length - 1]; } }
-    }
-    try { project = decodeURIComponent(project); } catch (e) {}
-    try { repo = decodeURIComponent(repo); } catch (e) {}
-    project = project.trim(); repo = repo.trim();
-    if (!project || !repo) return null;
-    return { project: project, repo: repo };
-  }
   // Per-mode result cache so switching Remote/Local — and navigating to a branch
   // page and back — restores the last view instead of refetching (Refresh forces
   // a reload). Backed by sessionStorage so it survives the full-page navigation
@@ -1871,61 +1799,6 @@ table.wi-results { width: 100%; table-layout: fixed; border-collapse: collapse; 
     document.getElementById('brResults').innerHTML = c.results;
     document.getElementById('brStatus').textContent = c.status;
     return true;
-  }
-  function clientParseGitHead(s) { s = String(s || '').trim(); var p = 'ref: refs/heads/'; return s.indexOf(p) === 0 ? s.slice(p.length).trim() : null; }
-  function clientParseOriginDefault(s) { s = String(s || '').trim(); var p = 'ref: refs/remotes/origin/'; return s.indexOf(p) === 0 ? s.slice(p.length).trim() : null; }
-  function clientParsePackedRefs(s) { var out = [], LF = String.fromCharCode(10), CR = String.fromCharCode(13), tag = ' refs/heads/'; String(s || '').split(LF).forEach(function (line) { var l = line.split(CR).join('').trim(); if (!l || l[0] === '#' || l[0] === '^') return; var i = l.indexOf(tag); if (i >= 0) out.push(l.slice(i + tag.length).trim()); }); return out; }
-  function clientMergeBranches(loose, packed, head) { var set = {}; loose.concat(packed).forEach(function (n) { set[n] = 1; }); return Object.keys(set).sort(function (a, b) { return a.toLowerCase().localeCompare(b.toLowerCase()); }).map(function (n) { return { name: n, current: n === head }; }); }
-  async function walkRefs(handle, prefix, out) {
-    for await (var entry of handle.values()) {
-      var name = prefix ? prefix + '/' + entry.name : entry.name;
-      if (entry.kind === 'directory') await walkRefs(entry, name, out); else out.push(name);
-    }
-  }
-  // Read a picked workspace's branches straight from its .git via the File System
-  // Access API \u2014 no server path needed (browsers never expose the absolute path).
-  async function readLocalBranchesFromHandle(dir) {
-    var status = document.getElementById('brStatus');
-    // Re-grant read permission if the platform reset it (persisted handle on a
-    // fresh load). requestPermission needs a user gesture; from a restore without
-    // one it stays 'prompt' and we surface a hint instead of failing silently.
-    try {
-      if (dir.queryPermission) {
-        var perm = await dir.queryPermission({ mode: 'read' });
-        if (perm !== 'granted' && dir.requestPermission) { try { perm = await dir.requestPermission({ mode: 'read' }); } catch (e) {} }
-        if (perm !== 'granted') { status.textContent = 'Click Browse to reconnect to this workspace.'; return; }
-      }
-    } catch (e) {}
-    status.textContent = 'Reading\u2026'; document.getElementById('brResults').innerHTML = '';
-    try {
-      var git;
-      try { git = await dir.getDirectoryHandle('.git'); }
-      catch (e) { status.textContent = 'Not a git workspace (no .git folder).'; return; }
-      // Map the clone to its ADO origin so local branch cards can link to the
-      // server-side branch page (same unique-files diff as remote).
-      brLocalOrigin = null;
-      try { var cfgFile = await (await git.getFileHandle('config')).getFile(); brLocalOrigin = clientParseAdoRemote(clientParseOriginUrl(await cfgFile.text())); } catch (e) {}
-      var head = '';
-      try { head = await (await (await git.getFileHandle('HEAD')).getFile()).text(); } catch (e) { }
-      var current = clientParseGitHead(head);
-      var loose = [];
-      try { var heads = await (await git.getDirectoryHandle('refs')).getDirectoryHandle('heads'); await walkRefs(heads, '', loose); } catch (e) { }
-      var packed = [];
-      try { packed = clientParsePackedRefs(await (await (await git.getFileHandle('packed-refs')).getFile()).text()); } catch (e) { }
-      var branches = clientMergeBranches(loose, packed, current);
-      // Only the user's own branches: drop the clone's default (from
-      // refs/remotes/origin/HEAD, else main/master).
-      var def = null;
-      try {
-        var oh = await (await (await (await git.getDirectoryHandle('refs')).getDirectoryHandle('remotes')).getDirectoryHandle('origin')).getFileHandle('HEAD');
-        def = clientParseOriginDefault(await (await oh.getFile()).text());
-      } catch (e) {}
-      var drop = def ? [def] : ['main', 'master'];
-      branches = branches.filter(function (b) { return drop.indexOf(b.name) < 0; });
-      status.textContent = branches.length + ' branch' + (branches.length === 1 ? '' : 'es');
-      renderBranchCards(branches, 'local');
-      saveBranchCache('local');
-    } catch (e) { status.textContent = 'Failed: ' + e.message; }
   }
   function setLocalNote(picked) {
     var n = document.getElementById('brLocalNote');
@@ -2648,7 +2521,7 @@ body.show-markers .rh-marker { display: inline-flex; }
     (function () {
       var RO_SOURCE_MAP = ${JSON.stringify(sourceMap || [])};
       var RO_HISTORY_URL = ${JSON.stringify(reviewing ? "" : (historyUrl || ""))};
-      // Author-comments (file-reviewing) mode config.
+      // Personal-comments (file-reviewing) mode config.
       var RO_REVIEWING = ${reviewing ? "true" : "false"};
       var RO_REPO = ${JSON.stringify(reviewRepo || "")};
       var RO_BRANCH = ${JSON.stringify(reviewBranch || "")};
@@ -6119,21 +5992,38 @@ async function main() {
     return { ok: true };
   }
   // Open the Branches file-list page for a repo+branch in the user's browser.
-  async function mcpOpenBranch({ project, repo, branch } = {}) {
-    const proj = (project && String(project).trim()) || ADO_PROJECT;
+  // A localPath opens the fully-local branch view (no ADO); otherwise remote.
+  async function mcpOpenBranch({ project, repo, branch, localPath } = {}) {
     const b = String(branch || "").replace(/^refs\/heads\//, "").trim();
+    const lp = String(localPath || "").trim();
+    if (lp) {
+      if (!b) return { ok: false, error: "branch required." };
+      const p = `/local-branch?path=${encodeURIComponent(lp)}&ref=${encodeURIComponent(b)}`;
+      _focus.setNav(p);
+      return { ok: true, opened: p };
+    }
+    const proj = (project && String(project).trim()) || ADO_PROJECT;
     if (!repo || !b) return { ok: false, error: "repo and branch required." };
     const p = `/branch?project=${encodeURIComponent(proj)}&repo=${encodeURIComponent(repo)}&ref=${encodeURIComponent(b)}`;
     _focus.setNav(p);
     return { ok: true, opened: p };
   }
   // Open one spec file read-only in the reviewing view (so the user + the
-  // author-comment tools have a target). Resolves the repo to its canonical
+  // personal-comment tools have a target). A localPath reads from the on-disk
+  // clone (mode=local, no ADO); otherwise resolves the ADO repo to its canonical
   // id/name and pins the review context (back=/branch, mode=remote).
-  async function mcpOpenBranchFile({ project, repo, repoName, branch, path: filePath } = {}) {
+  async function mcpOpenBranchFile({ project, repo, repoName, branch, path: filePath, localPath } = {}) {
+    const b = String(branch || "").replace(/^refs\/heads\//, "").trim();
+    const lp = String(localPath || "").trim();
+    if (lp) {
+      if (!b || !filePath) return { ok: false, error: "branch and path required." };
+      const back = `/local-branch?path=${encodeURIComponent(lp)}&ref=${encodeURIComponent(b)}`;
+      const p = buildSpecHref({ localPath: lp, ref: b, path: filePath, back });
+      _focus.setNav(p);
+      return { ok: true, opened: p, localPath: lp };
+    }
     if (_isOffline || !_conn) return { ok: false, error: "offline" };
     const proj = (project && String(project).trim()) || ADO_PROJECT;
-    const b = String(branch || "").replace(/^refs\/heads\//, "").trim();
     const repoRef = String(repo || repoName || "").trim();
     if (!repoRef || !b || !filePath) return { ok: false, error: "repo, branch and path required." };
     let info;

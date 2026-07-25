@@ -155,6 +155,19 @@ async function main() {
     check("/spec local never proxies images via ADO",
       !/spec\/media\?repo=/.test(specLocal.html) && (!/spec\/media\?/.test(specLocal.html) || /spec\/media\?local=/.test(specLocal.html)));
 
+    // ---- MCP open tools accept a local clone path (fully-local, no ADO) ----
+    const mcpOpenLocal = await api("POST", "/api/v1/spec/open-branch", { localPath: ROOT, branch: curBranch });
+    check("MCP open-branch (localPath) navigates to the local branch view",
+      mcpOpenLocal.status === 200 && mcpOpenLocal.json?.ok === true &&
+      String(mcpOpenLocal.json?.opened || "").startsWith(`/local-branch?path=${encodeURIComponent(ROOT)}`),
+      JSON.stringify(mcpOpenLocal.json));
+    const mcpOpenLocalFile = await api("POST", "/api/v1/spec/open-branch-file", { localPath: ROOT, branch: curBranch, path: "README.md" });
+    check("MCP open-branch-file (localPath) navigates to the local /spec review",
+      mcpOpenLocalFile.status === 200 && mcpOpenLocalFile.json?.ok === true &&
+      /^\/spec\?local=/.test(String(mcpOpenLocalFile.json?.opened || "")) &&
+      /mode=local/.test(String(mcpOpenLocalFile.json?.opened || "")),
+      JSON.stringify(mcpOpenLocalFile.json));
+
     // ---- Branches tab wires remote cards to the in-app /branch page ----
     check("remote branch cards open the in-app /branch page",
       /\/branch\?project=/.test(disc.html));
