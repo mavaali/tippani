@@ -6075,6 +6075,11 @@ async function main() {
       if (!b || !filePath) return { ok: false, error: "branch and path required." };
       const back = `/local-branch?path=${encodeURIComponent(lp)}&ref=${encodeURIComponent(b)}`;
       const p = buildSpecHref({ localPath: lp, ref: b, path: filePath, back });
+      // Set the reviewing context up front (mirrors what the /spec page reports
+      // on load) so a follow-up read/resolve/reply works immediately, without
+      // waiting for the browser to navigate and report back.
+      _focus.setPcContext({ repo: "local:" + lp, branch: b, path: filePath });
+      _focus.setPcSelected(null);
       _focus.setNav(p);
       return { ok: true, opened: p, localPath: lp };
     }
@@ -6088,6 +6093,8 @@ async function main() {
     if (!info || !info.id) return { ok: false, error: "Could not find that repository." };
     const back = `/branch?project=${encodeURIComponent(proj)}&repo=${encodeURIComponent(info.id)}&repoName=${encodeURIComponent(info.name)}&ref=${encodeURIComponent(b)}`;
     const p = `/spec?repo=${encodeURIComponent(info.id)}&path=${encodeURIComponent(filePath)}&repoName=${encodeURIComponent(info.name)}&project=${encodeURIComponent(proj)}&branch=${encodeURIComponent(b)}&back=${encodeURIComponent(back)}&mode=remote`;
+    _focus.setPcContext({ repo: info.id, branch: b, path: filePath });
+    _focus.setPcSelected(null);
     _focus.setNav(p);
     return { ok: true, opened: p, repo: info.id, repoName: info.name };
   }

@@ -169,6 +169,13 @@ async function main() {
       /^\/spec\?local=/.test(String(mcpOpenLocalFile.json?.opened || "")) &&
       /mode=local/.test(String(mcpOpenLocalFile.json?.opened || "")),
       JSON.stringify(mcpOpenLocalFile.json));
+    // open-branch-file sets the reviewing context up front, so a CONTEXTLESS read
+    // resolves the file immediately — no wait for the browser to navigate/report.
+    const ctxRead = await fetch(BASE + "/api/v1/personal-comments/all", { headers: { "X-Tippani-Client": CLIENT, Authorization: `Bearer ${tokenFor(PORT)}` } });
+    const ctxJson = await ctxRead.json().catch(() => null);
+    check("open-branch-file sets pcContext eagerly (contextless read resolves the file)",
+      ctxRead.status === 200 && ctxJson?.ok === true && ctxJson?.file?.path === "README.md" && String(ctxJson?.file?.repo || "").startsWith("local:"),
+      JSON.stringify(ctxJson?.file));
 
     // ---- Branches tab wires remote cards to the in-app /branch page ----
     check("remote branch cards open the in-app /branch page",
