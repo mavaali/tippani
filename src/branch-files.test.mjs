@@ -35,6 +35,12 @@ eq("spec href threads the editing mode",
 eq("spec href strips heads prefix from plain ref",
   buildSpecHref({ repoId: "R1", ref: "feature/x", path: "/foo.md" }),
   "/spec?repo=R1&path=%2Ffoo.md&branch=feature%2Fx");
+eq("spec href local variant carries clone path, not ADO id, mode=local",
+  buildSpecHref({ localPath: "C:/repos/specs", ref: "dev/kay/x", path: "docs/foo.md", back: "/local-branch" }),
+  "/spec?local=C%3A%2Frepos%2Fspecs&path=docs%2Ffoo.md&branch=dev%2Fkay%2Fx&back=%2Flocal-branch&mode=local");
+eq("spec href local ignores ADO fields when localPath present",
+  buildSpecHref({ localPath: "/r", repoId: "R1", repoName: "n", project: "P", ref: "b", path: "/f.md" }),
+  "/spec?local=%2Fr&path=%2Ff.md&branch=b&mode=local");
 
 // --- branchFileRows ----------------------------------------------------------
 const ctx = { repoId: "R1", repoName: "specs-repo", project: "PBI", ref: "dev/x" };

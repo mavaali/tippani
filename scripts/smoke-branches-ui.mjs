@@ -91,10 +91,16 @@ async function main() {
     check("Remote/Local mode toggle present", doc.querySelectorAll(".br-mode-btn").length === 2 &&
       !!doc.querySelector('.br-mode-btn[data-mode="remote"]') && !!doc.querySelector('.br-mode-btn[data-mode="local"]'));
     check("remote + local source panes present", !!doc.querySelector('.br-source[data-source="remote"]') && !!doc.querySelector('.br-source[data-source="local"]'));
-    check("Workspace field present + read-only (Browse-only)", !!doc.getElementById("brLocalPath") && doc.getElementById("brLocalPath").hasAttribute("readonly"));
+    check("Repo field present + editable (not read-only)", !!doc.getElementById("brLocalPath") && !doc.getElementById("brLocalPath").hasAttribute("readonly"));
+    check("field labeled 'Repo' (not 'Workspace')", /wi-label">Repo</.test(disc.html) && !/wi-label">Workspace</.test(disc.html));
     check("Browse button present (#brBrowseBtn)", !!doc.getElementById("brBrowseBtn"));
-    check("local mode uses the File System Access picker + client-side read",
-      /showDirectoryPicker/.test(disc.html) && /pickWorkspace/.test(disc.html) && /readLocalBranchesFromHandle/.test(disc.html));
+    check("Browse wired to the native folder picker (/api/v1/local-pick)",
+      /pickWorkspace/.test(disc.html) && /\/api\/v1\/local-pick/.test(disc.html));
+    check("local branches read server-side from the repo path",
+      /runLocalBranches/.test(disc.html) && /\/api\/v1\/local-branches/.test(disc.html));
+    check("local branch cards open the fully-local /local-branch page",
+      /\/local-branch\?path=/.test(disc.html));
+    check("SERVER_LOCAL_REPO empty by default (no --local-repo)", /SERVER_LOCAL_REPO = "";/.test(disc.html));
 
     check("runBranches wired to /api/v1/branches", /runBranches/.test(disc.html) && /\/api\/v1\/branches/.test(disc.html));
     check("branches tab activatable from ?tab", /=== 'branches'/.test(disc.html));
@@ -122,6 +128,32 @@ async function main() {
     check("local-branches flags exactly one current branch",
       lb.json?.ok === true && lb.json.branches.filter((b) => b.current).length === 1 && typeof lb.json.current === "string",
       JSON.stringify({ current: lb.json?.current }));
+
+    // ---- openLocalRepo stores the path (CLI/MCP): the Discovery page then
+    // injects it as SERVER_LOCAL_REPO so the Repo box prefills. ----
+    const discAfter = await getPage("/discovery?tab=branches");
+    check("openLocalRepo stores the path -> SERVER_LOCAL_REPO injected",
+      /SERVER_LOCAL_REPO = "[^"]*tippani[^"]*";/.test(discAfter.html), "not injected");
+
+    // ---- GET /local-branch : fully-local branch file list via real git ----
+    const curBranch = good.json?.branch;
+    const lbp = await getPage(`/local-branch?path=${encodeURIComponent(ROOT)}&ref=${encodeURIComponent(curBranch)}`);
+    check("/local-branch renders the local branch page (200)", lbp.status === 200, `status=${lbp.status}`);
+    check("/local-branch is a branch-page shell (bp-wrap), no ADO link",
+      /bp-wrap/.test(lbp.html) && !/Open in Azure DevOps/.test(lbp.html));
+    const lbpNoRef = await getPage(`/local-branch?path=${encodeURIComponent(ROOT)}`);
+    check("/local-branch with no ref redirects to the Branches tab",
+      lbpNoRef.status === 200 && /data-pane="branches"/.test(lbpNoRef.html), `status=${lbpNoRef.status}`);
+    check("/local-branch shows the Local mode badge", /ro-mode ro-mode-local/.test(lbp.html) && /class="ro-mode ro-mode-local">Local</.test(lbp.html));
+
+    // ---- Local review (/spec?local=): read a working-tree file with real git,
+    // rendered read-only with the Personal Comments pane + Local badge. No ADO.
+    const specLocal = await getPage(`/spec?local=${encodeURIComponent(ROOT)}&path=${encodeURIComponent("README.md")}&branch=${encodeURIComponent(curBranch)}&back=${encodeURIComponent("/local-branch")}&mode=local`);
+    check("/spec local renders the review page (200)", specLocal.status === 200, `status=${specLocal.status}`);
+    check("/spec local is reviewing + Personal Comments + Local badge",
+      /RO_REVIEWING = true/.test(specLocal.html) && /Personal Comments/.test(specLocal.html) && /ro-mode-local/.test(specLocal.html));
+    check("/spec local never proxies images via ADO",
+      !/spec\/media\?repo=/.test(specLocal.html) && (!/spec\/media\?/.test(specLocal.html) || /spec\/media\?local=/.test(specLocal.html)));
 
     // ---- Branches tab wires remote cards to the in-app /branch page ----
     check("remote branch cards open the in-app /branch page",

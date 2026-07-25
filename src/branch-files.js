@@ -25,18 +25,29 @@ export function splitSpecPath(filePath) {
 // review page (which carries the comment/threads pane), pinned to this branch.
 // An optional `back` (a relative path) is threaded so /spec returns to the
 // branch page instead of the Specs tab. `mode` ("remote"/"local") tells /spec
-// which editing mode to badge (file-reviewing mode).
-export function buildSpecHref({ repoId, repoName, project, ref, path: filePath, back, mode } = {}) {
+// which editing mode to badge (file-reviewing mode). In local mode the link
+// carries the clone path (`local`) instead of an ADO repo id/name/project, so
+// /spec reads content from the local clone and never touches ADO.
+export function buildSpecHref({ repoId, repoName, project, ref, path: filePath, back, mode, localPath } = {}) {
   const branch = String(ref || "").replace(/^refs\/heads\//, "");
-  const q = [
-    ["repo", repoId],
-    ["path", filePath],
-    ["repoName", repoName],
-    ["project", project],
-    ["branch", branch],
-    ["back", back],
-    ["mode", mode],
-  ]
+  const pairs = localPath
+    ? [
+        ["local", localPath],
+        ["path", filePath],
+        ["branch", branch],
+        ["back", back],
+        ["mode", "local"],
+      ]
+    : [
+        ["repo", repoId],
+        ["path", filePath],
+        ["repoName", repoName],
+        ["project", project],
+        ["branch", branch],
+        ["back", back],
+        ["mode", mode],
+      ];
+  const q = pairs
     .filter(([, v]) => v != null && v !== "")
     .map(([k, v]) => `${k}=${encodeURIComponent(String(v))}`)
     .join("&");

@@ -35,6 +35,7 @@ export function registerControlApi(app, deps) {
     listMyBranches,     // async ({project}) => {branches, ...} (optional) — Discovery Branches tab
     openLocalRepo,      // async ({path}) => {ok, path, branch} (optional) — Discovery local-repo tile
     listLocalBranches,  // async ({path}) => {ok, path, branches} (optional) — Discovery Branches tab (Local)
+    pickLocalFolder,    // async () => {ok, path, branch} | {canceled} (optional) — native folder dialog
     listPersonalComments,   // async ({repo, branch, path}) => {ok, comments} (optional) — Personal Comments
     createPersonalComment,  // async ({repo, branch, path, line, content}) => {ok, comment} (optional)
     editPersonalComment,    // async ({repo, branch, path, id, content}) => {ok, comment|deleted} (optional)
@@ -470,6 +471,18 @@ export function registerControlApi(app, deps) {
     try {
       const { path: repoPath } = req.body || {};
       res.json(await listLocalBranches({ path: repoPath }));
+    } catch (e) {
+      res.status(502).json({ error: String(e?.message || e) });
+    }
+  });
+
+  // Discovery Branches tab (Local mode): POST -> pop a native OS folder dialog
+  // on the user's desktop and return the chosen local repo path (server-side git
+  // needs a real path; the browser picker hides it). same-origin or bearer.
+  app.post("/api/v1/local-pick", requireAuth({ mutation: true }), async (_req, res) => {
+    if (typeof pickLocalFolder !== "function") return res.status(501).json({ error: "folder picker not wired" });
+    try {
+      res.json(await pickLocalFolder());
     } catch (e) {
       res.status(502).json({ error: String(e?.message || e) });
     }
