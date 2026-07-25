@@ -49,6 +49,7 @@ import { getSpecContentAt, getSpecBlobAt, buildSpecWebUrl, getLastCommitAuthor }
 import { branchesForRepo, sortBranches, shortBranchName } from "./branch-list.js";
 import { branchFileRows, visibleFileCount, mdPathsFromChanges } from "./branch-files.js";
 import { validateLocalRepo, resolveGitDir, parseGitHead, parsePackedRefs, mergeLocalBranches, parseOriginHeadDefault, userCreatedBranches } from "./local-repo.js";
+import { newComment as pcNew, addComment as pcAdd, updateComment as pcUpdate, removeComment as pcRemove, findComment as pcFind, sortComments as pcSort, setResolved as pcSetResolved, navTargetId as pcNavTarget } from "./personal-comments.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -163,6 +164,35 @@ function addPending(prId, action) {
 function removePending(prId, actionId) {
   const pending = loadPending(prId).filter((p) => p.id !== actionId);
   savePending(prId, pending);
+}
+
+// --- Personal Comments store (file/branch-scoped, local) ---
+// A spec author's own notes on a draft file, kept locally per (repo, branch,
+// path). List ops are pure (personal-comments.js); disk I/O lives here.
+const PERSONAL_COMMENTS_DIR = path.join(CONFIG_DIR, "personal-comments");
+
+function personalCommentsKey(repoId, branch, filePath) {
+  const h = crypto.createHash("sha1");
+  h.update(`${repoId}\n${branch}\n${filePath}`);
+  return h.digest("hex");
+}
+
+function loadPersonalComments(repoId, branch, filePath) {
+  try {
+    const p = path.join(PERSONAL_COMMENTS_DIR, `${personalCommentsKey(repoId, branch, filePath)}.json`);
+    const data = JSON.parse(fs.readFileSync(p, "utf-8"));
+    return Array.isArray(data.comments) ? data.comments : [];
+  } catch { return []; }
+}
+
+function savePersonalComments(repoId, branch, filePath, comments) {
+  try {
+    fs.mkdirSync(PERSONAL_COMMENTS_DIR, { recursive: true, mode: 0o700 });
+    const p = path.join(PERSONAL_COMMENTS_DIR, `${personalCommentsKey(repoId, branch, filePath)}.json`);
+    fs.writeFileSync(p, JSON.stringify({ repo: repoId, branch, path: filePath, comments }, null, 2), { mode: 0o600 });
+  } catch (e) {
+    console.warn(`  \u26a0 Could not save personal comments: ${e.code || e.message}`);
+  }
 }
 
 // --- ADO error helper ---
@@ -2377,17 +2407,28 @@ body { font-family: "Segoe UI", Aptos, Calibri, -apple-system, sans-serif; backg
   }
 })();
 </script>
+${NAV_WATCHER}
 </body></html>`;
 }
 
-function buildReadonlySpecPage({ title, bodyHtml, toc, specPath, repo, adoUrl, backHref, backLabel, historyUrl, sourceMap }) {
+function buildReadonlySpecPage({ title, bodyHtml, toc, specPath, repo, adoUrl, backHref, backLabel, historyUrl, sourceMap, reviewing, editMode, commentCount = 0, reviewRepo, reviewBranch, reviewPath, currentUser, personalComments, pcDataSeq = 0 }) {
   const back = backHref || "/discovery?tab=specs";
   const backText = backLabel || "Specs";
   const crumb = escHtml((repo ? repo + " \u00b7 " : "") + specPath);
+  // File-reviewing mode (opened from a branch): the margin is a Personal Comments
+  // pane (hidden until a comment exists); otherwise it's the PR Review History.
+  const paneTitle = reviewing ? "Personal Comments" : "Review History";
+  const marginCollapsed = reviewing ? (commentCount > 0 ? "" : "collapsed") : "collapsed";
+  const modeTag = editMode
+    ? `<span class="ro-mode ro-mode-${editMode}">${editMode === "local" ? "Local" : "Remote"} editing mode</span>`
+    : "";
+  const refreshBtn = `<button type="button" class="ro-refresh" onclick="location.reload()" title="Reload this file">\u21bb Refresh</button>`;
   const tocHtml = (toc || []).length
     ? (toc || []).map((t) => `<a href="#${t.id}" class="toc-item" style="padding-left:${(t.level - 1) * 10 + 8}px">${escHtml(t.text)}</a>`).join("")
     : '<div class="ro-empty">No headings.</div>';
-  const historyHtml = '<div class="ro-empty" id="roHistLoading">Loading review history\u2026</div>';
+  const historyHtml = reviewing
+    ? '<div class="ro-empty" id="roHistLoading">No personal comments yet.</div>'
+    : '<div class="ro-empty" id="roHistLoading">Loading review history\u2026</div>';
   return `<!DOCTYPE html>
 <html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>${escHtml(title)} \u2014 Tippani</title>
@@ -2399,6 +2440,11 @@ body { font-family: "Segoe UI", Aptos, Calibri, -apple-system, sans-serif; backg
 .ro-back { font-size: 13px; font-weight: 600; color: var(--cp-accent); text-decoration: none; white-space: nowrap; }
 .ro-back:hover { text-decoration: underline; }
 .ro-topbar-title { flex: 1 1 auto; min-width: 0; font-size: 14px; font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ro-refresh { flex: 0 0 auto; font-family: inherit; font-size: 12px; font-weight: 600; color: var(--cp-accent); background: none; border: none; cursor: pointer; padding: 4px 6px; white-space: nowrap; }
+.ro-refresh:hover { text-decoration: underline; }
+.ro-mode { flex: 0 0 auto; font-size: 11px; font-weight: 700; padding: 4px 12px; border-radius: 99px; text-transform: uppercase; letter-spacing: 0.4px; white-space: nowrap; background: var(--cp-accent-soft); color: var(--cp-accent); }
+.ro-mode-local { background: rgba(47,143,78,0.16); color: #2f8f4e; }
+[data-theme="dark"] .ro-mode-local { background: rgba(90,190,120,0.18); color: #6ecb8b; }
 .ro-shell { display: flex; align-items: stretch; }
 .ro-pane { flex: 0 0 auto; transition: width 0.18s ease; overflow: visible; }
 .ro-toc { width: 250px; border-right: 1px solid var(--cp-border); }
@@ -2483,6 +2529,21 @@ body { font-family: "Segoe UI", Aptos, Calibri, -apple-system, sans-serif; backg
 .rh-marker-active { background: var(--cp-accent); color: var(--cp-accent-fg); }
 .rh-marker-resolved { background: var(--cp-success); color: #fff; }
 body.show-markers .rh-marker { display: inline-flex; }
+/* Personal Comments: hover affordance + add dot + edit controls (file-reviewing mode). */
+.ro-commentable.pc-hover, .ro-commentable.pc-active { box-shadow: 0 0 0 2px var(--cp-accent); border-radius: 6px; }
+[data-theme="dark"] .ro-commentable.pc-hover, [data-theme="dark"] .ro-commentable.pc-active { box-shadow: 0 0 0 2px #b23a58; }
+.pc-add { position: absolute; top: 4px; right: 4px; width: 24px; height: 24px; border-radius: 50%; border: none; background: var(--cp-accent); color: #fff; font-size: 14px; font-weight: 700; line-height: 1; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; z-index: 6; box-shadow: 0 1px 5px rgba(0,0,0,0.25); }
+.pc-add:hover { transform: scale(1.12); }
+.pc-card .rh-count { display: none; }
+.pc-card .pc-ico { flex: 0 0 auto; margin-left: 4px; padding: 2px 4px; font-size: 13px; line-height: 1; border: none; background: none; color: var(--cp-text-muted); cursor: pointer; border-radius: 4px; }
+.pc-card .pc-ico:hover { color: var(--cp-accent); background: var(--cp-surface-soft); }
+.pc-card .pc-del:hover { color: #c0392b; }
+.pc-card .pc-resolve:hover { color: #2f8f4e; }
+.pc-card .pc-save { display: none; font-family: "Segoe MDL2 Assets", "Segoe Fluent Icons"; font-size: 14px; }
+.pc-card.pc-editing .pc-save { display: inline-flex; }
+.pc-card.pc-editing .pc-edit { display: none; }
+.pc-card.pc-resolved .rh-badge { text-decoration: line-through; color: var(--cp-text-muted); }
+.pc-text { width: 100%; min-height: 66px; font-family: inherit; font-size: 13px; padding: 8px; border: 1px solid var(--cp-border); border-radius: 6px; background: var(--cp-bg); color: var(--cp-text); resize: vertical; box-sizing: border-box; }
 .mermaid-block { margin: 14px 0; text-align: center; overflow-x: auto; }
 .mermaid-block svg { max-width: 100%; height: auto; }
 .mermaid-block.mermaid-error { text-align: left; }
@@ -2494,6 +2555,8 @@ body.show-markers .rh-marker { display: inline-flex; }
   <div class="ro-topbar">
     <a class="ro-back" href="${escHtml(back)}">\u2190 ${escHtml(backText)}</a>
     <span class="ro-topbar-title">${escHtml(title)}</span>
+    ${refreshBtn}
+    ${modeTag}
   </div>
   <div class="ro-shell">
     <aside class="ro-pane ro-toc" id="roToc">
@@ -2509,9 +2572,9 @@ body.show-markers .rh-marker { display: inline-flex; }
         <div class="ro-doc">${bodyHtml}</div>
       </div>
     </main>
-    <aside class="ro-margin collapsed" id="roMargin">
-      <div class="ro-margin-head"><span class="ro-margin-title">Review History</span><button class="ro-toggle" data-target="roMargin" title="Hide">\u00bb</button></div>
-      <button class="ro-rail" data-target="roMargin" title="Show review history">\u00ab<span class="ro-rail-label">Review History</span></button>
+    <aside class="ro-margin ${marginCollapsed}" id="roMargin">
+      <div class="ro-margin-head"><span class="ro-margin-title">${escHtml(paneTitle)}</span><button class="ro-toggle" data-target="roMargin" title="Hide">\u00bb</button></div>
+      <button class="ro-rail" data-target="roMargin" title="Show ${escHtml(paneTitle.toLowerCase())}">\u00ab<span class="ro-rail-label">${escHtml(paneTitle)}</span></button>
       <div class="ro-margin-body" id="roMarginBody">${historyHtml}</div>
     </aside>
   </div>
@@ -2531,7 +2594,15 @@ body.show-markers .rh-marker { display: inline-flex; }
     // expands its comments, and reflows the column so nothing overlaps.
     (function () {
       var RO_SOURCE_MAP = ${JSON.stringify(sourceMap || [])};
-      var RO_HISTORY_URL = ${JSON.stringify(historyUrl || "")};
+      var RO_HISTORY_URL = ${JSON.stringify(reviewing ? "" : (historyUrl || ""))};
+      // Author-comments (file-reviewing) mode config.
+      var RO_REVIEWING = ${reviewing ? "true" : "false"};
+      var RO_REPO = ${JSON.stringify(reviewRepo || "")};
+      var RO_BRANCH = ${JSON.stringify(reviewBranch || "")};
+      var RO_PATH = ${JSON.stringify(reviewPath || "")};
+      var RO_USER = ${JSON.stringify(currentUser || "You")};
+      var RO_PERSONAL_COMMENTS = ${JSON.stringify(personalComments || [])};
+      var RO_PC_DATASEQ = ${Number(pcDataSeq) || 0};
       var marginEl = document.getElementById('roMargin');
       var docEl = document.querySelector('.ro-doc');
       if (!marginEl || !docEl) return;
@@ -2543,7 +2614,7 @@ body.show-markers .rh-marker { display: inline-flex; }
         // replaced each mermaid <pre> with a <div class="mermaid-block"> in place;
         // the server range map counted that <pre>, so the div must occupy its slot
         // to keep the index alignment 1:1.
-        docEl.querySelectorAll('p, li, blockquote, table, pre, .mermaid-block').forEach(function (el) {
+        docEl.querySelectorAll('h1, h2, h3, h4, h5, h6, p, li, blockquote, table, pre, .mermaid-block').forEach(function (el) {
           if (el.closest('.ro-commentable')) return; // outermost only, mirrors the map
           el.classList.add('ro-commentable');
           blocks.push(el);
@@ -2633,12 +2704,285 @@ body.show-markers .rh-marker { display: inline-flex; }
       // up the cards, anchor markers and layout.
       function loadHistory() {
         var body = document.getElementById('roMarginBody');
+        // File-reviewing mode: no PR history to fetch; the pane already shows the
+        // Reviewer Comments empty state. Just wire up (zero) cards.
+        if (!RO_HISTORY_URL) { setupCards(); return; }
         fetch(RO_HISTORY_URL).then(function (r) { return r.json(); }).then(function (d) {
           if (body) body.innerHTML = (d && d.html) || '<div class="ro-empty">No review history.</div>';
           setupCards();
         }).catch(function () {
           if (body) body.innerHTML = '<div class="ro-empty">Could not load review history.</div>';
         });
+      }
+      // ---- Personal Comments (file-reviewing mode) ----------------------------
+      // Hover a block to border it + reveal an "add" dot; click the dot to open a
+      // draft card in the margin. Empty drafts vanish when the block loses focus;
+      // a typed draft auto-saves. Existing comments get the same anchor markers,
+      // focus and layout as PR review, plus edit/delete.
+      var pcBody = function () { return document.getElementById('roMarginBody'); };
+      var pcDraft = null; // the single in-progress draft card, or null
+      var pcShowResolvedState = true;      // hide/show resolved cards (MCP-driven)
+      var pcLastDataSeq = RO_PC_DATASEQ;   // last comment-data version this page has applied
+      var pcLastCmdSeq = 0;                // last one-shot UI command applied
+      var pcPollInit = false;              // first poll only syncs baselines
+      function pcEsc(s) { return String(s == null ? '' : s).replace(/[&<>"]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; }); }
+      function pcWhen(iso) { try { return new Date(iso).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }); } catch (e) { return ''; } }
+      function pcSnippet(t) {
+        // Collapse whitespace WITHOUT a backslash regex: inside this server
+        // template literal, /\s+/ would become /s+/ and strip every "s".
+        var s = String(t || ''), out = '', prevWs = false;
+        var TAB = String.fromCharCode(9), LF = String.fromCharCode(10), CR = String.fromCharCode(13), FF = String.fromCharCode(12), VT = String.fromCharCode(11);
+        for (var i = 0; i < s.length; i++) {
+          var ch = s.charAt(i);
+          if (ch === ' ' || ch === TAB || ch === LF || ch === CR || ch === FF || ch === VT) { if (!prevWs && out) out += ' '; prevWs = true; }
+          else { out += ch; prevWs = false; }
+        }
+        return pcEsc(out.replace(/^ +| +$/g, '').slice(0, 90));
+      }
+      function pcLineForBlock(b) { var i = blocks.indexOf(b); var sm = RO_SOURCE_MAP[i]; return sm ? sm.startLine : null; }
+      function clearMarkers() { docEl.querySelectorAll('.rh-marker').forEach(function (m) { m.remove(); }); docEl.querySelectorAll('[data-pc-mk]').forEach(function (b) { b.__mk = 0; b.removeAttribute('data-pc-mk'); }); }
+      function pcRefresh() {
+        cards = [].slice.call(marginEl.querySelectorAll('.pc-card'));
+        if (!cards.length) { var b = pcBody(); if (b && !b.querySelector('.ro-empty')) b.innerHTML = '<div class="ro-empty">No personal comments yet.</div>'; }
+        clearMarkers();
+        docEl.querySelectorAll('h1,h2,h3,h4,h5,h6,p,li,blockquote,table,pre,.mermaid-block').forEach(function (b) { b.__mk = 0; });
+        makeMarkers();
+        // Apply the current hide/show-resolved view state after any re-render.
+        cards.forEach(function (card) { if (card.classList.contains('pc-resolved')) card.hidden = !pcShowResolvedState; });
+        if (!pcShowResolvedState) docEl.querySelectorAll('.rh-marker-resolved').forEach(function (m) { m.style.display = 'none'; });
+        document.body.classList.toggle('show-markers', !marginEl.classList.contains('collapsed') && cards.length > 0);
+        layout(); setTimeout(layout, 60);
+      }
+      function pcApplyShowResolved(show) { pcShowResolvedState = (show !== false); pcRefresh(); }
+      function pcReportSelected(id) { pcApi('POST', '/api/v1/personal-comments/select', { id: id || '' }); }
+      function pcFocusById(id) {
+        for (var i = 0; i < cards.length; i++) {
+          if (cards[i].getAttribute('data-id') === id) {
+            if (marginEl.classList.contains('collapsed')) marginEl.classList.remove('collapsed');
+            if (cards[i].hidden) { pcShowResolvedState = true; cards[i].hidden = false; }
+            focus(cards[i], 'card');
+            return true;
+          }
+        }
+        return false;
+      }
+      function pcReloadComments() {
+        var q = '?repo=' + encodeURIComponent(RO_REPO) + '&branch=' + encodeURIComponent(RO_BRANCH) + '&path=' + encodeURIComponent(RO_PATH);
+        return fetch('/api/v1/personal-comments' + q).then(function (r) { return r.ok ? r.json() : null; }).then(function (d) {
+          if (!d || !d.ok) return;
+          // Don't clobber an in-progress draft/edit.
+          if (pcDraft || marginEl.querySelector('.pc-editing')) return;
+          var body = pcBody(); if (body) body.innerHTML = '';
+          (d.comments || []).forEach(function (c) { pcBody().appendChild(pcBuildCard(c, false)); });
+          if (!(d.comments || []).length && body) body.innerHTML = '<div class="ro-empty">No personal comments yet.</div>';
+          pcRefresh();
+        }).catch(function () {});
+      }
+      function pcPoll() {
+        fetch('/api/v1/state').then(function (r) { return r.ok ? r.json() : null; }).then(function (s) {
+          if (!s) return;
+          if (!pcPollInit) { pcPollInit = true; if (typeof s.pcCommandSeq === 'number') pcLastCmdSeq = s.pcCommandSeq; if (typeof s.pcDataSeq === 'number') pcLastDataSeq = Math.max(pcLastDataSeq, s.pcDataSeq); return; }
+          if (typeof s.pcDataSeq === 'number' && s.pcDataSeq > pcLastDataSeq) { pcLastDataSeq = s.pcDataSeq; pcReloadComments(); }
+          if (typeof s.pcCommandSeq === 'number' && s.pcCommandSeq > pcLastCmdSeq) {
+            pcLastCmdSeq = s.pcCommandSeq;
+            var cmd = s.pcCommand;
+            if (cmd && cmd.type === 'focus' && cmd.id) { if (!pcFocusById(cmd.id)) { pcReloadComments().then(function () { pcFocusById(cmd.id); }); } }
+            else if (cmd && cmd.type === 'showResolved') pcApplyShowResolved(cmd.show !== false);
+            else if (cmd && cmd.type === 'reload') location.reload();
+          }
+        }).catch(function () {});
+      }
+      function pcBuildCard(c, isDraft) {
+        var card = document.createElement('div');
+        card.className = 'rh-thread pc-card' + (isDraft ? ' pc-draft' : '') + (c.resolved ? ' pc-resolved' : '');
+        if (c.line != null) card.setAttribute('data-line', c.line);
+        if (c.id) card.setAttribute('data-id', c.id);
+        card.__data = c;
+        var resolveIco = isDraft ? '' : '<button type="button" class="pc-ico pc-resolve" title="' + (c.resolved ? 'Reopen' : 'Resolve') + '">' + (c.resolved ? '\u21ba' : '\u2713') + '</button>';
+        var resTag = c.resolved ? '<span class="rh-res" title="Resolved">\u2713</span>' : '';
+        card.innerHTML =
+          '<div class="rh-head"><span class="rh-badge">' + pcEsc(c.author || RO_USER) + ' \u00b7 ' + pcWhen(c.updatedAt || c.createdAt || new Date().toISOString()) + '</span>'
+          + '<span class="rh-hline">' + (c.line != null ? ':' + c.line : '') + '</span>' + resTag + '<span class="rh-count">1</span>'
+          + '<button type="button" class="pc-ico pc-save" title="Save">\ue74e</button>'
+          + resolveIco
+          + '<button type="button" class="pc-ico pc-edit" title="Edit">\u270e</button>'
+          + '<button type="button" class="pc-ico pc-del" title="Delete">\u{1f5d1}</button></div>'
+          + '<div class="rh-summary"><span class="rh-who"></span> ' + pcSnippet(c.content) + '</div>'
+          + '<div class="rh-full">'
+          + '<div class="pc-view"><div class="rh-body">' + (c.html || pcEsc(c.content)) + '</div></div>'
+          + '<div class="pc-editbox" hidden><textarea class="pc-text" placeholder="Add a comment\u2026 (saves when you click away)"></textarea></div>'
+          + '</div>';
+        pcWireCard(card);
+        return card;
+      }
+      function pcShowEdit(card, open) {
+        card.querySelector('.pc-view').hidden = open;
+        card.querySelector('.pc-editbox').hidden = !open;
+        card.classList.toggle('pc-editing', open);
+        card.classList.toggle('rh-expanded', true);
+      }
+      function pcApi(method, url, body) {
+        return fetch(url, { method: method, headers: { 'Content-Type': 'application/json' }, body: body ? JSON.stringify(body) : undefined }).then(function (r) { return r.json().catch(function () { return {}; }); });
+      }
+      function pcCoords() { return { repo: RO_REPO, branch: RO_BRANCH, path: RO_PATH }; }
+      function pcRemoveDraft() {
+        if (!pcDraft) return;
+        var b = pcDraft.__block; if (b) b.classList.remove('pc-active');
+        pcDraft.remove(); pcDraft = null; pcRefresh();
+      }
+      function pcCommit(card) {
+        if (card.__saving || !card.isConnected) return;
+        var ta = card.querySelector('.pc-text'); if (!ta) return;
+        var text = ta.value.trim();
+        var isDraft = card.classList.contains('pc-draft');
+        var orig = (card.__data && card.__data.content) || '';
+        if (isDraft) {
+          if (!text) { pcRemoveDraft(); return; }
+          card.__saving = true;
+          var payload = Object.assign({}, pcCoords(), { line: card.__data.line, content: text });
+          pcApi('POST', '/api/v1/personal-comments', payload).then(function (d) {
+            card.__saving = false;
+            if (!d || !d.ok || !d.comment) { return; }
+            if (typeof d.dataSeq === 'number') pcLastDataSeq = d.dataSeq;
+            card.classList.remove('pc-draft');
+            var b = card.__block; if (b) b.classList.remove('pc-active');
+            var nb = card.__block; card = pcReplace(card, d.comment); if (nb) card.__block = nb;
+            pcDraft = null; pcRefresh();
+          });
+        } else {
+          // Existing comment: emptying it saves an empty comment (allowed) — only
+          // an untouched edit is a no-op.
+          if (text === orig) { pcShowEdit(card, false); return; }
+          card.__saving = true;
+          var pl = Object.assign({}, pcCoords(), { content: text });
+          pcApi('PUT', '/api/v1/personal-comments/' + encodeURIComponent(card.getAttribute('data-id')), pl).then(function (d) {
+            card.__saving = false;
+            if (!d || !d.ok) return;
+            if (typeof d.dataSeq === 'number') pcLastDataSeq = d.dataSeq;
+            if (d.deleted) { pcRemoveCardDom(card); return; }
+            pcReplace(card, d.comment); pcRefresh();
+          });
+        }
+      }
+      function pcReplace(card, c) {
+        var fresh = pcBuildCard(c, false);
+        card.replaceWith(fresh);
+        return fresh;
+      }
+      function pcRemoveCardDom(card) { card.remove(); pcRefresh(); }
+      function pcDelete(card) {
+        if (card.classList.contains('pc-draft')) { pcRemoveDraft(); return; }
+        var id = card.getAttribute('data-id');
+        pcApi('DELETE', '/api/v1/personal-comments/' + encodeURIComponent(id), pcCoords()).then(function (d) { if (d && typeof d.dataSeq === 'number') pcLastDataSeq = d.dataSeq; pcRemoveCardDom(card); });
+      }
+      function pcToggleResolved(card) {
+        if (card.classList.contains('pc-draft') || card.__resolving) return;
+        var id = card.getAttribute('data-id'); if (!id) return;
+        var next = !(card.__data && card.__data.resolved);
+        card.__resolving = true;
+        pcApi('POST', '/api/v1/personal-comments/' + encodeURIComponent(id) + '/resolve', Object.assign({}, pcCoords(), { resolved: next })).then(function (d) {
+          card.__resolving = false;
+          if (!d || !d.ok || !d.comment) return;
+          if (typeof d.dataSeq === 'number') pcLastDataSeq = d.dataSeq;
+          // Update the card IN PLACE so it keeps its expanded/focused state
+          // (rebuilding collapsed it, which read as "resolve didn't work").
+          card.__data = d.comment;
+          card.classList.toggle('pc-resolved', !!d.comment.resolved);
+          var resBtn = card.querySelector('.pc-resolve');
+          if (resBtn) { resBtn.textContent = d.comment.resolved ? '\u21ba' : '\u2713'; resBtn.title = d.comment.resolved ? 'Reopen' : 'Resolve'; }
+          var head = card.querySelector('.rh-head');
+          var res = head.querySelector('.rh-res');
+          if (d.comment.resolved && !res) { var span = document.createElement('span'); span.className = 'rh-res'; span.title = 'Resolved'; span.textContent = '\u2713'; head.insertBefore(span, head.querySelector('.rh-count')); }
+          else if (!d.comment.resolved && res) { res.remove(); }
+          pcRefresh(); // recolor the anchor marker (resolved -> green)
+        });
+      }
+      function pcWireCard(card) {
+        card.addEventListener('click', function (e) {
+          if (e.target.closest && e.target.closest('button, textarea, a')) return;
+          if (card.classList.contains('rh-expanded')) { clearFocus(); layout(); pcReportSelected(null); return; }
+          focus(card, 'block'); pcReportSelected(card.getAttribute('data-id'));
+        });
+        var editBtn = card.querySelector('.pc-edit'); if (editBtn) editBtn.addEventListener('click', function (e) { e.stopPropagation(); var ta = card.querySelector('.pc-text'); ta.value = (card.__data && card.__data.content) || ''; pcShowEdit(card, true); ta.focus(); });
+        var delBtn = card.querySelector('.pc-del'); if (delBtn) delBtn.addEventListener('click', function (e) { e.stopPropagation(); pcDelete(card); });
+        var resBtn = card.querySelector('.pc-resolve'); if (resBtn) resBtn.addEventListener('click', function (e) { e.stopPropagation(); pcToggleResolved(card); });
+        var saveBtn = card.querySelector('.pc-save'); if (saveBtn) saveBtn.addEventListener('click', function (e) { e.stopPropagation(); pcCommit(card); });
+        var ta = card.querySelector('.pc-text');
+        if (ta) {
+          // Commits on Save, Ctrl+Enter, or losing focus.
+          ta.addEventListener('keydown', function (e) {
+            if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') { e.preventDefault(); ta.blur(); }
+          });
+          ta.addEventListener('blur', function () { setTimeout(function () { var ae = document.activeElement; if (ae && card.contains(ae)) return; pcCommit(card); }, 150); });
+        }
+      }
+      function pcCreateDraft(block, line) {
+        if (pcDraft) { var ta0 = pcDraft.querySelector('.pc-text'); if (ta0 && ta0.value.trim()) { pcCommit(pcDraft); } else { pcRemoveDraft(); } }
+        if (marginEl.classList.contains('collapsed')) marginEl.classList.remove('collapsed');
+        var empty = pcBody().querySelector('.ro-empty'); if (empty) empty.remove();
+        var c = { id: '', line: line, author: RO_USER, content: '', createdAt: new Date().toISOString() };
+        var card = pcBuildCard(c, true);
+        card.__block = block;
+        pcBody().appendChild(card);
+        pcDraft = card;
+        block.classList.add('pc-active');
+        pcShowEdit(card, true);
+        pcRefresh();
+        var ta = card.querySelector('.pc-text'); if (ta) ta.focus();
+        focus(card, 'card');
+      }
+      function pcAddDot(block) {
+        if (block.querySelector('.pc-add')) return;
+        block.style.position = 'relative';
+        var dot = document.createElement('button');
+        dot.type = 'button'; dot.className = 'pc-add'; dot.textContent = '\uff0b';
+        dot.title = 'Add personal comment';
+        dot.addEventListener('click', function (e) { e.stopPropagation(); pcCreateDraft(block, pcLineForBlock(block)); });
+        block.appendChild(dot);
+      }
+      function pcWireHover() {
+        blocks.forEach(function (b) {
+          b.addEventListener('mouseenter', function () { b.classList.add('pc-hover'); pcAddDot(b); });
+          b.addEventListener('mouseleave', function () {
+            b.classList.remove('pc-hover');
+            var dot = b.querySelector('.pc-add'); if (dot) dot.remove();
+            // An empty, unfocused draft anchored here vanishes when the block loses focus.
+            if (pcDraft && pcDraft.__block === b) {
+              var ta = pcDraft.querySelector('.pc-text');
+              if (ta && !ta.value.trim() && document.activeElement !== ta) pcRemoveDraft();
+            }
+          });
+        });
+      }
+      function pcCardForBlock(block) {
+        var line = pcLineForBlock(block);
+        if (line == null) return null;
+        for (var i = 0; i < cards.length; i++) { if (parseInt(cards[i].getAttribute('data-line'), 10) === line) return cards[i]; }
+        return null;
+      }
+      // Clicking a different section clears the current section's border/focus and
+      // un-highlights its comment; clicking a section that has a comment focuses it.
+      function pcWireContentClicks() {
+        docEl.addEventListener('click', function (e) {
+          if (e.target.closest('.pc-add, .rh-marker, a, button, textarea, input')) return;
+          var focusedBlock = docEl.querySelector('.section-focused');
+          var block = e.target.closest('.ro-commentable');
+          if (block && block === focusedBlock) return; // clicking the focused section: keep it
+          var card = block ? pcCardForBlock(block) : null;
+          if (card) { focus(card, 'card'); pcReportSelected(card.getAttribute('data-id')); }
+          else if (focusedBlock) { clearFocus(); layout(); pcReportSelected(null); }
+        });
+      }
+      function pcLoad() {
+        var body = pcBody();
+        if (body) body.innerHTML = '';
+        (RO_PERSONAL_COMMENTS || []).forEach(function (c) { pcBody().appendChild(pcBuildCard(c, false)); });
+        if (!(RO_PERSONAL_COMMENTS || []).length && body) body.innerHTML = '<div class="ro-empty">No personal comments yet.</div>';
+        pcWireHover();
+        pcWireContentClicks();
+        pcRefresh();
+        // Live channel: poll for MCP-driven data changes + one-shot UI commands.
+        setInterval(pcPoll, 1200); pcPoll();
       }
       function init() {
         collectBlocks();
@@ -2652,7 +2996,7 @@ body.show-markers .rh-marker { display: inline-flex; }
           if (shown) { layout(); setTimeout(layout, 60); }
         });
         mo.observe(marginEl, { attributes: true, attributeFilter: ['class'] });
-        loadHistory();
+        if (RO_REVIEWING) pcLoad(); else loadHistory();
       }
       // Run after the mermaid transform has claimed its blocks (it registers its
       // own DOMContentLoaded handler earlier, so it runs first).
@@ -2660,6 +3004,7 @@ body.show-markers .rh-marker { display: inline-flex; }
       else init();
     })();
   <\/script>
+${NAV_WATCHER}
 </body></html>`;
 }
 
@@ -4978,7 +5323,7 @@ async function main() {
       const raw = await getSpecContentAt(_conn, repoId, specPath, branch);
       const { metadata, body } = stripFrontmatter(raw);
       const { toc } = buildSourceMap(body);
-      const { html, ranges } = await renderSpecBody(body, specSanitizeSchema, {});
+      const { html, ranges } = await renderSpecBody(body, specSanitizeSchema, { includeHeadings: true });
       const bodyHtml = html.replace(/(<img\b[^>]*\bsrc=")([^"]+)(")/gi, (m, pre, src, post) => {
         if (/^(https?:|data:|\/\/|\/spec\/media)/i.test(src)) return m;
         return pre + `/spec/media?repo=${encodeURIComponent(repoId)}&spec=${encodeURIComponent(specPath)}&branch=${encodeURIComponent(branch)}&src=${encodeURIComponent(src)}` + post;
@@ -4993,10 +5338,26 @@ async function main() {
       const backHref = safeBack || ("/discovery?tab=specs" + (backQ ? "&q=" + encodeURIComponent(backQ) : "") + (project ? "&project=" + encodeURIComponent(project) : ""));
       // Label the back link for where it actually goes (a branch page vs. Specs).
       const backLabel = safeBack.startsWith("/branch") ? "Branch" : "Specs";
+      // File-reviewing mode = opened from a branch: the margin becomes a Reviewer
+      // Comments pane and the corner shows the editing-mode badge. `mode` is
+      // remote/local, threaded from the branch file link.
+      const reviewing = safeBack.startsWith("/branch");
+      const modeParam = String(req.query.mode || "");
+      const editMode = reviewing && (modeParam === "remote" || modeParam === "local") ? modeParam : null;
+      // Personal comments are file/branch scoped; load them + the signed-in user so
+      // the page can render existing notes and stamp new ones.
+      const personalComments = reviewing ? (await listPersonalComments({ repo: repoId, branch, path: specPath })).comments || [] : [];
+      const me = reviewing ? await getMe() : null;
+      const commentCount = personalComments.length;
+      // Record which file the open reviewing page shows so param-less MCP tools
+      // ("read all comments", "add comment") act on it. The data-seq baseline
+      // lets the page ignore its OWN mutations and only re-fetch on external ones.
+      if (reviewing) _focus.setPcContext({ repo: repoId, branch, path: specPath });
+      const pcDataSeq = _focus.get().pcDataSeq;
       // History is fetched asynchronously by the page (see /spec/history) so the
       // spec paints without waiting on the ADO commit->PR->threads round-trips.
       const historyUrl = "/spec/history?repo=" + encodeURIComponent(repoId) + "&path=" + encodeURIComponent(specPath) + "&branch=" + encodeURIComponent(branch);
-      res.type("html").send(buildReadonlySpecPage({ title, bodyHtml, toc, specPath, repo: repoName, adoUrl, backHref, backLabel, historyUrl, sourceMap: ranges }));
+      res.type("html").send(buildReadonlySpecPage({ title, bodyHtml, toc, specPath, repo: repoName, adoUrl, backHref, backLabel, historyUrl, sourceMap: ranges, reviewing, editMode, commentCount, reviewRepo: repoId, reviewBranch: branch, reviewPath: specPath, currentUser: me?.displayName || "You", personalComments, pcDataSeq }));
     } catch (e) {
       console.error(`/spec read-only failed for ${specPath}:`, e.message);
       res.status(502).send("Could not open the spec. Check the server console.");
@@ -5013,6 +5374,9 @@ async function main() {
     const ref = String(req.query.ref || "").trim().replace(/^refs\/heads\//, "");
     if (!repoParam || !ref) return res.redirect("/discovery?tab=branches");
     const backHref = "/discovery?tab=branches";
+    // A remote card passes repo=<GUID>; a local card maps to its ADO origin and
+    // passes only repoName. That distinction is the editing mode we badge on /spec.
+    const editMode = isValidRepoId(String(req.query.repo || "").trim()) ? "remote" : "local";
     const orgBase = ADO_ORG.replace(/\/+$/, "");
     const adoUrlFor = (name) => name ? `${orgBase}/${encodeURIComponent(project)}/_git/${encodeURIComponent(name)}?version=GB${encodeURIComponent(ref)}` : "";
     try {
@@ -5024,7 +5388,7 @@ async function main() {
       const { repoId, repoName } = result;
       // Files link back to this exact branch page (not the Specs tab).
       const selfHref = `/branch?project=${encodeURIComponent(project)}&repo=${encodeURIComponent(repoId)}&repoName=${encodeURIComponent(repoName)}&ref=${encodeURIComponent(ref)}`;
-      const ctx = { repoId, repoName, project, ref, back: selfHref };
+      const ctx = { repoId, repoName, project, ref, back: selfHref, mode: editMode };
       const rows = branchFileRows(result.paths, ctx);
       res.type("html").send(buildBranchPage({ repoName, project, ref, rows, backHref, adoUrl: adoUrlFor(repoName), error: null }));
     } catch (e) {
@@ -5462,6 +5826,191 @@ async function main() {
     return { branches, project: proj, count: branches.length };
   }
 
+  // Personal Comments (read-only spec page, file-reviewing mode): the signed-in
+  // user's own notes on a draft file, stored locally per (repo, branch, path).
+  // Identity is the ADO authenticated user; content is rendered safely.
+  let _me = null;
+  async function getMe() {
+    if (_me) return _me;
+    if (_isOffline || !_conn) return { displayName: "You", id: null };
+    try {
+      const cd = await _conn.connect();
+      _me = { displayName: (cd && cd.authenticatedUser && cd.authenticatedUser.displayName) || "You", id: (cd && cd.authenticatedUser && cd.authenticatedUser.id) || null };
+    } catch { _me = { displayName: "You", id: null }; }
+    return _me;
+  }
+  async function _pcWithHtml(comment) {
+    return { ...comment, html: await renderMarkdownSafe(comment.content || "") };
+  }
+  async function listPersonalComments({ repo, branch, path: filePath } = {}) {
+    if (!repo || !branch || !filePath) return { ok: false, error: "Missing repo/branch/path." };
+    const list = pcSort(loadPersonalComments(repo, branch, filePath));
+    const comments = [];
+    for (const c of list) comments.push(await _pcWithHtml(c));
+    return { ok: true, comments };
+  }
+  async function createPersonalComment({ repo, branch, path: filePath, line, content } = {}) {
+    if (!repo || !branch || !filePath) return { ok: false, error: "Missing repo/branch/path." };
+    const text = String(content == null ? "" : content).trim();
+    if (!text) return { ok: false, error: "Empty comment." };
+    const me = await getMe();
+    const id = Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+    const c = pcNew({ id, line, author: me.displayName, content: text, now: new Date().toISOString() });
+    savePersonalComments(repo, branch, filePath, pcAdd(loadPersonalComments(repo, branch, filePath), c));
+    return { ok: true, comment: await _pcWithHtml(c), dataSeq: _focus.bumpPcData() };
+  }
+  async function editPersonalComment({ repo, branch, path: filePath, id, content } = {}) {
+    if (!repo || !branch || !filePath || !id) return { ok: false, error: "Missing repo/branch/path/id." };
+    const cur = loadPersonalComments(repo, branch, filePath);
+    if (!pcFind(cur, id)) return { ok: false, error: "Not found." };
+    // Editing an existing comment to empty is allowed — it saves an empty comment
+    // (deletion is an explicit action, not a side effect of clearing the text).
+    const text = String(content == null ? "" : content).trim();
+    const list = pcUpdate(cur, id, text, new Date().toISOString());
+    savePersonalComments(repo, branch, filePath, list);
+    return { ok: true, comment: await _pcWithHtml(pcFind(list, id)), dataSeq: _focus.bumpPcData() };
+  }
+  async function deletePersonalComment({ repo, branch, path: filePath, id } = {}) {
+    if (!repo || !branch || !filePath || !id) return { ok: false, error: "Missing repo/branch/path/id." };
+    savePersonalComments(repo, branch, filePath, pcRemove(loadPersonalComments(repo, branch, filePath), id));
+    return { ok: true, id, dataSeq: _focus.bumpPcData() };
+  }
+  async function resolvePersonalComment({ repo, branch, path: filePath, id, resolved } = {}) {
+    if (!repo || !branch || !filePath || !id) return { ok: false, error: "Missing repo/branch/path/id." };
+    const cur = loadPersonalComments(repo, branch, filePath);
+    if (!pcFind(cur, id)) return { ok: false, error: "Not found." };
+    const list = pcSetResolved(cur, id, !!resolved, new Date().toISOString());
+    savePersonalComments(repo, branch, filePath, list);
+    return { ok: true, comment: await _pcWithHtml(pcFind(list, id)), dataSeq: _focus.bumpPcData() };
+  }
+
+  // --- Personal Comments: MCP-facing operations ---------------------------------
+  // These default to the file the open reviewing page reported (pcContext) and
+  // to the selected comment (pcSelectedId), and push UI commands (focus a
+  // comment, hide/show resolved) so MCP actions reflect live in the open page.
+  function pcSummary(c) {
+    return { id: c.id, line: c.line == null ? null : c.line, author: c.author, content: c.content, resolved: !!c.resolved, createdAt: c.createdAt, updatedAt: c.updatedAt };
+  }
+  function pcCtx(args = {}) {
+    const cur = _focus.get().pcContext;
+    return { repo: args.repo || (cur && cur.repo), branch: args.branch || (cur && cur.branch), path: args.path || (cur && cur.path) };
+  }
+  async function mcpReadPersonalComments(args = {}) {
+    const { repo, branch, path: filePath } = pcCtx(args);
+    if (!repo || !branch || !filePath) return { ok: false, error: "No open reviewing file \u2014 open a file first or pass repo/branch/path." };
+    const list = pcSort(loadPersonalComments(repo, branch, filePath));
+    return { ok: true, file: { repo, branch, path: filePath }, selected: _focus.get().pcSelectedId, count: list.length, resolvedCount: list.filter((c) => c.resolved).length, comments: list.map(pcSummary) };
+  }
+  async function mcpAddPersonalComment(args = {}) {
+    const { repo, branch, path: filePath } = pcCtx(args);
+    const r = await createPersonalComment({ repo, branch, path: filePath, line: args.line, content: args.content });
+    if (!r.ok) return r;
+    _focus.setPcSelected(r.comment.id);
+    _focus.setPcCommand({ type: "focus", id: r.comment.id });
+    return { ok: true, comment: pcSummary(r.comment) };
+  }
+  async function mcpEditPersonalComment(args = {}) {
+    const { repo, branch, path: filePath } = pcCtx(args);
+    const id = args.id || _focus.get().pcSelectedId;
+    if (!id) return { ok: false, error: "No comment id and none selected." };
+    const r = await editPersonalComment({ repo, branch, path: filePath, id, content: args.content });
+    return r.ok ? { ok: true, comment: pcSummary(r.comment) } : r;
+  }
+  async function mcpDeletePersonalComment(args = {}) {
+    const { repo, branch, path: filePath } = pcCtx(args);
+    const id = args.id || _focus.get().pcSelectedId;
+    if (!id) return { ok: false, error: "No comment id and none selected." };
+    const r = await deletePersonalComment({ repo, branch, path: filePath, id });
+    if (r.ok && _focus.get().pcSelectedId === id) _focus.setPcSelected(null);
+    return r;
+  }
+  async function mcpResolvePersonalComment(args = {}) {
+    const { repo, branch, path: filePath } = pcCtx(args);
+    const id = args.id || _focus.get().pcSelectedId;
+    if (!id) return { ok: false, error: "No comment id and none selected." };
+    const r = await resolvePersonalComment({ repo, branch, path: filePath, id, resolved: args.resolved !== false });
+    return r.ok ? { ok: true, comment: pcSummary(r.comment) } : r;
+  }
+  async function mcpDeleteResolvedPersonalComments(args = {}) {
+    const { repo, branch, path: filePath } = pcCtx(args);
+    if (!repo || !branch || !filePath) return { ok: false, error: "No open reviewing file." };
+    const cur = loadPersonalComments(repo, branch, filePath);
+    const kept = cur.filter((c) => !c.resolved);
+    savePersonalComments(repo, branch, filePath, kept);
+    _focus.bumpPcData();
+    return { ok: true, removed: cur.length - kept.length, remaining: kept.length };
+  }
+  async function mcpClearPersonalComments(args = {}) {
+    const { repo, branch, path: filePath } = pcCtx(args);
+    if (!repo || !branch || !filePath) return { ok: false, error: "No open reviewing file." };
+    const n = loadPersonalComments(repo, branch, filePath).length;
+    savePersonalComments(repo, branch, filePath, []);
+    _focus.setPcSelected(null);
+    _focus.bumpPcData();
+    return { ok: true, removed: n };
+  }
+  async function mcpNavPersonalComment(args = {}) {
+    const { repo, branch, path: filePath } = pcCtx(args);
+    if (!repo || !branch || !filePath) return { ok: false, error: "No open reviewing file." };
+    const list = pcSort(loadPersonalComments(repo, branch, filePath));
+    if (!list.length) return { ok: false, error: "No comments to navigate." };
+    const targetId = pcNavTarget(list, _focus.get().pcSelectedId, args.direction || "next");
+    _focus.setPcSelected(targetId);
+    _focus.setPcCommand({ type: "focus", id: targetId });
+    const c = pcFind(list, targetId);
+    return { ok: true, selected: targetId, comment: c ? pcSummary(c) : null };
+  }
+  async function mcpJumpPersonalComment(args = {}) {
+    const { repo, branch, path: filePath } = pcCtx(args);
+    if (!repo || !branch || !filePath) return { ok: false, error: "No open reviewing file." };
+    const list = pcSort(loadPersonalComments(repo, branch, filePath));
+    let target = null;
+    if (args.id) target = pcFind(list, args.id);
+    else if (args.line != null) target = list.find((c) => c.line === Number(args.line)) || null;
+    if (!target) return { ok: false, error: "Comment not found." };
+    _focus.setPcSelected(target.id);
+    _focus.setPcCommand({ type: "focus", id: target.id });
+    return { ok: true, selected: target.id, comment: pcSummary(target) };
+  }
+  async function mcpSetPcResolvedVisibility(args = {}) {
+    const show = args.show !== false;
+    _focus.setPcCommand({ type: "showResolved", show });
+    return { ok: true, showResolved: show };
+  }
+  // Ask the open reviewing page to reload its file (re-fetch from ADO) so a push
+  // made outside Tippani becomes visible — the Copilot-callable remote refresh.
+  async function mcpRefreshSpec() {
+    _focus.setPcCommand({ type: "reload" });
+    return { ok: true };
+  }
+  // Open the Branches file-list page for a repo+branch in the user's browser.
+  async function mcpOpenBranch({ project, repo, branch } = {}) {
+    const proj = (project && String(project).trim()) || ADO_PROJECT;
+    const b = String(branch || "").replace(/^refs\/heads\//, "").trim();
+    if (!repo || !b) return { ok: false, error: "repo and branch required." };
+    const p = `/branch?project=${encodeURIComponent(proj)}&repo=${encodeURIComponent(repo)}&ref=${encodeURIComponent(b)}`;
+    _focus.setNav(p);
+    return { ok: true, opened: p };
+  }
+  // Open one spec file read-only in the reviewing view (so the user + the
+  // author-comment tools have a target). Resolves the repo to its canonical
+  // id/name and pins the review context (back=/branch, mode=remote).
+  async function mcpOpenBranchFile({ project, repo, repoName, branch, path: filePath } = {}) {
+    if (_isOffline || !_conn) return { ok: false, error: "offline" };
+    const proj = (project && String(project).trim()) || ADO_PROJECT;
+    const b = String(branch || "").replace(/^refs\/heads\//, "").trim();
+    const repoRef = String(repo || repoName || "").trim();
+    if (!repoRef || !b || !filePath) return { ok: false, error: "repo, branch and path required." };
+    let info;
+    try { const gitApi = await _conn.getGitApi(); info = await gitApi.getRepository(repoRef, proj); }
+    catch (e) { return { ok: false, error: "Could not find that repository." }; }
+    if (!info || !info.id) return { ok: false, error: "Could not find that repository." };
+    const back = `/branch?project=${encodeURIComponent(proj)}&repo=${encodeURIComponent(info.id)}&repoName=${encodeURIComponent(info.name)}&ref=${encodeURIComponent(b)}`;
+    const p = `/spec?repo=${encodeURIComponent(info.id)}&path=${encodeURIComponent(filePath)}&repoName=${encodeURIComponent(info.name)}&project=${encodeURIComponent(proj)}&branch=${encodeURIComponent(b)}&back=${encodeURIComponent(back)}&mode=remote`;
+    _focus.setNav(p);
+    return { ok: true, opened: p, repo: info.id, repoName: info.name };
+  }
+
   // Discovery branch page: list the markdown files that are UNIQUE to a branch —
   // i.e. the files it changed relative to where it forked from the repo's default
   // branch (not every file in the tree). Diffs default..branch at the common
@@ -5877,6 +6426,24 @@ async function main() {
     listMyBranches,
     openLocalRepo,
     listLocalBranches,
+    listPersonalComments,
+    createPersonalComment,
+    editPersonalComment,
+    deletePersonalComment,
+    resolvePersonalComment,
+    mcpReadPersonalComments,
+    mcpAddPersonalComment,
+    mcpEditPersonalComment,
+    mcpDeletePersonalComment,
+    mcpResolvePersonalComment,
+    mcpDeleteResolvedPersonalComments,
+    mcpClearPersonalComments,
+    mcpNavPersonalComment,
+    mcpJumpPersonalComment,
+    mcpSetPcResolvedVisibility,
+    mcpRefreshSpec,
+    mcpOpenBranch,
+    mcpOpenBranchFile,
   });
 
   const server = app.listen(PORT, "127.0.0.1", () => {

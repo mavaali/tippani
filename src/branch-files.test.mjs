@@ -29,6 +29,9 @@ eq("spec href drops empty parts",
 eq("spec href threads a relative back link",
   buildSpecHref({ repoId: "R1", path: "/foo.md", back: "/branch?repo=R1&ref=b" }),
   "/spec?repo=R1&path=%2Ffoo.md&back=%2Fbranch%3Frepo%3DR1%26ref%3Db");
+eq("spec href threads the editing mode",
+  buildSpecHref({ repoId: "R1", path: "/foo.md", mode: "local" }),
+  "/spec?repo=R1&path=%2Ffoo.md&mode=local");
 eq("spec href strips heads prefix from plain ref",
   buildSpecHref({ repoId: "R1", ref: "feature/x", path: "/foo.md" }),
   "/spec?repo=R1&path=%2Ffoo.md&branch=feature%2Fx");

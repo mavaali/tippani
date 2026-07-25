@@ -24,8 +24,9 @@ export function splitSpecPath(filePath) {
 // Build the read-only spec link for a branch file: reuses the existing /spec
 // review page (which carries the comment/threads pane), pinned to this branch.
 // An optional `back` (a relative path) is threaded so /spec returns to the
-// branch page instead of the Specs tab.
-export function buildSpecHref({ repoId, repoName, project, ref, path: filePath, back } = {}) {
+// branch page instead of the Specs tab. `mode` ("remote"/"local") tells /spec
+// which editing mode to badge (file-reviewing mode).
+export function buildSpecHref({ repoId, repoName, project, ref, path: filePath, back, mode } = {}) {
   const branch = String(ref || "").replace(/^refs\/heads\//, "");
   const q = [
     ["repo", repoId],
@@ -34,6 +35,7 @@ export function buildSpecHref({ repoId, repoName, project, ref, path: filePath, 
     ["project", project],
     ["branch", branch],
     ["back", back],
+    ["mode", mode],
   ]
     .filter(([, v]) => v != null && v !== "")
     .map(([k, v]) => `${k}=${encodeURIComponent(String(v))}`)

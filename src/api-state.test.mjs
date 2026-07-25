@@ -171,5 +171,32 @@ function check(name, cond) {
   check("get: exposes view + filter fields", g.view === "diff" && g.filter === null);
 }
 
+// --- FocusStore: author-comment state ---
+{
+  const f = createFocusStore();
+  const init = f.get();
+  check("ac: starts empty", init.pcContext === null && init.pcSelectedId === null && init.pcCommand === null && init.pcCommandSeq === 0 && init.pcDataSeq === 0);
+
+  const ctx = f.setPcContext({ repo: "R1", branch: "b", path: "/a.md" });
+  check("setPcContext: records", ctx.repo === "R1" && ctx.branch === "b" && ctx.path === "/a.md");
+  check("setPcContext: incomplete -> null", f.setPcContext({ repo: "R1" }) === null);
+  f.setPcContext({ repo: "R1", branch: "b", path: "/a.md" });
+
+  check("setPcSelected: records", f.setPcSelected("c1") === "c1");
+  check("setPcSelected: empty -> null", f.setPcSelected("") === null);
+
+  const v = f.get().version;
+  const c1 = f.setPcCommand({ type: "focus", id: "c9" });
+  check("setPcCommand: records + bumps", c1.pcCommand.id === "c9" && c1.pcCommandSeq === 1 && f.get().version === v + 1);
+  const c2 = f.setPcCommand({ type: "focus", id: "c9" });
+  check("setPcCommand: repeat still bumps", c2.pcCommandSeq === 2);
+
+  const d1 = f.bumpPcData();
+  check("bumpPcData: increments", d1 === 1);
+  check("bumpPcData: again", f.bumpPcData() === 2);
+  const g = f.get();
+  check("get: exposes ac fields", g.pcContext.repo === "R1" && g.pcCommandSeq === 2 && g.pcDataSeq === 2);
+}
+
 console.log(`api-state.test: ${pass} passed, ${fail} failed`);
 if (fail > 0) process.exit(1);
