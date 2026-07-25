@@ -622,7 +622,12 @@ export function buildTools(http, session) {
         branch: z.string().describe("Branch name (e.g. dev/kay/x)"),
         localPath: z.string().optional().describe("Local clone path on disk (local mode; overrides repo/project)"),
       },
-      handler: (args) => http.post("/api/v1/spec/open-branch", args),
+      handler: async (args) => {
+        if (session && typeof session.ensureBrowsePortal === "function") {
+          await session.ensureBrowsePortal();
+        }
+        return http.post("/api/v1/spec/open-branch", args);
+      },
     },
     {
       name: "open_branch_file",
@@ -639,7 +644,12 @@ export function buildTools(http, session) {
         path: z.string().describe("File path within the repo (e.g. /Specs/Foo.md)"),
         localPath: z.string().optional().describe("Local clone path on disk (local mode; overrides repo/project)"),
       },
-      handler: (args) => http.post("/api/v1/spec/open-branch-file", args),
+      handler: async (args) => {
+        if (session && typeof session.ensureBrowsePortal === "function") {
+          await session.ensureBrowsePortal();
+        }
+        return http.post("/api/v1/spec/open-branch-file", args);
+      },
     },
     {
       name: "refresh_spec",

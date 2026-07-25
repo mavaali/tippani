@@ -92,8 +92,10 @@ const http = createHttpClient({ baseUrl: BASE, token: TOKEN, clientName: "mcp-te
 // spawning a real portal, then reads threads through the live control API.
 const ensurePortalCalls = [];
 const openUrlCalls = [];
+const browsePortalCalls = [];
 const stubSession = {
   ensurePortal: async (opts) => { ensurePortalCalls.push(opts); return { reused: false, prId: opts.prId }; },
+  ensureBrowsePortal: async () => { browsePortalCalls.push(1); },
   openUrl: async (path) => { openUrlCalls.push(path); },
 };
 const tools = buildTools(http, stubSession);
@@ -312,6 +314,16 @@ try {
     check("loadSessionToken: trims newline", loadSessionToken(tmp) === "secret-value");
     fs.unlinkSync(tmp);
     check("loadSessionToken: missing file -> null", loadSessionToken(tmp) === null);
+  }
+
+  // --- open_branch / open_branch_file ensure a browse portal before posting ---
+  {
+    const before = browsePortalCalls.length;
+    try { await byName.open_branch.handler({ localPath: "C:/repos/specs", branch: "dev/x" }); } catch {}
+    check("open_branch: ensures a browse portal first", browsePortalCalls.length === before + 1);
+    const before2 = browsePortalCalls.length;
+    try { await byName.open_branch_file.handler({ localPath: "C:/repos/specs", branch: "dev/x", path: "/a.md" }); } catch {}
+    check("open_branch_file: ensures a browse portal first", browsePortalCalls.length === before2 + 1);
   }
 
 } finally {
