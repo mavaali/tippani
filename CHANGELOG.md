@@ -1,5 +1,54 @@
 # Changelog
 
+## Unreleased — Personal comments + local (ADO-less) review
+
+File/branch-scoped **personal comments** on a draft spec (no PR), and a
+**local-clone review** path that reads branches/files straight from a git clone
+via server-side git. From branch `clickstop-1`.
+
+### Review-response hardening (adversarial PR review)
+- **Durable comment store.** Writes are atomic (temp-file + `renameSync`) and
+  now **throw** on failure, so `create`/`edit`/`resolve`/`reply` return
+  `{ ok: false }` instead of a false success; a corrupt store is **quarantined**
+  (`*.corrupt-<ts>`) and surfaced rather than silently read as "zero comments"
+  and overwritten. Disk I/O extracted to `personal-comments-store.js` with tests.
+- **Stored-XSS fix.** Inline `<script>` data embeds go through a new
+  `jsonForScript` helper (escapes `<`, U+2028/9) so a comment (or spec/thread
+  text) containing `</script>…` can't break out of the script. Applied to the
+  personal-comments embed and its siblings across the reviewing/editor pages.
+- **Anchors survive edits.** Comments now carry a content-addressed anchor
+  (`blockHash` + heading path) re-resolved on every render: a hash match
+  re-points the line exactly when a block moves, a heading-path match tracks a
+  lightly-edited block (`moved`), and a deleted block is marked `stale` rather
+  than silently mispointing. Exposed to MCP (`anchorState`) and shown as a card
+  badge. Pure engine in `personal-comments.js` with tests.
+- **Local-git hardening.** `runGit` gets a 15s timeout (a wedged git can't hang
+  a request); base-branch resolution now includes `develop`/`trunk` (no
+  dead-end); the working-tree read is **symlink-safe** (realpath containment,
+  not a `..`-string check). Testable helpers in `local-git.js`.
+- **Single-write resolve.** `resolve`-with-note applies the reply + the resolved
+  flag in one load/save (was two cycles). Mutating MCP handlers echo the
+  resolved `{repo,branch,path}` so a stale ambient context is visible.
+- **DNS-rebind guard.** A Host allow-list (localhost/127.0.0.1/[::1]) rejects
+  rebind attempts on every request.
+- **CI.** `.github/workflows/ci.yml` runs the full suite on Node 20/22/24 for
+  every push/PR (the offline portal smokes stay dev-only — they need a cached
+  PR fixture).
+- **LLM-facing strings.** `refresh_spec` no longer claims "reloads from ADO" in
+  local mode; comment-tool grammar fixed.
+
+### Known non-blocking follow-ups (documented, not gated)
+- **Local read scope.** The MCP reads any `.md` under the user-supplied clone;
+  this is a loopback-only, single-user tool where the same user supplies the
+  path, so a hard root allow-list is deferred (it would harm the point-at-a-clone
+  UX) — tracked as a follow-up.
+- **Store key = clone path.** Personal comments are keyed by the absolute clone
+  path; moving the clone orphans notes. Re-keying by repo identity (origin URL)
+  needs a migration and is deferred.
+- **`/api/v1/state` payload.** State polling still ships full draft bodies;
+  slimming it to seq-only-until-changed needs a coordinated client change and is
+  deferred (perf, non-functional).
+
 ## 1.6.0 (2026-07-16)
 
 A review-optimized UX layer: surgical agent edits, a three-view spec toggle, a feedback triage filter, a PR picker, and editor find/replace — plus a security-hardening pass over the new surface. From [#67](https://github.com/mavaali/tippani/pull/67).
