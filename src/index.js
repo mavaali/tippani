@@ -50,6 +50,7 @@ import { getSpecContentAt, getSpecBlobAt, buildSpecWebUrl, getLastCommitAuthor }
 import { branchesForRepo, sortBranches, shortBranchName } from "./branch-list.js";
 import { branchFileRows, visibleFileCount, mdPathsFromChanges, buildSpecHref } from "./branch-files.js";
 import { validateLocalRepo, resolveGitDir, parseGitHead, parsePackedRefs, mergeLocalBranches, parseOriginHeadDefault, userCreatedBranches } from "./local-repo.js";
+import { baseCandidates, safeLocalPath } from "./local-git.js";
 import { newComment as pcNew, addComment as pcAdd, updateComment as pcUpdate, removeComment as pcRemove, findComment as pcFind, sortComments as pcSort, setResolved as pcSetResolved, addReply as pcAddReply, navTargetId as pcNavTarget, reanchorComments as pcReanchor } from "./personal-comments.js";
 import { personalCommentsKey as pcStoreKey, loadPersonalComments as pcStoreLoad, savePersonalComments as pcStoreSave } from "./personal-comments-store.js";
 
@@ -6331,20 +6332,27 @@ if ($path) { [Console]::Out.Write($path) }
   // Read-only subcommands only (symbolic-ref, rev-parse, diff), no network.
   function runGit(repoPath) {
     return (args) => new Promise((resolve) => {
-      execFile("git", ["-C", repoPath, ...args], { maxBuffer: 64 * 1024 * 1024, windowsHide: true },
-        (err, stdout, stderr) => resolve({ code: err ? (err.code ?? 1) : 0, stdout: stdout || "", stderr: stderr || "" }));
+      // A 15s timeout so a wedged git (network prompt, lock contention) can't
+      // hang the request forever — the picker shell already sets one; this path
+      // didn't. A killed/timed-out process surfaces as a non-zero code.
+      execFile("git", ["-C", repoPath, ...args], { maxBuffer: 64 * 1024 * 1024, windowsHide: true, timeout: 15000 },
+        (err, stdout, stderr) => resolve({
+          code: err ? (err.code ?? 1) : 0,
+          stdout: stdout || "",
+          stderr: (stderr || "") + (err && err.killed ? " [git timed out]" : ""),
+        }));
     });
   }
 
   // Resolve the base revision to diff a branch against: the clone's origin
-  // default (refs/remotes/origin/HEAD), else main/master (local or origin/).
+  // default (refs/remotes/origin/HEAD) first, then main/master/develop/trunk
+  // (local or origin/). baseCandidates() owns the ordering and rejects
+  // leading-`-` names; it no longer dead-ends when the default is develop/trunk.
   async function resolveLocalBase(run) {
-    const candidates = [];
+    let originDefault = "";
     const sr = await run(["symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD"]);
-    if (sr.code === 0 && sr.stdout.trim()) candidates.push(sr.stdout.trim());
-    for (const n of ["main", "master"]) { candidates.push(n, "origin/" + n); }
-    for (const c of candidates) {
-      if (c.startsWith("-")) continue;
+    if (sr.code === 0 && sr.stdout.trim()) originDefault = sr.stdout.trim();
+    for (const c of baseCandidates(originDefault)) {
       const v = await run(["rev-parse", "--verify", "--quiet", `${c}^{commit}`]);
       if (v.code === 0 && v.stdout.trim()) return c;
     }
@@ -6392,7 +6400,11 @@ if ($path) { [Console]::Out.Write($path) }
     const cur = await run(["rev-parse", "--abbrev-ref", "HEAD"]);
     const isCurrent = cur.code === 0 && cur.stdout.trim() === br;
     if (isCurrent) {
-      try { return { ok: true, raw: fs.readFileSync(path.join(cleanRepo, fp), "utf8"), isCurrent: true }; }
+      // Symlink-safe: resolve the path and prove it stays inside the clone
+      // (an in-repo symlink pointing outside must not leak arbitrary files).
+      const safe = safeLocalPath(cleanRepo, fp);
+      if (!safe) return { ok: false, error: "Invalid file path." };
+      try { return { ok: true, raw: fs.readFileSync(safe, "utf8"), isCurrent: true }; }
       catch { return { ok: false, error: "Could not read the file from disk." }; }
     }
     const show = await run(["show", `${br}:${fp}`]);
