@@ -50,7 +50,7 @@ import { getSpecContentAt, getSpecBlobAt, buildSpecWebUrl, getLastCommitAuthor }
 import { branchesForRepo, sortBranches, shortBranchName } from "./branch-list.js";
 import { branchFileRows, visibleFileCount, mdPathsFromChanges, buildSpecHref } from "./branch-files.js";
 import { validateLocalRepo, resolveGitDir, parseGitHead, parsePackedRefs, mergeLocalBranches, parseOriginHeadDefault, userCreatedBranches } from "./local-repo.js";
-import { newComment as pcNew, addComment as pcAdd, updateComment as pcUpdate, removeComment as pcRemove, findComment as pcFind, sortComments as pcSort, setResolved as pcSetResolved, addReply as pcAddReply, navTargetId as pcNavTarget } from "./personal-comments.js";
+import { newComment as pcNew, addComment as pcAdd, updateComment as pcUpdate, removeComment as pcRemove, findComment as pcFind, sortComments as pcSort, setResolved as pcSetResolved, addReply as pcAddReply, navTargetId as pcNavTarget, reanchorComments as pcReanchor } from "./personal-comments.js";
 import { personalCommentsKey as pcStoreKey, loadPersonalComments as pcStoreLoad, savePersonalComments as pcStoreSave } from "./personal-comments-store.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -2403,6 +2403,9 @@ body { font-family: "Segoe UI", Aptos, Calibri, -apple-system, sans-serif; backg
 .rh-hline { font-size: 10px; color: var(--cp-text-muted); }
 .rh-count { margin-left: auto; font-size: 10px; font-weight: 700; min-width: 16px; height: 16px; padding: 0 5px; border-radius: 8px; background: var(--cp-surface-soft); color: var(--cp-text-muted); display: inline-flex; align-items: center; justify-content: center; }
 .rh-res { color: #2f8f4e; font-size: 12px; }
+.pc-drift { font-size: 9px; font-weight: 700; text-transform: uppercase; letter-spacing: .03em; padding: 0 4px; border-radius: 6px; margin-left: 4px; cursor: help; }
+.pc-drift-stale { background: rgba(220, 38, 38, 0.12); color: var(--cp-danger); }
+.pc-drift-moved { background: rgba(245, 158, 11, 0.14); color: var(--cp-warning); }
 .rh-summary { font-size: 12px; color: var(--cp-text-muted); margin-top: 5px; line-height: 1.35; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 .rh-thread.rh-expanded .rh-summary { display: none; }
 .rh-full { display: none; margin-top: 6px; }
@@ -2741,15 +2744,20 @@ body.show-markers .rh-marker { display: inline-flex; }
       }
       function pcBuildCard(c, isDraft) {
         var card = document.createElement('div');
-        card.className = 'rh-thread pc-card' + (isDraft ? ' pc-draft' : '') + (c.resolved ? ' pc-resolved' : '');
+        card.className = 'rh-thread pc-card' + (isDraft ? ' pc-draft' : '') + (c.resolved ? ' pc-resolved' : '') + (c.anchorState === 'stale' ? ' pc-stale' : c.anchorState === 'moved' ? ' pc-moved' : '');
         if (c.line != null) card.setAttribute('data-line', c.line);
         if (c.id) card.setAttribute('data-id', c.id);
         card.__data = c;
         var resolveIco = isDraft ? '' : '<button type="button" class="pc-ico pc-resolve" title="' + (c.resolved ? 'Reopen' : 'Resolve') + '">' + (c.resolved ? '\u21ba' : '\u2713') + '</button>';
         var resTag = c.resolved ? '<span class="rh-res" title="Resolved">\u2713</span>' : '';
+        var driftTag = c.anchorState === 'stale'
+          ? '<span class="pc-drift pc-drift-stale" title="The block this note anchored to was edited away or removed \u2014 the position is approximate.">moved?</span>'
+          : c.anchorState === 'moved'
+          ? '<span class="pc-drift pc-drift-moved" title="The block text changed; tracked to its heading section.">tracked</span>'
+          : '';
         card.innerHTML =
           '<div class="rh-head"><span class="rh-badge">' + pcEsc(c.author || RO_USER) + ' \u00b7 ' + pcWhen(c.updatedAt || c.createdAt || new Date().toISOString()) + '</span>'
-          + '<span class="rh-hline">' + (c.line != null ? ':' + c.line : '') + '</span>' + resTag + '<span class="rh-count">1</span>'
+          + '<span class="rh-hline">' + (c.line != null ? ':' + c.line : '') + '</span>' + driftTag + resTag + '<span class="rh-count">1</span>'
           + '<button type="button" class="pc-ico pc-save" title="Save">\ue74e</button>'
           + resolveIco
           + '<button type="button" class="pc-ico pc-edit" title="Edit">\u270e</button>'
@@ -5292,7 +5300,7 @@ async function main() {
         const safeBack = /^\/[^/]/.test(backParam) ? backParam : "";
         const backHref = safeBack || "/discovery?tab=branches";
         const localRepoKey = "local:" + localPath;
-        const personalComments = (await listPersonalComments({ repo: localRepoKey, branch, path: specPath })).comments || [];
+        const personalComments = (await listPersonalComments({ repo: localRepoKey, branch, path: specPath, rawText: body, sourceMap: ranges })).comments || [];
         const commentCount = personalComments.length;
         _focus.setPcContext({ repo: localRepoKey, branch, path: specPath });
         const pcDataSeq = _focus.get().pcDataSeq;
@@ -5331,7 +5339,7 @@ async function main() {
       const editMode = reviewing && (modeParam === "remote" || modeParam === "local") ? modeParam : null;
       // Personal comments are file/branch scoped; load them + the signed-in user so
       // the page can render existing notes and stamp new ones.
-      const personalComments = reviewing ? (await listPersonalComments({ repo: repoId, branch, path: specPath })).comments || [] : [];
+      const personalComments = reviewing ? (await listPersonalComments({ repo: repoId, branch, path: specPath, rawText: body, sourceMap: ranges })).comments || [] : [];
       const me = reviewing ? await getMe() : null;
       const commentCount = personalComments.length;
       // Record which file the open reviewing page shows so param-less MCP tools
@@ -5873,11 +5881,23 @@ async function main() {
     for (const r of comment.replies || []) replies.push({ ...r, html: await renderMarkdownSafe(r.content || "") });
     return { ...comment, html: await renderMarkdownSafe(comment.content || ""), replies };
   }
-  async function listPersonalComments({ repo, branch, path: filePath } = {}) {
+  async function listPersonalComments({ repo, branch, path: filePath, rawText, sourceMap } = {}) {
     if (!repo || !branch || !filePath) return { ok: false, error: "Missing repo/branch/path." };
     let list;
-    try { list = pcSort(loadPersonalComments(repo, branch, filePath)); }
+    try { list = loadPersonalComments(repo, branch, filePath); }
     catch (e) { return { ok: false, error: `Could not read comments: ${e.code || e.message}` }; }
+    // When the caller supplies the current source (a page render), re-resolve
+    // each comment's content anchor against it — backfilling a fresh comment's
+    // anchor and re-pointing any that drifted when the file was edited — and
+    // persist if anything moved so the on-disk line tracks the block.
+    if (rawText != null && Array.isArray(sourceMap)) {
+      const ra = pcReanchor(list, rawText, sourceMap);
+      if (ra.changed) {
+        try { savePersonalComments(repo, branch, filePath, ra.comments); } catch { /* re-anchor persistence is best-effort */ }
+      }
+      list = ra.comments;
+    }
+    list = pcSort(list);
     const comments = [];
     for (const c of list) comments.push(await _pcWithHtml(c));
     return { ok: true, comments };
@@ -5954,7 +5974,7 @@ async function main() {
   // to the selected comment (pcSelectedId), and push UI commands (focus a
   // comment, hide/show resolved) so MCP actions reflect live in the open page.
   function pcSummary(c) {
-    return { id: c.id, line: c.line == null ? null : c.line, author: c.author, content: c.content, resolved: !!c.resolved, createdAt: c.createdAt, updatedAt: c.updatedAt, replies: (c.replies || []).map((r) => ({ author: r.author, content: r.content, createdAt: r.createdAt })) };
+    return { id: c.id, line: c.line == null ? null : c.line, anchorState: c.anchorState || "ok", author: c.author, content: c.content, resolved: !!c.resolved, createdAt: c.createdAt, updatedAt: c.updatedAt, replies: (c.replies || []).map((r) => ({ author: r.author, content: r.content, createdAt: r.createdAt })) };
   }
   function pcCtx(args = {}) {
     const cur = _focus.get().pcContext;

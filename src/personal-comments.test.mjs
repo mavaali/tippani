@@ -1,5 +1,5 @@
 // Tests for the Personal Comments store helpers (pure list operations).
-import { newComment, addComment, updateComment, removeComment, findComment, sortComments, setResolved, addReply, navTargetId } from "./personal-comments.js";
+import { newComment, addComment, updateComment, removeComment, findComment, sortComments, setResolved, addReply, navTargetId, reanchorComments, computeAnchor, headingPathForLine, hashBlock } from "./personal-comments.js";
 
 let pass = 0, fail = 0;
 function ok(name, cond) { if (cond) pass++; else { fail++; console.error("  FAIL: " + name); } }
@@ -71,6 +71,84 @@ eq("nav last", navTargetId(nav, "b", "last"), "c");
 eq("nav next with no current -> first", navTargetId(nav, null, "next"), "a");
 eq("nav prev with no current -> last", navTargetId(nav, null, "prev"), "c");
 eq("nav empty -> null", navTargetId([], "a", "next"), null);
+
+// --- re-anchoring ------------------------------------------------------------
+// A tiny doc: a heading (line 1), a para block (lines 3-4), another heading
+// (line 6), a para (line 8). Source map is 1:1 with the outermost blocks.
+const doc = [
+  "# Intro",          // 1
+  "",                 // 2
+  "The quick brown",  // 3
+  "fox jumps.",       // 4
+  "",                 // 5
+  "## Details",       // 6
+  "",                 // 7
+  "Second block here.", // 8
+].join("\n");
+const smap = [
+  { startLine: 1, endLine: 1 },
+  { startLine: 3, endLine: 4 },
+  { startLine: 6, endLine: 6 },
+  { startLine: 8, endLine: 8 },
+];
+
+{
+  // Backfill: a fresh comment (no anchor) gets one and state 'ok'.
+  const cs = [{ id: "1", line: 3, content: "on the fox para" }];
+  const ra = reanchorComments(cs, doc, smap);
+  ok("backfill sets changed", ra.changed);
+  ok("backfill records a blockHash", !!ra.comments[0].anchor.blockHash);
+  eq("backfill state ok", ra.comments[0].anchorState, "ok");
+  eq("backfill keeps line", ra.comments[0].line, 3);
+}
+{
+  // The fox para moved down 5 lines (someone prepended content); hash re-points.
+  const anchored = reanchorComments([{ id: "1", line: 3, content: "x" }], doc, smap).comments;
+  const doc2Lines = ["extra", "extra", "extra", "extra", "extra", ...doc.split("\n")];
+  const doc2 = doc2Lines.join("\n");
+  const smap2 = [
+    { startLine: 6, endLine: 6 },
+    { startLine: 8, endLine: 9 },   // the fox para, now shifted +5
+    { startLine: 11, endLine: 11 },
+    { startLine: 13, endLine: 13 },
+  ];
+  const ra = reanchorComments(anchored, doc2, smap2);
+  eq("hash match re-points line to moved block", ra.comments[0].line, 8);
+  eq("moved-but-same-content stays ok", ra.comments[0].anchorState, "ok");
+}
+{
+  // The fox para text changed but it's still the only block under "# Intro":
+  // heading-path fallback tracks it and marks it 'moved'.
+  const anchored = reanchorComments([{ id: "1", line: 3, content: "x" }], doc, smap).comments;
+  const edited = ["# Intro", "", "The QUICK brown vixen leaps!", "", "## Details", "", "Second block here."].join("\n");
+  const smapE = [
+    { startLine: 1, endLine: 1 },
+    { startLine: 3, endLine: 3 },
+    { startLine: 5, endLine: 5 },
+    { startLine: 7, endLine: 7 },
+  ];
+  const ra = reanchorComments(anchored, edited, smapE);
+  eq("heading fallback marks moved", ra.comments[0].anchorState, "moved");
+  eq("heading fallback re-points under same heading", ra.comments[0].line, 3);
+}
+{
+  // The whole "# Intro" section is gone: keep the frozen line, mark stale.
+  const anchored = reanchorComments([{ id: "1", line: 3, content: "x" }], doc, smap).comments;
+  const gone = ["## Details", "", "Second block here."].join("\n");
+  const smapG = [{ startLine: 1, endLine: 1 }, { startLine: 3, endLine: 3 }];
+  const ra = reanchorComments(anchored, gone, smapG);
+  eq("deleted block -> stale", ra.comments[0].anchorState, "stale");
+  eq("stale keeps the frozen line (no mispoint)", ra.comments[0].line, 3);
+}
+{
+  // A file-level note (line null) is left untouched.
+  const ra = reanchorComments([{ id: "f", line: null, content: "file note" }], doc, smap);
+  eq("file-level note unchanged", ra.comments[0].anchorState, undefined);
+  ok("file-level note not changed", !ra.changed);
+}
+eq("headingPathForLine nests", headingPathForLine(doc, 8), ["Intro", "Details"]);
+ok("hashBlock is whitespace-insensitive", hashBlock("a   b\n c") === hashBlock("a b c"));
+eq("computeAnchor null line -> null hash", computeAnchor(doc, smap, null).blockHash, null);
 
 console.log(`personal-comments: ${pass} passed, ${fail} failed`);
 if (fail > 0) process.exit(1);
