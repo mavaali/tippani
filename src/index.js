@@ -45,12 +45,13 @@ import {
   summarizeNonMarkdown,
 } from "./config-util.js";
 import { resolveImagePath, imageContentType, isLfsPointer, secureImageHeaders, isValidRepoId } from "./image-src.js";
-import { cssVariables, changeTypeBadge, escHtml, stripMarkdown } from "./html-util.js";
+import { cssVariables, changeTypeBadge, escHtml, stripMarkdown, jsonForScript } from "./html-util.js";
 import { getSpecContentAt, getSpecBlobAt, buildSpecWebUrl, getLastCommitAuthor } from "./ado-read.js";
 import { branchesForRepo, sortBranches, shortBranchName } from "./branch-list.js";
 import { branchFileRows, visibleFileCount, mdPathsFromChanges, buildSpecHref } from "./branch-files.js";
 import { validateLocalRepo, resolveGitDir, parseGitHead, parsePackedRefs, mergeLocalBranches, parseOriginHeadDefault, userCreatedBranches } from "./local-repo.js";
 import { newComment as pcNew, addComment as pcAdd, updateComment as pcUpdate, removeComment as pcRemove, findComment as pcFind, sortComments as pcSort, setResolved as pcSetResolved, addReply as pcAddReply, navTargetId as pcNavTarget } from "./personal-comments.js";
+import { personalCommentsKey as pcStoreKey, loadPersonalComments as pcStoreLoad, savePersonalComments as pcStoreSave } from "./personal-comments-store.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -176,28 +177,21 @@ function removePending(prId, actionId) {
 // path). List ops are pure (personal-comments.js); disk I/O lives here.
 const PERSONAL_COMMENTS_DIR = path.join(CONFIG_DIR, "personal-comments");
 
+// Disk I/O delegates to the durable, unit-tested store (atomic write,
+// corruption quarantine, loud failures). loadPersonalComments THROWS on a
+// corrupt/unreadable store rather than masquerading as "zero comments", and
+// savePersonalComments THROWS on write failure — so every caller wraps these
+// in try/catch and reports { ok: false } instead of a false success.
 function personalCommentsKey(repoId, branch, filePath) {
-  const h = crypto.createHash("sha1");
-  h.update(`${repoId}\n${branch}\n${filePath}`);
-  return h.digest("hex");
+  return pcStoreKey(repoId, branch, filePath);
 }
 
 function loadPersonalComments(repoId, branch, filePath) {
-  try {
-    const p = path.join(PERSONAL_COMMENTS_DIR, `${personalCommentsKey(repoId, branch, filePath)}.json`);
-    const data = JSON.parse(fs.readFileSync(p, "utf-8"));
-    return Array.isArray(data.comments) ? data.comments : [];
-  } catch { return []; }
+  return pcStoreLoad(PERSONAL_COMMENTS_DIR, repoId, branch, filePath);
 }
 
 function savePersonalComments(repoId, branch, filePath, comments) {
-  try {
-    fs.mkdirSync(PERSONAL_COMMENTS_DIR, { recursive: true, mode: 0o700 });
-    const p = path.join(PERSONAL_COMMENTS_DIR, `${personalCommentsKey(repoId, branch, filePath)}.json`);
-    fs.writeFileSync(p, JSON.stringify({ repo: repoId, branch, path: filePath, comments }, null, 2), { mode: 0o600 });
-  } catch (e) {
-    console.warn(`  \u26a0 Could not save personal comments: ${e.code || e.message}`);
-  }
+  pcStoreSave(PERSONAL_COMMENTS_DIR, repoId, branch, filePath, comments);
 }
 
 // --- ADO error helper ---
@@ -1727,7 +1721,7 @@ table.wi-results { width: 100%; table-layout: fixed; border-collapse: collapse; 
       updateFacets(); // initial: README/index exclusion + cross-filter
     } catch (e) { status.textContent = 'Search failed: ' + e.message; }
   }
-  var SERVER_LOCAL_REPO = ${JSON.stringify(_localRepoPath || "")};
+  var SERVER_LOCAL_REPO = ${jsonForScript(_localRepoPath || "")};
   var brMode = 'remote';
   function renderBranchCards(items, kind) {
     var out = document.getElementById('brResults');
@@ -2531,15 +2525,15 @@ body.show-markers .rh-marker { display: inline-flex; }
     // summary; clicking one focuses it (Bordeaux border on the card + its section),
     // expands its comments, and reflows the column so nothing overlaps.
     (function () {
-      var RO_SOURCE_MAP = ${JSON.stringify(sourceMap || [])};
-      var RO_HISTORY_URL = ${JSON.stringify(reviewing ? "" : (historyUrl || ""))};
+      var RO_SOURCE_MAP = ${jsonForScript(sourceMap || [])};
+      var RO_HISTORY_URL = ${jsonForScript(reviewing ? "" : (historyUrl || ""))};
       // Personal-comments (file-reviewing) mode config.
       var RO_REVIEWING = ${reviewing ? "true" : "false"};
-      var RO_REPO = ${JSON.stringify(reviewRepo || "")};
-      var RO_BRANCH = ${JSON.stringify(reviewBranch || "")};
-      var RO_PATH = ${JSON.stringify(reviewPath || "")};
-      var RO_USER = ${JSON.stringify(currentUser || "You")};
-      var RO_PERSONAL_COMMENTS = ${JSON.stringify(personalComments || [])};
+      var RO_REPO = ${jsonForScript(reviewRepo || "")};
+      var RO_BRANCH = ${jsonForScript(reviewBranch || "")};
+      var RO_PATH = ${jsonForScript(reviewPath || "")};
+      var RO_USER = ${jsonForScript(currentUser || "You")};
+      var RO_PERSONAL_COMMENTS = ${jsonForScript(personalComments || [])};
       var RO_PC_DATASEQ = ${Number(pcDataSeq) || 0};
       var marginEl = document.getElementById('roMargin');
       var docEl = document.querySelector('.ro-doc');
@@ -3509,11 +3503,11 @@ details[open] .resolved-summary::before { content: '▾ '; }
 window.tippani = (function () {
   // Mutable baseline: updated after a successful save so the editor is no longer
   // dirty and the next diff is measured against the saved state.
-  let RAW_MARKDOWN = ${JSON.stringify(rawMarkdown || "")};
-  const SPEC_FILE_PATH = ${JSON.stringify(specPath)};
+  let RAW_MARKDOWN = ${jsonForScript(rawMarkdown || "")};
+  const SPEC_FILE_PATH = ${jsonForScript(specPath)};
   const FILENAME = SPEC_FILE_PATH.split("/").pop();
   // Branch tip at load time — sent on save so ADO rejects a stale push (#49).
-  const BASE_OBJECT_ID = ${JSON.stringify(baseObjectId || null)};
+  const BASE_OBJECT_ID = ${jsonForScript(baseObjectId || null)};
   const ORIG_TITLE = document.title;
   let editor = null;
   let editMode = false;
@@ -3975,11 +3969,11 @@ window.tippani = (function () {
 })();
 </script>
 <script>
-const SPEC_PATH = ${JSON.stringify(specPath)};
-const CURRENT_FILE_INDEX = ${JSON.stringify(currentFileIndex)};
-const SOURCE_MAP = ${JSON.stringify(sourceMap)};
-const TOC_DATA = ${JSON.stringify(toc)};
-const THREADS_DATA = ${JSON.stringify(allThreads.map(t => ({
+const SPEC_PATH = ${jsonForScript(specPath)};
+const CURRENT_FILE_INDEX = ${jsonForScript(currentFileIndex)};
+const SOURCE_MAP = ${jsonForScript(sourceMap)};
+const TOC_DATA = ${jsonForScript(toc)};
+const THREADS_DATA = ${jsonForScript(allThreads.map(t => ({
   id: t.id,
   line: t.threadContext?.rightFileStart?.line || null,
   file: t.threadContext?.filePath || null,
@@ -5881,7 +5875,9 @@ async function main() {
   }
   async function listPersonalComments({ repo, branch, path: filePath } = {}) {
     if (!repo || !branch || !filePath) return { ok: false, error: "Missing repo/branch/path." };
-    const list = pcSort(loadPersonalComments(repo, branch, filePath));
+    let list;
+    try { list = pcSort(loadPersonalComments(repo, branch, filePath)); }
+    catch (e) { return { ok: false, error: `Could not read comments: ${e.code || e.message}` }; }
     const comments = [];
     for (const c of list) comments.push(await _pcWithHtml(c));
     return { ok: true, comments };
@@ -5893,44 +5889,64 @@ async function main() {
     const me = await getMe();
     const id = Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
     const c = pcNew({ id, line, author: me.displayName, content: text, now: new Date().toISOString() });
-    savePersonalComments(repo, branch, filePath, pcAdd(loadPersonalComments(repo, branch, filePath), c));
+    try {
+      savePersonalComments(repo, branch, filePath, pcAdd(loadPersonalComments(repo, branch, filePath), c));
+    } catch (e) {
+      return { ok: false, error: `Could not save comment: ${e.code || e.message}` };
+    }
     return { ok: true, comment: await _pcWithHtml(c), dataSeq: _focus.bumpPcData() };
   }
   async function editPersonalComment({ repo, branch, path: filePath, id, content } = {}) {
     if (!repo || !branch || !filePath || !id) return { ok: false, error: "Missing repo/branch/path/id." };
-    const cur = loadPersonalComments(repo, branch, filePath);
-    if (!pcFind(cur, id)) return { ok: false, error: "Not found." };
-    // Editing an existing comment to empty is allowed — it saves an empty comment
-    // (deletion is an explicit action, not a side effect of clearing the text).
-    const text = String(content == null ? "" : content).trim();
-    const list = pcUpdate(cur, id, text, new Date().toISOString());
-    savePersonalComments(repo, branch, filePath, list);
-    return { ok: true, comment: await _pcWithHtml(pcFind(list, id)), dataSeq: _focus.bumpPcData() };
+    try {
+      const cur = loadPersonalComments(repo, branch, filePath);
+      if (!pcFind(cur, id)) return { ok: false, error: "Not found." };
+      // Editing an existing comment to empty is allowed — it saves an empty comment
+      // (deletion is an explicit action, not a side effect of clearing the text).
+      const text = String(content == null ? "" : content).trim();
+      const list = pcUpdate(cur, id, text, new Date().toISOString());
+      savePersonalComments(repo, branch, filePath, list);
+      return { ok: true, comment: await _pcWithHtml(pcFind(list, id)), dataSeq: _focus.bumpPcData() };
+    } catch (e) {
+      return { ok: false, error: `Could not edit comment: ${e.code || e.message}` };
+    }
   }
   async function deletePersonalComment({ repo, branch, path: filePath, id } = {}) {
     if (!repo || !branch || !filePath || !id) return { ok: false, error: "Missing repo/branch/path/id." };
-    savePersonalComments(repo, branch, filePath, pcRemove(loadPersonalComments(repo, branch, filePath), id));
+    try {
+      savePersonalComments(repo, branch, filePath, pcRemove(loadPersonalComments(repo, branch, filePath), id));
+    } catch (e) {
+      return { ok: false, error: `Could not delete comment: ${e.code || e.message}` };
+    }
     return { ok: true, id, dataSeq: _focus.bumpPcData() };
   }
   async function resolvePersonalComment({ repo, branch, path: filePath, id, resolved } = {}) {
     if (!repo || !branch || !filePath || !id) return { ok: false, error: "Missing repo/branch/path/id." };
-    const cur = loadPersonalComments(repo, branch, filePath);
-    if (!pcFind(cur, id)) return { ok: false, error: "Not found." };
-    const list = pcSetResolved(cur, id, !!resolved, new Date().toISOString());
-    savePersonalComments(repo, branch, filePath, list);
-    return { ok: true, comment: await _pcWithHtml(pcFind(list, id)), dataSeq: _focus.bumpPcData() };
+    try {
+      const cur = loadPersonalComments(repo, branch, filePath);
+      if (!pcFind(cur, id)) return { ok: false, error: "Not found." };
+      const list = pcSetResolved(cur, id, !!resolved, new Date().toISOString());
+      savePersonalComments(repo, branch, filePath, list);
+      return { ok: true, comment: await _pcWithHtml(pcFind(list, id)), dataSeq: _focus.bumpPcData() };
+    } catch (e) {
+      return { ok: false, error: `Could not resolve comment: ${e.code || e.message}` };
+    }
   }
   // Append a reply (a follow-up note) to a comment — e.g. the assistant recording
   // how it addressed the feedback before resolving.
   async function replyPersonalComment({ repo, branch, path: filePath, id, author, content } = {}) {
     if (!repo || !branch || !filePath || !id) return { ok: false, error: "Missing repo/branch/path/id." };
-    const cur = loadPersonalComments(repo, branch, filePath);
-    if (!pcFind(cur, id)) return { ok: false, error: "Not found." };
     const text = String(content == null ? "" : content).trim();
     if (!text) return { ok: false, error: "Empty reply." };
-    const list = pcAddReply(cur, id, { author: author || "You", content: text, now: new Date().toISOString() });
-    savePersonalComments(repo, branch, filePath, list);
-    return { ok: true, comment: await _pcWithHtml(pcFind(list, id)), dataSeq: _focus.bumpPcData() };
+    try {
+      const cur = loadPersonalComments(repo, branch, filePath);
+      if (!pcFind(cur, id)) return { ok: false, error: "Not found." };
+      const list = pcAddReply(cur, id, { author: author || "You", content: text, now: new Date().toISOString() });
+      savePersonalComments(repo, branch, filePath, list);
+      return { ok: true, comment: await _pcWithHtml(pcFind(list, id)), dataSeq: _focus.bumpPcData() };
+    } catch (e) {
+      return { ok: false, error: `Could not reply: ${e.code || e.message}` };
+    }
   }
 
   // --- Personal Comments: MCP-facing operations ---------------------------------
@@ -5947,7 +5963,9 @@ async function main() {
   async function mcpReadPersonalComments(args = {}) {
     const { repo, branch, path: filePath } = pcCtx(args);
     if (!repo || !branch || !filePath) return { ok: false, error: "No open reviewing file \u2014 open a file first or pass repo/branch/path." };
-    const list = pcSort(loadPersonalComments(repo, branch, filePath));
+    let list;
+    try { list = pcSort(loadPersonalComments(repo, branch, filePath)); }
+    catch (e) { return { ok: false, error: `Could not read comments: ${e.code || e.message}` }; }
     return { ok: true, file: { repo, branch, path: filePath }, selected: _focus.get().pcSelectedId, count: list.length, resolvedCount: list.filter((c) => c.resolved).length, comments: list.map(pcSummary) };
   }
   async function mcpAddPersonalComment(args = {}) {
@@ -5956,14 +5974,14 @@ async function main() {
     if (!r.ok) return r;
     _focus.setPcSelected(r.comment.id);
     _focus.setPcCommand({ type: "focus", id: r.comment.id });
-    return { ok: true, comment: pcSummary(r.comment) };
+    return { ok: true, comment: pcSummary(r.comment), file: { repo, branch, path: filePath } };
   }
   async function mcpEditPersonalComment(args = {}) {
     const { repo, branch, path: filePath } = pcCtx(args);
     const id = args.id || _focus.get().pcSelectedId;
     if (!id) return { ok: false, error: "No comment id and none selected." };
     const r = await editPersonalComment({ repo, branch, path: filePath, id, content: args.content });
-    return r.ok ? { ok: true, comment: pcSummary(r.comment) } : r;
+    return r.ok ? { ok: true, comment: pcSummary(r.comment), file: { repo, branch, path: filePath } } : r;
   }
   async function mcpDeletePersonalComment(args = {}) {
     const { repo, branch, path: filePath } = pcCtx(args);
@@ -5971,28 +5989,36 @@ async function main() {
     if (!id) return { ok: false, error: "No comment id and none selected." };
     const r = await deletePersonalComment({ repo, branch, path: filePath, id });
     if (r.ok && _focus.get().pcSelectedId === id) _focus.setPcSelected(null);
-    return r;
+    return r.ok ? { ...r, file: { repo, branch, path: filePath } } : r;
   }
   async function mcpResolvePersonalComment(args = {}) {
     const { repo, branch, path: filePath } = pcCtx(args);
     const id = args.id || _focus.get().pcSelectedId;
     if (!id) return { ok: false, error: "No comment id and none selected." };
-    // If a note is given, post it as a reply FIRST (so "how it was addressed" is
-    // recorded on the thread), then flip the resolved flag.
+    if (!repo || !branch || !filePath) return { ok: false, error: "No open reviewing file \u2014 open a file first or pass repo/branch/path." };
+    // Post the "how it was addressed" note (if any) AND flip resolved in a
+    // SINGLE load/apply/save, so the store is written once — previously this ran
+    // reply then resolve as two separate load→save cycles (a lost-update race).
     const note = String(args.note == null ? "" : args.note).trim();
-    if (note) {
-      const rr = await replyPersonalComment({ repo, branch, path: filePath, id, author: args.author || "Assistant", content: note });
-      if (!rr.ok) return rr;
+    const now = new Date().toISOString();
+    try {
+      let list = loadPersonalComments(repo, branch, filePath);
+      if (!pcFind(list, id)) return { ok: false, error: "Not found." };
+      if (note) list = pcAddReply(list, id, { author: args.author || "Assistant", content: note, now });
+      list = pcSetResolved(list, id, args.resolved !== false, now);
+      savePersonalComments(repo, branch, filePath, list);
+      _focus.bumpPcData();
+      return { ok: true, comment: pcSummary(pcFind(list, id)), file: { repo, branch, path: filePath } };
+    } catch (e) {
+      return { ok: false, error: `Could not resolve comment: ${e.code || e.message}` };
     }
-    const r = await resolvePersonalComment({ repo, branch, path: filePath, id, resolved: args.resolved !== false });
-    return r.ok ? { ok: true, comment: pcSummary(r.comment) } : r;
   }
   async function mcpReplyPersonalComment(args = {}) {
     const { repo, branch, path: filePath } = pcCtx(args);
     const id = args.id || _focus.get().pcSelectedId;
     if (!id) return { ok: false, error: "No comment id and none selected." };
     const r = await replyPersonalComment({ repo, branch, path: filePath, id, author: args.author || "Assistant", content: args.content });
-    if (r.ok) { _focus.setPcSelected(id); _focus.setPcCommand({ type: "focus", id }); return { ok: true, comment: pcSummary(r.comment) }; }
+    if (r.ok) { _focus.setPcSelected(id); _focus.setPcCommand({ type: "focus", id }); return { ok: true, comment: pcSummary(r.comment), file: { repo, branch, path: filePath } }; }
     return r;
   }
   async function mcpDeleteResolvedPersonalComments(args = {}) {
