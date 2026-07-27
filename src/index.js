@@ -5127,6 +5127,21 @@ async function main() {
   const app = express();
   app.use(express.json());
 
+  // DNS-rebinding guard: the portal binds loopback only, so a legitimate
+  // request's Host is always localhost / 127.0.0.1 / [::1]. A rebind attack
+  // reaches us with the attacker's hostname in Host (it resolves to 127.0.0.1
+  // in the victim's browser), so reject any other Host outright — this runs on
+  // EVERY request, including the GETs that set review context.
+  const ALLOWED_HOSTS = new Set(["localhost", "127.0.0.1", "[::1]", "::1"]);
+  app.use((req, res, next) => {
+    const host = String(req.headers.host || "");
+    const name = host.replace(/:\d+$/, ""); // strip :port
+    if (!ALLOWED_HOSTS.has(name)) {
+      return res.status(403).json({ error: "Forbidden: host not allowed" });
+    }
+    next();
+  });
+
   // CSRF protection: reject cross-origin mutations
   app.use((req, res, next) => {
     // The token-gated control API (/api/v1/*) does its own bearer-token auth

@@ -533,7 +533,7 @@ export function buildTools(http, session) {
     {
       name: "add_personal_comment",
       description:
-        "Add an personal comment to the open spec file, anchored to a source line " +
+        "Add a personal comment to the open spec file, anchored to a source line " +
         "(get_spec resolves headings/sections to lines). Saves immediately and " +
         "selects the new comment in the open page.",
       inputSchema: {
@@ -546,7 +546,7 @@ export function buildTools(http, session) {
     {
       name: "edit_personal_comment",
       description:
-        "Edit an personal comment's text. Defaults to the SELECTED comment; pass " +
+        "Edit a personal comment's text. Defaults to the SELECTED comment; pass " +
         "id to target a specific one. Emptying the text keeps an empty comment " +
         "(use delete to remove).",
       inputSchema: {
@@ -559,7 +559,7 @@ export function buildTools(http, session) {
     {
       name: "delete_personal_comment",
       description:
-        "Delete an personal comment. Defaults to the SELECTED comment; pass id to " +
+        "Delete a personal comment. Defaults to the SELECTED comment; pass id to " +
         "target a specific one.",
       inputSchema: { id: z.string().optional().describe("Comment id (defaults to the selected comment)"), repo: z.string().optional(), branch: z.string().optional(), path: z.string().optional() },
       handler: (args) => ensuredPost("/api/v1/personal-comments/mcp/delete", args),
@@ -691,8 +691,9 @@ export function buildTools(http, session) {
       name: "refresh_spec",
       description:
         "Refresh the spec file the user has open in the reviewing page — reloads " +
-        "it from ADO so a push you made outside Tippani becomes visible. Use " +
-        "after pushing a change the user asked for, to show them the result.",
+        "it from source (ADO for a PR, or the local clone's branch/working tree " +
+        "in local review) so a change made outside Tippani becomes visible. Use " +
+        "after making a change the user asked for, to show them the result.",
       inputSchema: {},
       handler: (args) => ensuredPost("/api/v1/spec/refresh", args || {}),
     },
