@@ -47,6 +47,7 @@ import { buildPushChangeSet } from "./push-changeset.js";
 import { adoCall } from "./ado-call.js";
 import { makeRepoSession, createSessionTokens } from "./repo-session.js";
 import { saveSpecDraft, loadSpecDraft, deleteSpecDraft } from "./spec-draft-store.js";
+import { openSpecReviewPr } from "./pr-open.js";
 import {
   decodeConfigValue,
   extOf,
@@ -5017,6 +5018,35 @@ async function pushRemoteSpec({ repo, branch, message, oldObjectId }) {
   for (const d of staged) _remoteSpecDrafts.delete(`${repo}\n${branch}\n${d.path}`);
   return { ok: true, status: 200, body: { ok: true, commitId, pushedFiles: staged.map((d) => d.path) } };
 }
+
+// Open a PR for the authored branch and find-or-create-and-link a Spec review
+// work item (clickstop 2, step 12). Pure request shapes live in pr-open.js; here
+// we inject the real ADO calls, each bounded by the adoCall timeout. Title/type
+// come from the caller — never inferred.
+async function openPr(args = {}) {
+  if (!_conn) return { ok: false, error: "no ADO connection" };
+  const gitApi = await _conn.getGitApi();
+  const witApi = await _conn.getWorkItemTrackingApi();
+  let repoInfo;
+  try { repoInfo = await adoCall(() => gitApi.getRepository(ADO_REPO, ADO_PROJECT), { label: "getRepository" }); }
+  catch (e) { return { ok: false, error: "failed to resolve repository: " + (e?.message || e) }; }
+  const projectId = repoInfo?.project?.id || ADO_PROJECT;
+  const repositoryId = repoInfo?.id || ADO_REPO;
+  try {
+    return await openSpecReviewPr({
+      call: (fn) => adoCall(fn, { label: "pr-open" }),
+      createPr: (req) => gitApi.createPullRequest(req, ADO_REPO, ADO_PROJECT),
+      findWorkItems: async (wiql) => {
+        const q = await witApi.queryByWiql({ query: wiql }, { project: ADO_PROJECT });
+        return (q.workItems || []).map((w) => ({ id: w.id }));
+      },
+      createWorkItem: async (patch, type) => witApi.createWorkItem(null, patch, ADO_PROJECT, type),
+      linkWorkItem: async (id, patch) => witApi.updateWorkItem(null, patch, id),
+    }, { ...args, projectId, repositoryId });
+  } catch (e) {
+    return { ok: false, error: "open PR failed: " + (e?.message || e) };
+  }
+}
 // Session token authorises external (non-browser-same-origin) mutations.
 // Generated fresh per process and printed to stdout at startup.
 const _sessionToken = crypto.randomBytes(24).toString("base64url");
@@ -6997,6 +7027,7 @@ if ($path) { [Console]::Out.Write($path) }
     remoteSpecDrafts: _remoteSpecDrafts,
     remoteSpecLocks: _remoteSpecLocks,
     pushRemoteSpec,
+    openPr,
     listPersonalComments,
     createPersonalComment,
     editPersonalComment,

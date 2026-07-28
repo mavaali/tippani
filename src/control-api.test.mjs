@@ -78,6 +78,14 @@ const pushRemoteSpec = async ({ repo, branch, oldObjectId }) => {
   for (const d of staged) remoteSpecDrafts.delete(`${repo}\n${branch}\n${d.path}`);
   return { ok: true, status: 200, body: { ok: true, commitId: "c1", pushedFiles: files } };
 };
+// Clickstop 2 step 12: fake open-PR dep. Echoes the request so the route
+// contract (never infers title/type) is observable.
+let lastOpenPrArgs = null;
+const openPr = async (args) => {
+  lastOpenPrArgs = args;
+  if (args.title === "boom") return { ok: false, error: "ADO rejected the PR" };
+  return { ok: true, pullRequestId: 77, url: "http://pr/77", isDraft: !!args.isDraft, workItemId: args.workItemTitle ? 88 : null, workItemCreated: !!args.workItemTitle, linked: !!args.workItemTitle };
+};
 
 let lastAdoToken = null;
 const app = express();
@@ -103,6 +111,7 @@ registerControlApi(app, {
   remoteSpecDrafts,
   remoteSpecLocks,
   pushRemoteSpec,
+  openPr,
 });
 
 const server = await new Promise((resolve) => {
@@ -538,6 +547,37 @@ try {
     await call("/api/v1/specs/draft", { method: "PUT", headers: authHeaders, body: { repo: RREPO, branch: RBRANCH, path: "docs/stale.md", body: "z" } });
     const push = await call("/api/v1/specs/draft/push", { method: "POST", headers: authHeaders, body: { repo: RREPO, branch: RBRANCH, oldObjectId: "stale" } });
     check("remote-draft: stale oldObjectId -> 409", push.status === 409 && push.body.ok === false);
+  }
+
+  // --- Open PR + link work item (clickstop 2, step 12) ---
+  {
+    const r = await fetch(BASE + "/api/v1/pr/open", { method: "POST" });
+    check("pr-open: missing X-Tippani-Client -> 403", r.status === 403);
+  }
+  {
+    const r = await fetch(BASE + "/api/v1/pr/open", {
+      method: "POST", headers: { "X-Tippani-Client": "test", "Content-Type": "application/json" },
+      body: JSON.stringify({ title: "t", sourceBranch: "a", targetBranch: "b" }),
+    });
+    check("pr-open: mutation without bearer -> 401", r.status === 401);
+  }
+  {
+    const r = await call("/api/v1/pr/open", { method: "POST", headers: authHeaders, body: { sourceBranch: "a", targetBranch: "b" } });
+    check("pr-open: missing title -> 400", r.status === 400);
+  }
+  {
+    // A work item requires an explicit type — the route never infers it.
+    const r = await call("/api/v1/pr/open", { method: "POST", headers: authHeaders, body: { title: "t", sourceBranch: "a", targetBranch: "b", workItemTitle: "Spec review" } });
+    check("pr-open: workItemTitle without type -> 400 (never inferred)", r.status === 400);
+  }
+  {
+    const r = await call("/api/v1/pr/open", { method: "POST", headers: authHeaders, body: { title: "Add spec", sourceBranch: "spec/x", targetBranch: "main", isDraft: true, workItemTitle: "Spec review", workItemType: "Task" } });
+    check("pr-open: valid -> PR opened + work item linked", r.status === 200 && r.body.ok === true && r.body.pullRequestId === 77 && r.body.workItemId === 88 && r.body.linked === true);
+    check("pr-open: forwarded the caller's title/type (not inferred)", lastOpenPrArgs.title === "Add spec" && lastOpenPrArgs.workItemType === "Task");
+  }
+  {
+    const r = await call("/api/v1/pr/open", { method: "POST", headers: authHeaders, body: { title: "boom", sourceBranch: "a", targetBranch: "b" } });
+    check("pr-open: ADO failure -> 502 + ok:false", r.status === 502 && r.body.ok === false);
   }
 
 } finally {

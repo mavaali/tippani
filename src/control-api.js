@@ -40,6 +40,7 @@ export function registerControlApi(app, deps) {
     remoteSpecDrafts,   // durable staged-draft store keyed by (repo,branch,path) (optional) — clickstop 2 remote authoring
     remoteSpecLocks,    // lock store keyed by (repo,branch,path) (optional) — two-writer 409 guard
     pushRemoteSpec,     // async ({repo,branch,message,oldObjectId}) => {ok,status,body} (optional) — one-commit push of all staged files
+    openPr,             // async ({title,description,sourceBranch,targetBranch,isDraft,workItemTitle,workItemType,...}) => {ok,...} (optional) — clickstop 2 open PR + link work item
     listPersonalComments,   // async ({repo, branch, path}) => {ok, comments} (optional) — Personal Comments
     createPersonalComment,  // async ({repo, branch, path, line, content}) => {ok, comment} (optional)
     editPersonalComment,    // async ({repo, branch, path, id, content}) => {ok, comment|deleted} (optional)
@@ -310,6 +311,22 @@ export function registerControlApi(app, deps) {
     try {
       const r = await pushRemoteSpec({ repo, branch, message, oldObjectId });
       res.status(r.status || (r.ok ? 200 : 500)).json(r.body ?? r);
+    } catch (e) {
+      res.status(502).json({ ok: false, error: String(e?.message || e) });
+    }
+  });
+
+  // Open a PR for the authored branch and find-or-create-and-link a Spec review
+  // work item (clickstop 2, step 12). Title/type come from the caller — Tippani
+  // never infers them; a missing title/type is a 400, not a guess.
+  app.post("/api/v1/pr/open", requireAuth({ mutation: true }), async (req, res) => {
+    if (typeof openPr !== "function") return res.status(501).json({ error: "open PR not wired" });
+    const { title, sourceBranch, targetBranch, workItemTitle, workItemType } = req.body || {};
+    if (!title || !sourceBranch || !targetBranch) return res.status(400).json({ error: "title, sourceBranch, targetBranch required" });
+    if (workItemTitle && !workItemType) return res.status(400).json({ error: "workItemType required when workItemTitle is set (never inferred)" });
+    try {
+      const r = await openPr(req.body);
+      res.status(r.ok === false ? 502 : 200).json(r);
     } catch (e) {
       res.status(502).json({ ok: false, error: String(e?.message || e) });
     }
