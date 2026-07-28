@@ -6265,6 +6265,23 @@ async function main() {
     return { ok: true, opened: p, repo: info.id, repoName: info.name };
   }
 
+  // Clickstop 2: open ONE arbitrary .md by absolute path read-only in the
+  // reviewing view (so the user + the personal-comment tools have a target).
+  // Gated by the SAME approved-root containment as local review; sets the
+  // file:<realpath> reviewing context up front so a follow-up comment call
+  // resolves immediately, then navigates the portal to /open-file-view.
+  async function mcpOpenFile({ path: filePath } = {}) {
+    const cls = classifyOpenFilePath(filePath, { fs, path, isContained });
+    if (!cls.ok) return { ok: false, error: cls.error, reason: cls.reason };
+    const real = cls.realpath;
+    const ctx = fileReviewContext(real);
+    const p = `/open-file-view?path=${encodeURIComponent(real)}`;
+    _focus.setPcContext({ repo: ctx.repo, branch: ctx.branch, path: ctx.path });
+    _focus.setPcSelected(null);
+    _focus.setNav(p);
+    return { ok: true, opened: p, realpath: real };
+  }
+
   // Discovery branch page: list the markdown files that are UNIQUE to a branch —
   // i.e. the files it changed relative to where it forked from the repo's default
   // branch (not every file in the tree). Diffs default..branch at the common
@@ -6906,6 +6923,7 @@ if ($path) { [Console]::Out.Write($path) }
     mcpRefreshSpec,
     mcpOpenBranch,
     mcpOpenBranchFile,
+    mcpOpenFile,
   });
 
   const server = app.listen(PORT, "127.0.0.1", () => {

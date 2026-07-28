@@ -78,6 +78,11 @@ registerControlApi(app, {
   setViewed: fakeSetViewed,
   specDrafts,
   listPrs: async (q) => ({ prs: [{ id: 7, title: "Demo PR", author: "Kay" }], mine: q.creator !== "any", status: 1 }),
+  // Clickstop 2: open_local_file forwards here.
+  mcpOpenFile: async ({ path: p } = {}) =>
+    p === "/ok/a.md"
+      ? { ok: true, opened: "/open-file-view?path=" + p, realpath: p }
+      : { ok: false, reason: "outside-root", error: "outside every approved folder" },
 });
 
 const server = await new Promise((res) => {
@@ -115,9 +120,9 @@ try {
     "read_personal_comments", "add_personal_comment", "edit_personal_comment",
     "delete_personal_comment", "resolve_personal_comment", "reply_personal_comment", "delete_resolved_personal_comments",
     "delete_all_personal_comments", "navigate_personal_comments", "jump_to_personal_comment",
-    "show_resolved_personal_comments", "open_branch", "open_branch_file", "refresh_spec",
+    "show_resolved_personal_comments", "open_branch", "open_branch_file", "open_local_file", "refresh_spec",
   ];
-  check("tools: exactly 40 registered", tools.length === 40);
+  check("tools: exactly 41 registered", tools.length === 41);
   for (const n of expected) {
     check(`tools: includes ${n}`, !!byName[n]);
     check(`tools: ${n} has description`, typeof byName[n].description === "string" && byName[n].description.length > 20);
@@ -148,6 +153,18 @@ try {
     check("open_file: single-tab does NOT open a new browser tab", !openUrlCalls.includes("/file/2"));
     const r2 = await byName.open_file.handler({ fileIndex: 0, line: 47 });
     check("open_file: appends ?line when given", r2.opened === "/file/0?line=47" && focus.get().navUrl === "/file/0?line=47");
+  }
+
+  // --- open_local_file (clickstop 2: one-off .md by path, gated to approved roots) ---
+  {
+    const before = browsePortalCalls.length;
+    const r = await byName.open_local_file.handler({ path: "/ok/a.md" });
+    check("open_local_file: valid path -> ok + realpath", r.ok === true && r.realpath === "/ok/a.md");
+    check("open_local_file: ensured a browse portal", browsePortalCalls.length === before + 1);
+    let rejected = false, rejStatus = 0;
+    try { await byName.open_local_file.handler({ path: "/etc/passwd.md" }); }
+    catch (e) { rejected = true; rejStatus = e.status; }
+    check("open_local_file: outside-root rejected (400, not read)", rejected && rejStatus === 400);
   }
 
   // --- stage_resolve_thread ---

@@ -45,7 +45,7 @@ export function registerControlApi(app, deps) {
     mcpReadPersonalComments, mcpAddPersonalComment, mcpEditPersonalComment, mcpDeletePersonalComment,
     mcpResolvePersonalComment, mcpReplyPersonalComment, mcpDeleteResolvedPersonalComments, mcpClearPersonalComments,
     mcpNavPersonalComment, mcpJumpPersonalComment, mcpSetPcResolvedVisibility, // MCP personal-comment ops
-    mcpRefreshSpec, mcpOpenBranch, mcpOpenBranchFile, // MCP: refresh + open review surface
+    mcpRefreshSpec, mcpOpenBranch, mcpOpenBranchFile, mcpOpenFile, // MCP: refresh + open review surface
   } = deps;
 
   const ALLOWED_ORIGINS = new Set([
@@ -589,6 +589,7 @@ export function registerControlApi(app, deps) {
   app.post("/api/v1/spec/refresh", requireAuth({ mutation: true }), mcpAc(mcpRefreshSpec, "refresh spec"));
   app.post("/api/v1/spec/open-branch", requireAuth({ mutation: true }), mcpAc(mcpOpenBranch, "open branch"));
   app.post("/api/v1/spec/open-branch-file", requireAuth({ mutation: true }), mcpAc(mcpOpenBranchFile, "open branch file"));
+  app.post("/api/v1/spec/open-file", requireAuth({ mutation: true }), mcpAc(mcpOpenFile, "open file"));
 
   app.post("/api/v1/personal-comments/:id/resolve", requireAuth({ mutation: true }), async (req, res) => {
     if (typeof resolvePersonalComment !== "function") return res.status(501).json({ error: "personal comments not wired" });

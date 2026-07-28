@@ -688,6 +688,24 @@ export function buildTools(http, session) {
       },
     },
     {
+      name: "open_local_file",
+      description:
+        "Open ONE arbitrary .md file read-only in the reviewing view by its " +
+        "absolute path on disk (no branch, no ADO), so the user can read it and " +
+        "the personal-comment tools have a target. The file must sit inside a " +
+        "folder the user has opened in Tippani (an approved root) — a path " +
+        "outside every approved root is rejected, never read. Read-only.",
+      inputSchema: {
+        path: z.string().describe("Absolute path to a .md file inside an approved root"),
+      },
+      handler: async (args) => {
+        if (session && typeof session.ensureBrowsePortal === "function") {
+          await session.ensureBrowsePortal();
+        }
+        return http.post("/api/v1/spec/open-file", args);
+      },
+    },
+    {
       name: "refresh_spec",
       description:
         "Refresh the spec file the user has open in the reviewing page — reloads " +
