@@ -6012,7 +6012,12 @@ async function main() {
     if (rawText != null && Array.isArray(sourceMap)) {
       const ra = pcReanchor(list, rawText, sourceMap);
       if (ra.changed) {
-        try { savePersonalComments(repo, branch, filePath, ra.comments); } catch { /* re-anchor persistence is best-effort */ }
+        // Re-anchor persistence is derived data (recomputed each render), so a
+        // write failure isn't fatal — but it must NOT be swallowed silently
+        // (clickstop 2, step 6: the last silent catch, closed). savePersonalComments
+        // throws on write failure; surface it and keep serving the in-memory list.
+        try { savePersonalComments(repo, branch, filePath, ra.comments); }
+        catch (e) { console.warn(`personal-comments: re-anchor persist failed for ${filePath}: ${e && (e.code || e.message)}`); }
       }
       list = ra.comments;
     }
