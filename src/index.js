@@ -42,6 +42,7 @@ import { createApprovedRoots } from "./approved-roots.js";
 import { classifyOpenFilePath } from "./open-file-path.js";
 import { fileReviewContext } from "./comment-key.js";
 import { isAllowedHost } from "./host-guard.js";
+import { buildPushChangeSet } from "./push-changeset.js";
 import {
   decodeConfigValue,
   extOf,
@@ -625,21 +626,14 @@ async function getBranchTip(conn, branchRef) {
 async function pushFileToBranch(conn, branchRef, filePath, content, message, expectedOldObjectId) {
   const gitApi = await conn.getGitApi();
   const oldObjectId = expectedOldObjectId || (await getBranchTip(conn, branchRef));
-  const push = {
-    refUpdates: [{ name: branchRef, oldObjectId }],
-    commits: [
-      {
-        comment: message,
-        changes: [
-          {
-            changeType: 2, // VersionControlChangeType.Edit
-            item: { path: filePath },
-            newContent: { content, contentType: 0 }, // ItemContentType.RawText
-          },
-        ],
-      },
-    ],
-  };
+  // Clickstop 2, step 8: build the change set through the shared, tested builder
+  // (this edit is the single-edit case of the multi-file add/edit push).
+  const push = buildPushChangeSet({
+    edits: [{ path: filePath, content }],
+    message,
+    branchRef,
+    oldObjectId,
+  });
   const result = await gitApi.createPush(push, ADO_REPO, ADO_PROJECT);
   return result?.commits?.[0]?.commitId || result?.refUpdates?.[0]?.newObjectId || null;
 }
