@@ -40,6 +40,7 @@ import { buildPrCriteria, summarizePr, mergeRolePrs, prStatusLabel } from "./pr-
 import { navSkipsBarePathClobber, navShouldNavigate, navTarget } from "./nav-guard.js";
 import { createApprovedRoots } from "./approved-roots.js";
 import { classifyOpenFilePath } from "./open-file-path.js";
+import { fileReviewContext } from "./comment-key.js";
 import {
   decodeConfigValue,
   extOf,
@@ -5433,6 +5434,46 @@ async function main() {
     } catch (e) {
       console.error(`/spec read-only failed for ${specPath}:`, e.message);
       res.status(502).send("Could not open the spec. Check the server console.");
+    }
+  });
+
+  // Clickstop 2 (Open file): read-only review of a single, arbitrary .md file by
+  // absolute path — no branch, no ADO. Gated by the SAME approved-root containment
+  // as local review (a caller path never reads outside an approved root). Reuses
+  // the read-only spec page + Personal Comments pane; comments key file:<realpath>.
+  app.get("/open-file-view", async (req, res) => {
+    const cls = classifyOpenFilePath(req.query.path, { fs, path, isContained });
+    if (!cls.ok) return res.status(cls.reason === "outside-root" || cls.reason === "symlink-escape" ? 403 : 400)
+      .send(cls.error || "Cannot open that file.");
+    const real = cls.realpath;
+    try {
+      const raw = fs.readFileSync(real, "utf8");
+      const { metadata, body } = stripFrontmatter(raw);
+      const { toc } = buildSourceMap(body);
+      const { html, ranges } = await renderSpecBody(body, specSanitizeSchema, { includeHeadings: true });
+      // Relative images resolve against the file's own directory (still inside an
+      // approved root); reuse the local media route with the file's dir as `local`.
+      const fileDir = path.dirname(real);
+      const baseName = path.basename(real);
+      const bodyHtml = html.replace(/(<img\b[^>]*\bsrc=")([^"]+)(")/gi, (m, pre, src, post) => {
+        if (/^(https?:|data:|\/\/|\/spec\/media)/i.test(src)) return m;
+        return pre + `/spec/media?local=${encodeURIComponent(fileDir)}&spec=${encodeURIComponent(baseName)}&branch=&src=${encodeURIComponent(src)}` + post;
+      });
+      const title = metadata.title || baseName;
+      const ctx = fileReviewContext(real);
+      const personalComments = (await listPersonalComments({ repo: ctx.repo, branch: ctx.branch, path: ctx.path, rawText: body, sourceMap: ranges })).comments || [];
+      const commentCount = personalComments.length;
+      _focus.setPcContext({ repo: ctx.repo, branch: ctx.branch, path: ctx.path });
+      const pcDataSeq = _focus.get().pcDataSeq;
+      return res.type("html").send(buildReadonlySpecPage({
+        title, bodyHtml, toc, specPath: real, repo: title, adoUrl: "", backHref: "/discovery?tab=openfile",
+        backLabel: "Open file", historyUrl: "", sourceMap: ranges, reviewing: true, editMode: "local",
+        commentCount, reviewRepo: ctx.repo, reviewBranch: ctx.branch, reviewPath: ctx.path,
+        currentUser: "You", personalComments, pcDataSeq,
+      }));
+    } catch (e) {
+      console.error(`/open-file-view failed for ${real}:`, e.message);
+      return res.status(502).send("Could not open the file. Check the server console.");
     }
   });
 
