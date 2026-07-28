@@ -32,6 +32,19 @@ export function registerControlApi(app, deps) {
     searchWorkItems,    // async ({project, wiql}) => {workItems, ...} (optional) — Discovery WIQL search
     searchSpecs,        // async ({project, query}) => {specs, ...} (optional) — Discovery spec full-text search
     getFileCommits,     // async ({files, top}) => {files:[{repo,path,branch,commits}]} (optional) — bulk commit info
+    listMyBranches,     // async ({project}) => {branches, ...} (optional) — Discovery Branches tab
+    openLocalRepo,      // async ({path}) => {ok, path, branch} (optional) — Discovery local-repo tile
+    listLocalBranches,  // async ({path}) => {ok, path, branches} (optional) — Discovery Branches tab (Local)
+    pickLocalFolder,    // async () => {ok, path, branch} | {canceled} (optional) — native folder dialog
+    listPersonalComments,   // async ({repo, branch, path}) => {ok, comments} (optional) — Personal Comments
+    createPersonalComment,  // async ({repo, branch, path, line, content}) => {ok, comment} (optional)
+    editPersonalComment,    // async ({repo, branch, path, id, content}) => {ok, comment|deleted} (optional)
+    deletePersonalComment,  // async ({repo, branch, path, id}) => {ok, id} (optional)
+    resolvePersonalComment, // async ({repo, branch, path, id, resolved}) => {ok, comment} (optional)
+    mcpReadPersonalComments, mcpAddPersonalComment, mcpEditPersonalComment, mcpDeletePersonalComment,
+    mcpResolvePersonalComment, mcpReplyPersonalComment, mcpDeleteResolvedPersonalComments, mcpClearPersonalComments,
+    mcpNavPersonalComment, mcpJumpPersonalComment, mcpSetPcResolvedVisibility, // MCP personal-comment ops
+    mcpRefreshSpec, mcpOpenBranch, mcpOpenBranchFile, // MCP: refresh + open review surface
   } = deps;
 
   const ALLOWED_ORIGINS = new Set([
@@ -427,9 +440,154 @@ export function registerControlApi(app, deps) {
     }
   });
 
-  app.get("/api/v1/state", requireAuth(), (_req, res) => {
+  // Discovery Branches tab: POST { project } -> the signed-in user's branches
+  // across that project's repos. same-origin (browser) or bearer (MCP).
+  app.post("/api/v1/branches", requireAuth({ mutation: true }), async (req, res) => {
+    if (typeof listMyBranches !== "function") return res.status(501).json({ error: "branch listing not wired" });
+    try {
+      const { project } = req.body || {};
+      res.json(await listMyBranches({ project }));
+    } catch (e) {
+      res.status(502).json({ error: String(e?.message || e) });
+    }
+  });
+
+  // Discovery local-repo tile: POST { path } -> validate a local clone and
+  // report its current branch. same-origin (browser) or bearer (MCP).
+  app.post("/api/v1/local-repo", requireAuth({ mutation: true }), async (req, res) => {
+    if (typeof openLocalRepo !== "function") return res.status(501).json({ error: "local repo not wired" });
+    try {
+      const { path: repoPath } = req.body || {};
+      res.json(await openLocalRepo({ path: repoPath }));
+    } catch (e) {
+      res.status(502).json({ error: String(e?.message || e) });
+    }
+  });
+
+  // Discovery Branches tab (Local mode): POST { path } -> the local clone's
+  // branches (loose + packed refs), current flagged. same-origin or bearer.
+  app.post("/api/v1/local-branches", requireAuth({ mutation: true }), async (req, res) => {
+    if (typeof listLocalBranches !== "function") return res.status(501).json({ error: "local branches not wired" });
+    try {
+      const { path: repoPath } = req.body || {};
+      res.json(await listLocalBranches({ path: repoPath }));
+    } catch (e) {
+      res.status(502).json({ error: String(e?.message || e) });
+    }
+  });
+
+  // Discovery Branches tab (Local mode): POST -> pop a native OS folder dialog
+  // on the user's desktop and return the chosen local repo path (server-side git
+  // needs a real path; the browser picker hides it). same-origin or bearer.
+  app.post("/api/v1/local-pick", requireAuth({ mutation: true }), async (_req, res) => {
+    if (typeof pickLocalFolder !== "function") return res.status(501).json({ error: "folder picker not wired" });
+    try {
+      res.json(await pickLocalFolder());
+    } catch (e) {
+      res.status(502).json({ error: String(e?.message || e) });
+    }
+  });
+
+  // Personal Comments (read-only spec page, file-reviewing mode): a spec author's
+  // own notes on a draft file, scoped to (repo, branch, path). GET reads; POST
+  // creates; PUT edits (empty content deletes); DELETE removes. same-origin
+  // (browser) or bearer (MCP). Missing handlers -> 501.
+  app.get("/api/v1/personal-comments", requireAuth(), async (req, res) => {
+    if (typeof listPersonalComments !== "function") return res.status(501).json({ error: "personal comments not wired" });
+    try {
+      const { repo, branch, path: filePath } = req.query || {};
+      res.json(await listPersonalComments({ repo, branch, path: filePath }));
+    } catch (e) {
+      res.status(502).json({ error: String(e?.message || e) });
+    }
+  });
+
+  app.post("/api/v1/personal-comments", requireAuth({ mutation: true }), async (req, res) => {
+    if (typeof createPersonalComment !== "function") return res.status(501).json({ error: "personal comments not wired" });
+    try {
+      const { repo, branch, path: filePath, line, content } = req.body || {};
+      const result = await createPersonalComment({ repo, branch, path: filePath, line, content });
+      res.status(result.ok ? 200 : 400).json(result);
+    } catch (e) {
+      res.status(502).json({ error: String(e?.message || e) });
+    }
+  });
+
+  app.put("/api/v1/personal-comments/:id", requireAuth({ mutation: true }), async (req, res) => {
+    if (typeof editPersonalComment !== "function") return res.status(501).json({ error: "personal comments not wired" });
+    try {
+      const { repo, branch, path: filePath, content } = req.body || {};
+      const result = await editPersonalComment({ repo, branch, path: filePath, id: String(req.params.id), content });
+      res.status(result.ok ? 200 : 400).json(result);
+    } catch (e) {
+      res.status(502).json({ error: String(e?.message || e) });
+    }
+  });
+
+  app.delete("/api/v1/personal-comments/:id", requireAuth({ mutation: true }), async (req, res) => {
+    if (typeof deletePersonalComment !== "function") return res.status(501).json({ error: "personal comments not wired" });
+    try {
+      const src = { ...(req.query || {}), ...(req.body || {}) };
+      const result = await deletePersonalComment({ repo: src.repo, branch: src.branch, path: src.path, id: String(req.params.id) });
+      res.status(result.ok ? 200 : 400).json(result);
+    } catch (e) {
+      res.status(502).json({ error: String(e?.message || e) });
+    }
+  });
+
+  // The browser reports which comment card is selected (focused) so MCP
+  // "edit/delete selected" act on the user's choice. same-origin (browser).
+  app.post("/api/v1/personal-comments/select", requireAuth({ mutation: true }), (req, res) => {
+    focus.setPcSelected((req.body || {}).id);
+    res.json({ ok: true });
+  });
+
+  // MCP-facing personal-comment operations: default to the open reviewing file +
+  // selected comment and push UI commands so actions reflect live in the page.
+  // Registered BEFORE the parameterized "/:id/resolve" route so "/mcp/resolve"
+  // isn't captured as id="mcp".
+  const mcpAc = (fn, label) => async (req, res) => {
+    if (typeof fn !== "function") return res.status(501).json({ error: label + " not wired" });
+    try {
+      const src = req.method === "GET" ? (req.query || {}) : (req.body || {});
+      const result = await fn(src);
+      res.status(result && result.ok === false ? 400 : 200).json(result);
+    } catch (e) {
+      res.status(502).json({ error: String(e?.message || e) });
+    }
+  };
+  app.get("/api/v1/personal-comments/all", requireAuth(), mcpAc(mcpReadPersonalComments, "read personal comments"));
+  app.post("/api/v1/personal-comments/mcp/add", requireAuth({ mutation: true }), mcpAc(mcpAddPersonalComment, "add personal comment"));
+  app.post("/api/v1/personal-comments/mcp/edit", requireAuth({ mutation: true }), mcpAc(mcpEditPersonalComment, "edit personal comment"));
+  app.post("/api/v1/personal-comments/mcp/delete", requireAuth({ mutation: true }), mcpAc(mcpDeletePersonalComment, "delete personal comment"));
+  app.post("/api/v1/personal-comments/mcp/resolve", requireAuth({ mutation: true }), mcpAc(mcpResolvePersonalComment, "resolve personal comment"));
+  app.post("/api/v1/personal-comments/mcp/reply", requireAuth({ mutation: true }), mcpAc(mcpReplyPersonalComment, "reply to personal comment"));
+  app.post("/api/v1/personal-comments/mcp/delete-resolved", requireAuth({ mutation: true }), mcpAc(mcpDeleteResolvedPersonalComments, "delete resolved personal comments"));
+  app.post("/api/v1/personal-comments/mcp/clear", requireAuth({ mutation: true }), mcpAc(mcpClearPersonalComments, "clear personal comments"));
+  app.post("/api/v1/personal-comments/mcp/nav", requireAuth({ mutation: true }), mcpAc(mcpNavPersonalComment, "navigate personal comments"));
+  app.post("/api/v1/personal-comments/mcp/jump", requireAuth({ mutation: true }), mcpAc(mcpJumpPersonalComment, "jump to personal comment"));
+  app.post("/api/v1/personal-comments/mcp/show-resolved", requireAuth({ mutation: true }), mcpAc(mcpSetPcResolvedVisibility, "show/hide resolved personal comments"));
+
+  // Reviewing surface: refresh the open file (remote push -> visible) and open a
+  // branch / spec file for review from MCP.
+  app.post("/api/v1/spec/refresh", requireAuth({ mutation: true }), mcpAc(mcpRefreshSpec, "refresh spec"));
+  app.post("/api/v1/spec/open-branch", requireAuth({ mutation: true }), mcpAc(mcpOpenBranch, "open branch"));
+  app.post("/api/v1/spec/open-branch-file", requireAuth({ mutation: true }), mcpAc(mcpOpenBranchFile, "open branch file"));
+
+  app.post("/api/v1/personal-comments/:id/resolve", requireAuth({ mutation: true }), async (req, res) => {
+    if (typeof resolvePersonalComment !== "function") return res.status(501).json({ error: "personal comments not wired" });
+    try {
+      const { repo, branch, path: filePath, resolved } = req.body || {};
+      const result = await resolvePersonalComment({ repo, branch, path: filePath, id: String(req.params.id), resolved });
+      res.status(result.ok ? 200 : 400).json(result);
+    } catch (e) {
+      res.status(502).json({ error: String(e?.message || e) });
+    }
+  });
+
+  app.get("/api/v1/state", requireAuth(), (req, res) => {
     const f = focus.get();
-    res.json({
+    const body = {
       focusedThreadId: f.focusedThreadId,
       version: f.version,
       navUrl: f.navUrl,
@@ -438,9 +596,20 @@ export function registerControlApi(app, deps) {
       viewSeq: f.viewSeq,
       filter: f.filter,
       filterSeq: f.filterSeq,
-      drafts: drafts.list(),
-      specDrafts: specDrafts ? specDrafts.list() : {},
-    });
+      pcContext: f.pcContext,
+      pcSelectedId: f.pcSelectedId,
+      pcCommand: f.pcCommand,
+      pcCommandSeq: f.pcCommandSeq,
+      pcDataSeq: f.pcDataSeq,
+    };
+    // The heavy draft bodies are only needed when something actually changed;
+    // the 1.2s pollers compare seqs/version and re-fetch with ?full=1 on a bump,
+    // so the steady-state poll ships just the small header, not every draft.
+    if (req.query && (req.query.full === "1" || req.query.full === "true")) {
+      body.drafts = drafts.list();
+      body.specDrafts = specDrafts ? specDrafts.list() : {};
+    }
+    res.json(body);
   });
 
   // POST /api/v1/threads/:id/reply — token-gated wrapper over the same

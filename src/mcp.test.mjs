@@ -92,8 +92,10 @@ const http = createHttpClient({ baseUrl: BASE, token: TOKEN, clientName: "mcp-te
 // spawning a real portal, then reads threads through the live control API.
 const ensurePortalCalls = [];
 const openUrlCalls = [];
+const browsePortalCalls = [];
 const stubSession = {
   ensurePortal: async (opts) => { ensurePortalCalls.push(opts); return { reused: false, prId: opts.prId }; },
+  ensureBrowsePortal: async () => { browsePortalCalls.push(1); },
   openUrl: async (path) => { openUrlCalls.push(path); },
 };
 const tools = buildTools(http, stubSession);
@@ -110,8 +112,12 @@ try {
     "stage_spec_edit", "get_spec_draft", "clear_spec_edit", "commit_spec",
     "edit_spec", "set_view", "set_feedback_filter",
     "list_prs", "search_work_items", "search_specs", "get_file_commits",
+    "read_personal_comments", "add_personal_comment", "edit_personal_comment",
+    "delete_personal_comment", "resolve_personal_comment", "reply_personal_comment", "delete_resolved_personal_comments",
+    "delete_all_personal_comments", "navigate_personal_comments", "jump_to_personal_comment",
+    "show_resolved_personal_comments", "open_branch", "open_branch_file", "refresh_spec",
   ];
-  check("tools: exactly 26 registered", tools.length === 26);
+  check("tools: exactly 40 registered", tools.length === 40);
   for (const n of expected) {
     check(`tools: includes ${n}`, !!byName[n]);
     check(`tools: ${n} has description`, typeof byName[n].description === "string" && byName[n].description.length > 20);
@@ -308,6 +314,16 @@ try {
     check("loadSessionToken: trims newline", loadSessionToken(tmp) === "secret-value");
     fs.unlinkSync(tmp);
     check("loadSessionToken: missing file -> null", loadSessionToken(tmp) === null);
+  }
+
+  // --- open_branch / open_branch_file ensure a browse portal before posting ---
+  {
+    const before = browsePortalCalls.length;
+    try { await byName.open_branch.handler({ localPath: "C:/repos/specs", branch: "dev/x" }); } catch {}
+    check("open_branch: ensures a browse portal first", browsePortalCalls.length === before + 1);
+    const before2 = browsePortalCalls.length;
+    try { await byName.open_branch_file.handler({ localPath: "C:/repos/specs", branch: "dev/x", path: "/a.md" }); } catch {}
+    check("open_branch_file: ensures a browse portal first", browsePortalCalls.length === before2 + 1);
   }
 
 } finally {

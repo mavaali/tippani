@@ -69,6 +69,16 @@ export function buildTools(http, session) {
       try { await http.post("/api/v1/nav", { path }); } catch {}
     }
   }
+  // POST that first makes sure a browse portal is live, self-healing a dropped
+  // session. Used by the reviewing / personal-comment tools which operate on an
+  // already-open portal but — unlike open_branch* — have no natural launch step,
+  // so without this they hard-fail "No tippani session yet" once a portal is
+  // reaped. (Context-defaulting tools still need a file open to resolve which
+  // comment/file they target; this only guarantees the portal itself is up.)
+  async function ensuredPost(path, body) {
+    if (session && typeof session.ensureBrowsePortal === "function") await session.ensureBrowsePortal();
+    return http.post(path, body || {});
+  }
   return [
     {
       name: "open_pr",
@@ -496,6 +506,196 @@ export function buildTools(http, session) {
         }
         return await http.post("/api/v1/commits/info", { files, top });
       },
+    },
+    // --- Personal Comments (read-only spec page opened from a branch) -----------
+    // These act on the file the user has open in the reviewing page and on the
+    // selected comment, so most take no coordinates. Navigation/jump/visibility
+    // steer the open page (it polls ~1.2s).
+    {
+      name: "read_personal_comments",
+      description:
+        "Read ALL personal comments on the spec file the user currently has open " +
+        "in the reviewing page (opened from a branch). Returns every comment " +
+        "(id, anchor line, author, text, resolved) plus which one is selected. " +
+        "Read-only. Optionally target a specific file with repo+branch+path.",
+      inputSchema: {
+        repo: z.string().optional().describe("Repo GUID (defaults to the open file)"),
+        branch: z.string().optional().describe("Branch (defaults to the open file)"),
+        path: z.string().optional().describe("File path (defaults to the open file)"),
+      },
+      handler: async ({ repo, branch, path }) => {
+        if (session && typeof session.ensureBrowsePortal === "function") await session.ensureBrowsePortal();
+        const q = [["repo", repo], ["branch", branch], ["path", path]]
+          .filter(([, v]) => v).map(([k, v]) => `${k}=${encodeURIComponent(v)}`).join("&");
+        return http.get("/api/v1/personal-comments/all" + (q ? "?" + q : ""));
+      },
+    },
+    {
+      name: "add_personal_comment",
+      description:
+        "Add a personal comment to the open spec file, anchored to a source line " +
+        "(get_spec resolves headings/sections to lines). Saves immediately and " +
+        "selects the new comment in the open page.",
+      inputSchema: {
+        content: z.string().describe("Comment text (markdown allowed)"),
+        line: z.number().int().positive().optional().describe("1-based source line to anchor to"),
+        repo: z.string().optional(), branch: z.string().optional(), path: z.string().optional(),
+      },
+      handler: (args) => ensuredPost("/api/v1/personal-comments/mcp/add", args),
+    },
+    {
+      name: "edit_personal_comment",
+      description:
+        "Edit a personal comment's text. Defaults to the SELECTED comment; pass " +
+        "id to target a specific one. Emptying the text keeps an empty comment " +
+        "(use delete to remove).",
+      inputSchema: {
+        content: z.string().describe("New comment text"),
+        id: z.string().optional().describe("Comment id (defaults to the selected comment)"),
+        repo: z.string().optional(), branch: z.string().optional(), path: z.string().optional(),
+      },
+      handler: (args) => ensuredPost("/api/v1/personal-comments/mcp/edit", args),
+    },
+    {
+      name: "delete_personal_comment",
+      description:
+        "Delete a personal comment. Defaults to the SELECTED comment; pass id to " +
+        "target a specific one.",
+      inputSchema: { id: z.string().optional().describe("Comment id (defaults to the selected comment)"), repo: z.string().optional(), branch: z.string().optional(), path: z.string().optional() },
+      handler: (args) => ensuredPost("/api/v1/personal-comments/mcp/delete", args),
+    },
+    {
+      name: "reply_personal_comment",
+      description:
+        "Post a reply on a personal comment — a follow-up note recorded under the " +
+        "comment (e.g. how you addressed the feedback). Defaults to the SELECTED " +
+        "comment; pass id to target a specific one. Reflects live in the open page.",
+      inputSchema: {
+        content: z.string().describe("The reply text (Markdown), e.g. what you changed to address the comment"),
+        id: z.string().optional().describe("Comment id (defaults to the selected comment)"),
+        repo: z.string().optional(), branch: z.string().optional(), path: z.string().optional(),
+      },
+      handler: async (args) => {
+        if (session && typeof session.ensureBrowsePortal === "function") await session.ensureBrowsePortal();
+        return http.post("/api/v1/personal-comments/mcp/reply", args);
+      },
+    },
+    {
+      name: "resolve_personal_comment",
+      description:
+        "Mark a personal comment resolved (or reopen it with resolved=false). " +
+        "Defaults to the SELECTED comment; pass id to target a specific one. When " +
+        "resolving after addressing feedback, pass `note` with a short summary of " +
+        "what you changed — it's posted as a reply on the comment BEFORE resolving, " +
+        "so the reviewer sees how it was handled (don't just silently resolve).",
+      inputSchema: {
+        id: z.string().optional().describe("Comment id (defaults to the selected comment)"),
+        resolved: z.boolean().optional().describe("true = resolve (default), false = reopen"),
+        note: z.string().optional().describe("Short summary of how you addressed the comment; posted as a reply before resolving"),
+        repo: z.string().optional(), branch: z.string().optional(), path: z.string().optional(),
+      },
+      handler: async (args) => {
+        if (session && typeof session.ensureBrowsePortal === "function") await session.ensureBrowsePortal();
+        return http.post("/api/v1/personal-comments/mcp/resolve", args);
+      },
+    },
+    {
+      name: "delete_resolved_personal_comments",
+      description:
+        "Delete ALL resolved personal comments on the open spec file. Returns how " +
+        "many were removed. Reflects live in the open page.",
+      inputSchema: {},
+      handler: (args) => ensuredPost("/api/v1/personal-comments/mcp/delete-resolved", args || {}),
+    },
+    {
+      name: "delete_all_personal_comments",
+      description:
+        "Delete EVERY personal comment on the open spec file (resolved or not). " +
+        "Irreversible. Reflects live in the open page.",
+      inputSchema: {},
+      handler: (args) => ensuredPost("/api/v1/personal-comments/mcp/clear", args || {}),
+    },
+    {
+      name: "navigate_personal_comments",
+      description:
+        "Move the selection to the next/previous personal comment (or first/last) " +
+        "and scroll the open page to it. next/prev wrap around.",
+      inputSchema: {
+        direction: z.enum(["next", "prev", "first", "last"]).describe("Which comment to select"),
+      },
+      handler: ({ direction }) => ensuredPost("/api/v1/personal-comments/mcp/nav", { direction }),
+    },
+    {
+      name: "jump_to_personal_comment",
+      description:
+        "Select and scroll the open page to a specific personal comment — by id, " +
+        "or by the source line it's anchored to.",
+      inputSchema: {
+        id: z.string().optional().describe("Comment id"),
+        line: z.number().int().positive().optional().describe("Anchor line to jump to"),
+      },
+      handler: (args) => ensuredPost("/api/v1/personal-comments/mcp/jump", args),
+    },
+    {
+      name: "show_resolved_personal_comments",
+      description:
+        "Hide or show resolved personal comments in the open reviewing page. " +
+        "show=false hides resolved ones; show=true (default) shows them all.",
+      inputSchema: { show: z.boolean().optional().describe("true = show resolved (default), false = hide") },
+      handler: ({ show }) => ensuredPost("/api/v1/personal-comments/mcp/show-resolved", { show: show !== false }),
+    },
+    {
+      name: "open_branch",
+      description:
+        "Open the Branches file-list page for a branch in the user's browser " +
+        "(the read-only review entry). Use to steer the user to a branch's " +
+        "changed specs. For a remote (ADO) branch pass project, repo (GUID or " +
+        "name) and branch. For a fully-local clone pass localPath (the clone " +
+        "path on disk) and branch instead — no ADO is touched.",
+      inputSchema: {
+        project: z.string().optional().describe("ADO project (defaults to the portal's project)"),
+        repo: z.string().optional().describe("Repo GUID or name (remote mode)"),
+        branch: z.string().describe("Branch name (e.g. dev/kay/x)"),
+        localPath: z.string().optional().describe("Local clone path on disk (local mode; overrides repo/project)"),
+      },
+      handler: async (args) => {
+        if (session && typeof session.ensureBrowsePortal === "function") {
+          await session.ensureBrowsePortal();
+        }
+        return http.post("/api/v1/spec/open-branch", args);
+      },
+    },
+    {
+      name: "open_branch_file",
+      description:
+        "Open ONE spec file read-only in the reviewing view for a branch, so the " +
+        "user can read it and the personal-comment tools have a target. For a " +
+        "remote (ADO) branch pass project, repo (GUID or name), branch and path. " +
+        "For a fully-local clone pass localPath, branch and path instead — the " +
+        "file is read from disk and no ADO is touched. Read-only.",
+      inputSchema: {
+        project: z.string().optional().describe("ADO project (defaults to the portal's project)"),
+        repo: z.string().optional().describe("Repo GUID or name (remote mode)"),
+        branch: z.string().describe("Branch name"),
+        path: z.string().describe("File path within the repo (e.g. /Specs/Foo.md)"),
+        localPath: z.string().optional().describe("Local clone path on disk (local mode; overrides repo/project)"),
+      },
+      handler: async (args) => {
+        if (session && typeof session.ensureBrowsePortal === "function") {
+          await session.ensureBrowsePortal();
+        }
+        return http.post("/api/v1/spec/open-branch-file", args);
+      },
+    },
+    {
+      name: "refresh_spec",
+      description:
+        "Refresh the spec file the user has open in the reviewing page — reloads " +
+        "it from source (ADO for a PR, or the local clone's branch/working tree " +
+        "in local review) so a change made outside Tippani becomes visible. Use " +
+        "after making a change the user asked for, to show them the result.",
+      inputSchema: {},
+      handler: (args) => ensuredPost("/api/v1/spec/refresh", args || {}),
     },
   ];
 }

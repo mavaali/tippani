@@ -34,10 +34,21 @@ export function createFocusStore() {
   // filter bar mirrors the same shape locally.
   let filter = null;    // { states?, reviewer?, file?, query? }
   let filterSeq = 0;
+  // Personal Comments (read-only /spec reviewing page). pcContext is the file the
+  // open reviewing page is showing (set server-side when /spec renders), so
+  // param-less MCP tools act on "the open file". pcSelectedId is the selected
+  // comment (the page reports its focused card; MCP nav sets it). pcCommand is a
+  // one-shot instruction the page executes (focus a comment, hide/show resolved);
+  // pcDataSeq bumps whenever comments mutate so the page re-fetches.
+  let pcContext = null; // { repo, branch, path }
+  let pcSelectedId = null;
+  let pcCommand = null; // { type: 'focus'|'showResolved', id?, show? }
+  let pcCommandSeq = 0;
+  let pcDataSeq = 0;
   const VIEWS = ["current", "diff", "proposed"];
   return {
     get() {
-      return { focusedThreadId, version, navUrl, navSeq, view, viewSeq, filter, filterSeq };
+      return { focusedThreadId, version, navUrl, navSeq, view, viewSeq, filter, filterSeq, pcContext, pcSelectedId, pcCommand, pcCommandSeq, pcDataSeq };
     },
     set(threadId) {
       const next = threadId == null ? null : Number(threadId);
@@ -85,6 +96,31 @@ export function createFocusStore() {
     bumpVersion() {
       version++;
       return version;
+    },
+    // --- Personal Comments ---
+    setPcContext(ctx) {
+      pcContext = (ctx && ctx.repo && ctx.branch && ctx.path)
+        ? { repo: String(ctx.repo), branch: String(ctx.branch), path: String(ctx.path) }
+        : null;
+      return pcContext;
+    },
+    setPcSelected(id) {
+      pcSelectedId = id == null || id === "" ? null : String(id);
+      return pcSelectedId;
+    },
+    // Push a one-shot command to the open reviewing page. Always bumps the seq so
+    // a repeat (e.g. focus the same comment again) still fires.
+    setPcCommand(cmd) {
+      pcCommand = cmd || null;
+      pcCommandSeq++;
+      version++;
+      return { pcCommand, pcCommandSeq };
+    },
+    // Signal that the file's comments changed so the page re-fetches + re-renders.
+    bumpPcData() {
+      pcDataSeq++;
+      version++;
+      return pcDataSeq;
     },
   };
 }

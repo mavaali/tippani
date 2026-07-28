@@ -69,6 +69,19 @@ export function escHtml(s) {
   return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 }
 
+// Serialize a value for safe embedding inside an inline <script> block.
+// JSON.stringify alone is NOT safe there: it doesn't escape "<", so a string
+// containing "</script>" closes the script element early (stored-XSS breakout),
+// and U+2028/U+2029 are valid in JSON but illegal as raw JS string chars.
+// Escaping "<" (and the two line separators) keeps the payload inert while
+// staying valid JSON the browser parses back identically.
+export function jsonForScript(value) {
+  return JSON.stringify(value)
+    .replace(/</g, "\\u003c")
+    .replace(/\u2028/g, "\\u2028")
+    .replace(/\u2029/g, "\\u2029");
+}
+
 export function stripMarkdown(s) {
   return String(s)
     .replace(/^#{1,6}\s+/gm, "")       // headings

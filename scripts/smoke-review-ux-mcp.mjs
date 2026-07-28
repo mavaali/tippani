@@ -79,9 +79,13 @@ async function main() {
 
     // --- baseline state parity (item 3/5 fields present) ---
     const st0 = await api("GET", "/api/v1/state");
-    check("state exposes view/viewSeq/filter/filterSeq/specDrafts", st0.status === 200 &&
-      ["view", "viewSeq", "filter", "filterSeq", "specDrafts"].every((k) => k in st0.json),
+    check("state exposes view/viewSeq/filter/filterSeq", st0.status === 200 &&
+      ["view", "viewSeq", "filter", "filterSeq"].every((k) => k in st0.json),
       JSON.stringify(Object.keys(st0.json || {})));
+    // Draft bodies are only in the ?full=1 view (the steady-state poll is slim).
+    const st0f = await api("GET", "/api/v1/state?full=1");
+    check("state?full=1 exposes specDrafts", st0f.status === 200 && "specDrafts" in st0f.json,
+      JSON.stringify(Object.keys(st0f.json || {})));
 
     // --- list_prs (item 6) ---
     const prs = await api("GET", "/api/v1/prs");

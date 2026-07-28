@@ -13,6 +13,7 @@ import rehypeAutolinkHeadings from "rehype-autolink-headings";
 import rehypeSanitize, { defaultSchema } from "rehype-sanitize";
 import fs from "fs";
 import path from "path";
+import { execFile } from "node:child_process";
 import { fileURLToPath } from "url";
 import os from "os";
 import crypto from "crypto";
@@ -44,8 +45,14 @@ import {
   summarizeNonMarkdown,
 } from "./config-util.js";
 import { resolveImagePath, imageContentType, isLfsPointer, secureImageHeaders, isValidRepoId } from "./image-src.js";
-import { cssVariables, changeTypeBadge, escHtml, stripMarkdown } from "./html-util.js";
+import { cssVariables, changeTypeBadge, escHtml, stripMarkdown, jsonForScript } from "./html-util.js";
 import { getSpecContentAt, getSpecBlobAt, buildSpecWebUrl, getLastCommitAuthor } from "./ado-read.js";
+import { branchesForRepo, sortBranches, shortBranchName } from "./branch-list.js";
+import { branchFileRows, visibleFileCount, mdPathsFromChanges, buildSpecHref } from "./branch-files.js";
+import { validateLocalRepo, resolveGitDir, parseGitHead, parsePackedRefs, mergeLocalBranches, parseOriginHeadDefault, userCreatedBranches } from "./local-repo.js";
+import { baseCandidates, safeLocalPath } from "./local-git.js";
+import { newComment as pcNew, addComment as pcAdd, updateComment as pcUpdate, removeComment as pcRemove, findComment as pcFind, sortComments as pcSort, setResolved as pcSetResolved, addReply as pcAddReply, navTargetId as pcNavTarget, reanchorComments as pcReanchor } from "./personal-comments.js";
+import { personalCommentsKey as pcStoreKey, loadPersonalComments as pcStoreLoad, savePersonalComments as pcStoreSave, migrateKey as pcStoreMigrate } from "./personal-comments-store.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -82,6 +89,10 @@ function getConfig() {
 
 // Resolved at startup
 let ADO_ORG, ADO_PROJECT, ADO_REPO;
+// The current LOCAL repo path (Branches "Local" mode). Settable via the
+// --local-repo CLI arg, TIPPANI_LOCAL_REPO env, or POST /api/v1/local-repo (MCP).
+// Injected into the Discovery page so the Repo box shows the full path.
+let _localRepoPath = "";
 
 // --- PAT management ---
 const PAT_FILE = path.join(CONFIG_DIR, "pat");
@@ -160,6 +171,65 @@ function addPending(prId, action) {
 function removePending(prId, actionId) {
   const pending = loadPending(prId).filter((p) => p.id !== actionId);
   savePending(prId, pending);
+}
+
+// --- Personal Comments store (file/branch-scoped, local) ---
+// A spec author's own notes on a draft file, kept locally per (repo, branch,
+// path). List ops are pure (personal-comments.js); disk I/O lives here.
+const PERSONAL_COMMENTS_DIR = path.join(CONFIG_DIR, "personal-comments");
+
+// Disk I/O delegates to the durable, unit-tested store (atomic write,
+// corruption quarantine, loud failures). loadPersonalComments THROWS on a
+// corrupt/unreadable store rather than masquerading as "zero comments", and
+// savePersonalComments THROWS on write failure — so every caller wraps these
+// in try/catch and reports { ok: false } instead of a false success.
+function personalCommentsKey(repoId, branch, filePath) {
+  return pcStoreKey(repoId, branch, filePath);
+}
+
+function loadPersonalComments(repoId, branch, filePath) {
+  return pcStoreLoad(PERSONAL_COMMENTS_DIR, repoId, branch, filePath);
+}
+
+function savePersonalComments(repoId, branch, filePath, comments) {
+  pcStoreSave(PERSONAL_COMMENTS_DIR, repoId, branch, filePath, comments);
+}
+
+// --- Approved local-review roots (allow-list) ---
+// The local review path reads .md straight off disk from a caller-supplied repo
+// path (?local=…, MCP open_branch_file). Left open, a (possibly prompt-injected)
+// agent could read any .md under any git repo on the machine. So local reads are
+// gated to roots the user DELIBERATELY approved — i.e. opened via the Repo box /
+// openLocalRepo or the --local-repo launch arg. Approvals persist so a later MCP
+// session still trusts a repo the user set up earlier. realpath-based, so a
+// symlinked alias of an approved root still matches.
+const LOCAL_ROOTS_FILE = path.join(CONFIG_DIR, "local-roots.json");
+const _approvedRoots = new Set();
+(function loadApprovedRoots() {
+  try {
+    const arr = JSON.parse(fs.readFileSync(LOCAL_ROOTS_FILE, "utf8"));
+    if (Array.isArray(arr)) for (const r of arr) if (typeof r === "string" && r) _approvedRoots.add(r);
+  } catch { /* none yet */ }
+})();
+function approveLocalRoot(p) {
+  let real;
+  try { real = fs.realpathSync(String(p || "").trim()); } catch { return null; }
+  if (!_approvedRoots.has(real)) {
+    _approvedRoots.add(real);
+    try {
+      fs.mkdirSync(CONFIG_DIR, { recursive: true, mode: 0o700 });
+      fs.writeFileSync(LOCAL_ROOTS_FILE, JSON.stringify([..._approvedRoots], null, 2), { mode: 0o600 });
+    } catch { /* persistence best-effort; the in-memory approval still holds */ }
+  }
+  return real;
+}
+function isApprovedRoot(p) {
+  let real;
+  try { real = fs.realpathSync(String(p || "").trim()); } catch { return false; }
+  for (const root of _approvedRoots) {
+    if (real === root || real.startsWith(root + path.sep)) return true;
+  }
+  return false;
 }
 
 // --- ADO error helper ---
@@ -1314,6 +1384,15 @@ table.wi-results { width: 100%; table-layout: fixed; border-collapse: collapse; 
 .wi-title, .wi-asg { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .wi-id { font-weight: 700; color: var(--cp-accent); white-space: nowrap; }
 .wi-open { color: var(--cp-accent); text-decoration: none; font-weight: 700; }
+.br-modes { display: inline-flex; gap: 2px; margin-bottom: 16px; border: 1px solid var(--cp-border); border-radius: 8px; padding: 2px; }
+.br-mode-btn { font-family: inherit; font-size: 13px; font-weight: 600; padding: 6px 18px; border: none; background: none; color: var(--cp-text-muted); border-radius: 6px; cursor: pointer; }
+.br-mode-btn.active { background: var(--cp-accent); color: var(--cp-accent-fg); }
+.br-local-input { flex: 1; min-width: 0; font-family: inherit; font-size: 13px; padding: 8px 12px; border: none; border-radius: 8px; background: transparent; color: var(--cp-text); outline: none; }
+.br-ws-field { flex: 1; display: flex; align-items: center; border: 1px solid var(--cp-border); border-radius: 8px; background: var(--cp-surface); }
+.br-ws-field:focus-within { border-color: var(--cp-accent); }
+.br-ws-clear { flex: 0 0 auto; border: none; background: none; color: var(--cp-text-muted); font-size: 16px; line-height: 1; cursor: pointer; padding: 0 10px; }
+.br-ws-clear:hover { color: var(--cp-text); }
+.br-current { font-size: 10px; font-weight: 700; padding: 1px 8px; border-radius: 99px; background: var(--cp-accent-soft); color: var(--cp-accent); text-transform: uppercase; letter-spacing: 0.3px; margin-left: 8px; }
 .sp-searchrow { display: flex; gap: 10px; margin-bottom: 8px; }
 .sp-query { flex: 1; font-family: inherit; font-size: 13px; padding: 8px 12px; border: 1px solid var(--cp-border); border-radius: 8px; background: var(--cp-surface); color: var(--cp-text); }
 .sp-layout { display: flex; gap: 20px; align-items: flex-start; }
@@ -1680,11 +1759,156 @@ table.wi-results { width: 100%; table-layout: fixed; border-collapse: collapse; 
       updateFacets(); // initial: README/index exclusion + cross-filter
     } catch (e) { status.textContent = 'Search failed: ' + e.message; }
   }
+  var SERVER_LOCAL_REPO = ${jsonForScript(_localRepoPath || "")};
+  var brMode = 'remote';
+  function renderBranchCards(items, kind) {
+    var out = document.getElementById('brResults');
+    if (!items.length) { out.innerHTML = '<div class="empty">No branches found.</div>'; return; }
+    var h = '<div class="pr-list">';
+    items.forEach(function (b) {
+      if (kind === 'remote') {
+        var top = '<div class="pr-top"><span class="pr-id">' + esc(b.repo) + '</span></div>';
+        if (b.repoId) {
+          var href = '/branch?project=' + encodeURIComponent(b.project || '') + '&repo=' + encodeURIComponent(b.repoId) + '&repoName=' + encodeURIComponent(b.repo || '') + '&ref=' + encodeURIComponent(b.name);
+          h += '<a class="pr-card" href="' + esc(href) + '">' + top + '<div class="pr-title">' + esc(b.name) + '</div></a>';
+        } else {
+          h += '<div class="pr-card">' + top + '<div class="pr-title">' + esc(b.name) + '</div></div>';
+        }
+      } else {
+        var badge = b.current ? '<span class="br-current">current</span>' : '';
+        // Local branches open the fully-local branch page; files are diffed from
+        // the clone with real git (no ADO, no push required).
+        var lhref = '/local-branch?path=' + encodeURIComponent(brLocalPathValue || '') + '&ref=' + encodeURIComponent(b.name);
+        h += '<a class="pr-card" href="' + esc(lhref) + '"><div class="pr-title">' + esc(b.name) + badge + '</div></a>';
+      }
+    });
+    h += '</div>';
+    out.innerHTML = h;
+  }
+  async function runBranches() {
+    var project = document.getElementById('brProject').value;
+    var status = document.getElementById('brStatus');
+    status.textContent = 'Loading\u2026'; document.getElementById('brResults').innerHTML = '';
+    try {
+      var r = await fetch('/api/v1/branches', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ project: project }) });
+      var d = await r.json();
+      if (d.error) { status.textContent = d.error; return; }
+      var items = d.branches || [];
+      status.textContent = items.length + ' branch' + (items.length === 1 ? '' : 'es');
+      renderBranchCards(items, 'remote');
+      saveBranchCache('remote');
+    } catch (e) { status.textContent = 'Failed: ' + e.message; }
+  }
+  var brLocalPathValue = '';
+  // Per-mode result cache so switching Remote/Local — and navigating to a branch
+  // page and back — restores the last view instead of refetching (Refresh forces
+  // a reload). Backed by sessionStorage so it survives the full-page navigation
+  // the "\u2190 Branches" back link performs.
+  var brCache = { remote: null, local: null };
+  function persistBranchCache(mode, payload) {
+    try {
+      if (mode === 'remote') { var sel = document.getElementById('brProject'); payload.project = sel ? sel.value : ''; }
+      sessionStorage.setItem('tippani.brCache.' + mode, JSON.stringify(payload));
+    } catch (e) {}
+  }
+  function loadPersistedBranchCache(mode) {
+    try { var s = sessionStorage.getItem('tippani.brCache.' + mode); return s ? JSON.parse(s) : null; } catch (e) { return null; }
+  }
+  function saveBranchCache(mode) {
+    var payload = { results: document.getElementById('brResults').innerHTML, status: document.getElementById('brStatus').textContent };
+    brCache[mode] = payload;
+    persistBranchCache(mode, payload);
+  }
+  function restoreBranchCache(mode) {
+    var c = brCache[mode];
+    if (!c) {
+      var p = loadPersistedBranchCache(mode);
+      // For remote, only reuse the persisted view if it's for the selected project.
+      if (p && mode === 'remote') { var sel = document.getElementById('brProject'); if (sel && p.project && p.project !== sel.value) p = null; }
+      if (p) { c = { results: p.results, status: p.status }; brCache[mode] = c; }
+    }
+    if (!c) return false;
+    document.getElementById('brResults').innerHTML = c.results;
+    document.getElementById('brStatus').textContent = c.status;
+    return true;
+  }
+  function setLocalNote(picked) {
+    var n = document.getElementById('brLocalNote');
+    if (n) n.innerHTML = picked ? 'Every branch in the workspace is listed; the checked-out one is marked <b>current</b>.' : 'Pick a local workspace to list its branches.';
+  }
+  function updateBranchesActions() {
+    var input = document.getElementById('brLocalPath');
+    var hasPath = !!(input && (input.value || '').trim());
+    var show = (brMode === 'remote') || (brMode === 'local' && hasPath);
+    var a = document.getElementById('brActions'); if (a) a.style.display = show ? '' : 'none';
+  }
+  function clearWorkspace() {
+    brLocalPathValue = '';
+    brCache.local = null;
+    try { sessionStorage.removeItem('tippani.brCache.local'); } catch (e) {}
+    try { localStorage.removeItem('tippani.brLocalPath'); } catch (e) {}
+    document.getElementById('brLocalPath').value = '';
+    var c = document.getElementById('brLocalClear'); if (c) c.hidden = true;
+    document.getElementById('brResults').innerHTML = '';
+    document.getElementById('brStatus').textContent = '';
+    setLocalNote(false);
+    updateBranchesActions();
+  }
+  async function pickWorkspace() {
+    // Native OS folder dialog (served locally) returns the real path server-side
+    // git needs. The pane UI is unchanged; only the dialog is native.
+    var status = document.getElementById('brStatus');
+    status.textContent = 'Opening folder picker\u2026';
+    try {
+      var r = await fetch('/api/v1/local-pick', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+      var d = await r.json();
+      if (d && d.canceled) { status.textContent = ''; return; }
+      if (!d || !d.ok) { status.textContent = (d && d.error) || 'Could not open the folder picker.'; return; }
+      brLocalPathValue = d.path;
+      try { localStorage.setItem('tippani.brLocalPath', d.path); } catch (e) {}
+      document.getElementById('brLocalPath').value = d.path;
+      var c = document.getElementById('brLocalClear'); if (c) c.hidden = false;
+      setLocalNote(true);
+      updateBranchesActions();
+      await runLocalBranches();
+    } catch (e) { status.textContent = 'Failed: ' + e.message; }
+  }
+  // Restore a remembered local repo path on load and list its branches.
+  async function restoreWorkspace() {
+    var saved = null; try { saved = localStorage.getItem('tippani.brLocalPath'); } catch (e) {}
+    if (!saved) return false;
+    brLocalPathValue = saved;
+    document.getElementById('brLocalPath').value = saved;
+    var c = document.getElementById('brLocalClear'); if (c) c.hidden = false;
+    setLocalNote(true);
+    updateBranchesActions();
+    return true;
+  }
+  async function runLocalBranches() {
+    // The Repo textbox is the source of truth (typed, picked, or CLI/MCP-set).
+    var status = document.getElementById('brStatus');
+    var input = document.getElementById('brLocalPath');
+    var repoPath = (input && input.value || '').trim();
+    brLocalPathValue = repoPath;
+    if (repoPath) { try { localStorage.setItem('tippani.brLocalPath', repoPath); } catch (e) {} }
+    if (!repoPath) { status.textContent = 'Type a repo path or Browse to one.'; document.getElementById('brResults').innerHTML = ''; return; }
+    status.textContent = 'Reading\u2026'; document.getElementById('brResults').innerHTML = '';
+    try {
+      var r = await fetch('/api/v1/local-branches', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ path: repoPath }) });
+      var d = await r.json();
+      if (!d || d.error || d.ok === false) { status.textContent = (d && d.error) || 'Could not read the repo.'; return; }
+      var branches = d.branches || [];
+      status.textContent = branches.length + ' branch' + (branches.length === 1 ? '' : 'es');
+      renderBranchCards(branches, 'local');
+      saveBranchCache('local');
+    } catch (e) { status.textContent = 'Failed: ' + e.message; }
+  }
+  function runActiveBranches() { if (brMode === 'local') runLocalBranches(); else runBranches(); }
   window.addEventListener('DOMContentLoaded', function () {
     document.querySelectorAll('.tab').forEach(function (t) { t.addEventListener('click', function () { activateTab(t.dataset.tab); }); });
     var params = new URLSearchParams(location.search);
     var t = params.get('tab');
-    activateTab(t === 'workitems' || t === 'specs' ? t : 'queue');
+    activateTab(t === 'workitems' || t === 'specs' || t === 'branches' ? t : 'queue');
     // Review queue slicers (client-side faceted filter, same engine as Specs).
     mountFacets(
       document.querySelector('.pane[data-pane="queue"] .pr-list'),
@@ -1714,6 +1938,55 @@ table.wi-results { width: 100%; table-layout: fixed; border-collapse: collapse; 
       var savedSpProj = null; try { savedSpProj = localStorage.getItem('tippani.spProject'); } catch (e) { }
       if (savedSpProj) { for (var spk = 0; spk < spProjSel.options.length; spk++) { if (spProjSel.options[spk].value === savedSpProj) { spProjSel.selectedIndex = spk; break; } } }
       spProjSel.addEventListener('change', function () { try { localStorage.setItem('tippani.spProject', spProjSel.value); } catch (e) { } });
+    }
+    // Branches tab: Remote/Local toggle + per-mode source; list on load/change.
+    var brProjSel = document.getElementById('brProject');
+    if (brProjSel) {
+      var savedBrProj = null; try { savedBrProj = localStorage.getItem('tippani.brProject'); } catch (e) { }
+      if (savedBrProj) { for (var brk = 0; brk < brProjSel.options.length; brk++) { if (brProjSel.options[brk].value === savedBrProj) { brProjSel.selectedIndex = brk; break; } } }
+      brProjSel.addEventListener('change', function () { try { localStorage.setItem('tippani.brProject', brProjSel.value); } catch (e) { } if (brMode === 'remote') runBranches(); });
+    }
+    document.querySelectorAll('.br-mode-btn').forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        brMode = btn.dataset.mode;
+        document.querySelectorAll('.br-mode-btn').forEach(function (b) { b.classList.toggle('active', b === btn); });
+        document.querySelectorAll('.br-source').forEach(function (s) { s.hidden = (s.dataset.source !== brMode); });
+        try { localStorage.setItem('tippani.brMode', brMode); } catch (e) { }
+        if (brMode === 'local') setLocalNote(!!brLocalPathValue);
+        updateBranchesActions();
+        // Restore the last view for this mode; only fetch if never loaded.
+        if (!restoreBranchCache(brMode)) runActiveBranches();
+      });
+    });
+    var brRefresh = document.getElementById('brRefreshBtn'); if (brRefresh) brRefresh.addEventListener('click', runActiveBranches);
+    var brBrowse = document.getElementById('brBrowseBtn'); if (brBrowse) brBrowse.addEventListener('click', pickWorkspace);
+    var brPathInput = document.getElementById('brLocalPath');
+    if (brPathInput) {
+      brPathInput.addEventListener('keydown', function (e) { if (e.key === 'Enter') { e.preventDefault(); runLocalBranches(); } });
+      brPathInput.addEventListener('input', function () { brLocalPathValue = (brPathInput.value || '').trim(); var c = document.getElementById('brLocalClear'); if (c) c.hidden = !brLocalPathValue; updateBranchesActions(); });
+    }
+    var brClear = document.getElementById('brLocalClear'); if (brClear) brClear.addEventListener('click', clearWorkspace);
+    // Initial local state: a server-provided repo path (CLI --local-repo or an
+    // MCP/API call) wins and prefills the Repo box; else restore the last path
+    // from localStorage. A ?mode= param (e.g. from MCP) sets the active mode.
+    var brModeParam = params.get('mode');
+    function activateLocalMode() { var lb = document.querySelector('.br-mode-btn[data-mode="local"]'); if (lb) lb.click(); }
+    if (SERVER_LOCAL_REPO) {
+      brLocalPathValue = SERVER_LOCAL_REPO;
+      var brf = document.getElementById('brLocalPath'); if (brf) brf.value = SERVER_LOCAL_REPO;
+      var brc = document.getElementById('brLocalClear'); if (brc) brc.hidden = false;
+      setLocalNote(true);
+      if (brModeParam === 'remote') { if (!restoreBranchCache('remote')) runBranches(); }
+      else { activateLocalMode(); }
+      updateBranchesActions();
+    } else {
+      restoreWorkspace().then(function () {
+        var savedMode = null; try { savedMode = localStorage.getItem('tippani.brMode'); } catch (e) { }
+        var wantLocal = brModeParam === 'local' || (brModeParam !== 'remote' && savedMode === 'local');
+        if (wantLocal) { activateLocalMode(); }
+        else { if (!restoreBranchCache('remote')) runBranches(); }
+        updateBranchesActions();
+      });
     }
     // Deep-link a query (e.g. from the search_work_items tool): prefill + run.
     var qWiql = params.get('wiql');
@@ -1747,6 +2020,7 @@ table.wi-results { width: 100%; table-layout: fixed; border-collapse: collapse; 
       <button class="tab" data-tab="specs" type="button">Specs</button>
       <button class="tab" data-tab="queue" type="button">Review queue</button>
       <button class="tab" data-tab="workitems" type="button">Work items</button>
+      <button class="tab" data-tab="branches" type="button">Branches</button>
     </div>
 
     <div class="pane" data-pane="queue">
@@ -1779,6 +2053,33 @@ table.wi-results { width: 100%; table-layout: fixed; border-collapse: collapse; 
       <div class="wi-actions"><span id="spStatus" class="wi-status"></span><button id="spSearchBtn" class="wi-search" type="button">Search</button></div>
       <div id="spResults"></div>
       <div class="wi-note" style="margin-top:12px">Results are <code>.md</code> specs from Azure DevOps Code Search. Opening a result shows it read-only at <code>main</code> (\u2197 opens it read-only in Tippani).</div>
+    </div>
+
+    <div class="pane" data-pane="branches">
+      <div class="br-modes">
+        <button class="br-mode-btn active" data-mode="remote" type="button">Remote</button>
+        <button class="br-mode-btn" data-mode="local" type="button">Local</button>
+      </div>
+      <div class="br-source" data-source="remote">
+        <div class="wi-row">
+          <span class="wi-label">Project</span>
+          <select id="brProject" class="wi-project">${projectOptions || `<option value="${escHtml(project || "")}">${escHtml(project || "(configured project)")}</option>`}</select>
+          <span class="wi-note">Your branches across the repos in the selected project.</span>
+        </div>
+      </div>
+      <div class="br-source" data-source="local" hidden>
+        <div class="wi-row">
+          <span class="wi-label">Repo</span>
+          <div class="br-ws-field">
+            <input id="brLocalPath" class="br-local-input" type="text" spellcheck="false" placeholder="Type a repo path, or click Browse…">
+            <button id="brLocalClear" class="br-ws-clear" type="button" title="Clear" hidden>×</button>
+          </div>
+          <button id="brBrowseBtn" class="wi-search" type="button">Browse…</button>
+        </div>
+        <div id="brLocalNote" class="wi-note">Type a local repo path or Browse to one; its branches are listed.</div>
+      </div>
+      <div class="wi-actions" id="brActions"><span id="brStatus" class="wi-status"></span><button id="brRefreshBtn" class="wi-search" type="button">Refresh</button></div>
+      <div id="brResults"></div>
     </div>
   </div>
 ${NAV_WATCHER}
@@ -1961,16 +2262,36 @@ function buildHistoryCardsHtml(history, specPath) {
 // collapse to a rail with << / >> arrows — Contents shown, History hidden by
 // default. The history is fetched asynchronously (historyUrl) so the page paints
 // without waiting on the ADO round-trips. Read-only: no edit / save / reply.
-function buildReadonlySpecPage({ title, bodyHtml, toc, specPath, repo, adoUrl, backHref, historyUrl, sourceMap }) {
-  const openAdo = adoUrl
-    ? `<a class="ro-ado" href="${escHtml(adoUrl)}" target="_blank" rel="noopener">Open in Azure DevOps \u2197</a>`
+// Discovery branch page: list a branch's markdown files as a read-only review
+// surface. Each file opens the existing read-only /spec page (which already
+// carries the comment/threads pane, where branch comments will render once the
+// Comments feature lands). READMEs are hidden by default with a checkbox to
+// reveal them, matching the Specs "Included" README facet. Row shaping is pure
+// (branch-files.js).
+function buildBranchPage({ repoName, project, ref, rows, backHref, adoUrl, error, mode }) {
+  const title = (repoName ? repoName + " \u00b7 " : "") + (ref || "");
+  const back = backHref || "/discovery?tab=branches";
+  const modeBadge = mode ? `<span class="ro-mode ro-mode-${mode}">${mode === "local" ? "Local" : "Remote"}</span>` : "";
+  const initialCount = visibleFileCount(rows, false);
+  const readmeTotal = (rows || []).filter((r) => r.isReadme).length;
+  const listHtml = (rows || []).length
+    ? `<div class="pr-list">` + rows.map((r) => {
+        const dir = r.dir ? `<div class="bp-dir">${escHtml(r.dir)}</div>` : "";
+        const cls = "pr-card bp-file" + (r.isReadme ? " bp-readme" : "");
+        const inner = `${dir}<div class="pr-title">${escHtml(r.name)}</div>`;
+        // A row with no href renders as a plain card (the local file list is
+        // display-only until the review step wires opening).
+        return r.href
+          ? `<a class="${cls}" href="${escHtml(r.href)}"${r.isReadme ? ' hidden' : ""}>${inner}</a>`
+          : `<div class="${cls}"${r.isReadme ? ' hidden' : ""}>${inner}</div>`;
+      }).join("") + `</div>`
     : "";
-  const back = backHref || "/discovery?tab=specs";
-  const crumb = escHtml((repo ? repo + " \u00b7 " : "") + specPath);
-  const tocHtml = (toc || []).length
-    ? (toc || []).map((t) => `<a href="#${t.id}" class="toc-item" style="padding-left:${(t.level - 1) * 10 + 8}px">${escHtml(t.text)}</a>`).join("")
-    : '<div class="ro-empty">No headings.</div>';
-  const historyHtml = '<div class="ro-empty" id="roHistLoading">Loading review history\u2026</div>';
+  const emptyHtml = error
+    ? `<div class="bp-empty">${escHtml(error)}</div>`
+    : (rows || []).length ? "" : `<div class="bp-empty">No markdown files in this branch.</div>`;
+  const readmeToggle = readmeTotal
+    ? `<label class="bp-check"><input type="checkbox" id="bpShowReadme"> Show Readme.md</label>`
+    : "";
   return `<!DOCTYPE html>
 <html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>${escHtml(title)} \u2014 Tippani</title>
@@ -1982,8 +2303,106 @@ body { font-family: "Segoe UI", Aptos, Calibri, -apple-system, sans-serif; backg
 .ro-back { font-size: 13px; font-weight: 600; color: var(--cp-accent); text-decoration: none; white-space: nowrap; }
 .ro-back:hover { text-decoration: underline; }
 .ro-topbar-title { flex: 1 1 auto; min-width: 0; font-size: 14px; font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.ro-ado { font-size: 12px; font-weight: 600; color: var(--cp-accent); text-decoration: none; white-space: nowrap; }
-.ro-ado:hover { text-decoration: underline; }
+.ro-mode { flex: 0 0 auto; font-size: 11px; font-weight: 700; padding: 4px 12px; border-radius: 99px; text-transform: uppercase; letter-spacing: 0.4px; white-space: nowrap; background: var(--cp-accent-soft); color: var(--cp-accent); }
+.ro-mode-local { background: rgba(47,143,78,0.16); color: #2f8f4e; }
+[data-theme="dark"] .ro-mode-local { background: rgba(90,190,120,0.18); color: #6ecb8b; }
+.bp-wrap { max-width: 820px; margin: 0 auto; padding: 24px 20px 60px; }
+.bp-toolbar { display: flex; align-items: center; gap: 14px; margin-bottom: 14px; }
+.bp-count { font-size: 13px; font-weight: 600; color: var(--cp-text-muted); }
+.bp-check { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--cp-text); cursor: pointer; margin-left: auto; }
+.bp-check input { cursor: pointer; }
+.pr-list { display: flex; flex-direction: column; gap: 8px; }
+.pr-card { display: block; padding: 12px 14px; border: 1px solid var(--cp-border); border-radius: 10px; background: var(--cp-surface); text-decoration: none; color: var(--cp-text); transition: box-shadow 0.15s, border-color 0.15s; }
+.pr-card:hover { box-shadow: 0 2px 10px rgba(0,0,0,0.08); border-color: var(--cp-accent); }
+.bp-file[hidden] { display: none; }
+.bp-dir { font-size: 11px; color: var(--cp-text-muted); margin-bottom: 2px; }
+.pr-title { font-size: 14px; font-weight: 600; }
+.bp-readme .pr-title::after { content: " \u00b7 readme"; font-weight: 400; font-size: 11px; color: var(--cp-text-muted); }
+.bp-empty { font-size: 13px; color: var(--cp-text-muted); padding: 20px 0; }
+</style>
+<script>
+  if (window.matchMedia('(prefers-color-scheme: dark)').matches) document.documentElement.dataset.theme = 'dark';
+<\/script></head>
+<body>
+<div class="ro-topbar">
+  <a class="ro-back" href="${escHtml(back)}">\u2190 Branches</a>
+  <div class="ro-topbar-title">${escHtml(title)}</div>
+  ${modeBadge}
+</div>
+<div class="bp-wrap">
+  <div class="bp-toolbar">
+    <span class="bp-count" id="bpCount">${initialCount} file${initialCount === 1 ? "" : "s"}</span>
+    ${readmeToggle}
+  </div>
+  ${listHtml}
+  ${emptyHtml}
+</div>
+<script>
+(function () {
+  var KEY = 'tippani.brShowReadme';
+  var box = document.getElementById('bpShowReadme');
+  var count = document.getElementById('bpCount');
+  function apply(show) {
+    var files = document.querySelectorAll('.bp-file');
+    var n = 0;
+    files.forEach(function (el) {
+      var isReadme = el.classList.contains('bp-readme');
+      var hidden = isReadme && !show;
+      el.hidden = hidden;
+      if (!hidden) n++;
+    });
+    if (count) count.textContent = n + (n === 1 ? ' file' : ' files');
+  }
+  if (box) {
+    var saved = false;
+    try { saved = localStorage.getItem(KEY) === '1'; } catch (e) {}
+    box.checked = saved;
+    apply(saved);
+    box.addEventListener('change', function () {
+      try { localStorage.setItem(KEY, box.checked ? '1' : '0'); } catch (e) {}
+      apply(box.checked);
+    });
+  }
+})();
+</script>
+${NAV_WATCHER}
+</body></html>`;
+}
+
+function buildReadonlySpecPage({ title, bodyHtml, toc, specPath, repo, adoUrl, backHref, backLabel, historyUrl, sourceMap, reviewing, editMode, commentCount = 0, reviewRepo, reviewBranch, reviewPath, currentUser, personalComments, pcDataSeq = 0 }) {
+  const back = backHref || "/discovery?tab=specs";
+  const backText = backLabel || "Specs";
+  const crumb = escHtml((repo ? repo + " \u00b7 " : "") + specPath);
+  // File-reviewing mode (opened from a branch): the margin is a Personal Comments
+  // pane (hidden until a comment exists); otherwise it's the PR Review History.
+  const paneTitle = reviewing ? "Personal Comments" : "Review History";
+  const marginCollapsed = reviewing ? (commentCount > 0 ? "" : "collapsed") : "collapsed";
+  const modeTag = editMode
+    ? `<span class="ro-mode ro-mode-${editMode}">${editMode === "local" ? "Local" : "Remote"}</span>`
+    : "";
+  const refreshBtn = `<button type="button" class="ro-refresh" onclick="location.reload()" title="Reload this file">\u21bb Refresh</button>`;
+  const tocHtml = (toc || []).length
+    ? (toc || []).map((t) => `<a href="#${t.id}" class="toc-item" style="padding-left:${(t.level - 1) * 10 + 8}px">${escHtml(t.text)}</a>`).join("")
+    : '<div class="ro-empty">No headings.</div>';
+  const historyHtml = reviewing
+    ? '<div class="ro-empty" id="roHistLoading">No personal comments yet.</div>'
+    : '<div class="ro-empty" id="roHistLoading">Loading review history\u2026</div>';
+  return `<!DOCTYPE html>
+<html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>${escHtml(title)} \u2014 Tippani</title>
+<style>
+${cssVariables()}
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: "Segoe UI", Aptos, Calibri, -apple-system, sans-serif; background: var(--cp-bg); color: var(--cp-text); }
+.ro-topbar { display: flex; align-items: center; gap: 14px; height: 48px; padding: 0 20px; border-bottom: 1px solid var(--cp-border); background: var(--cp-bg-elevated); position: sticky; top: 0; z-index: 20; }
+.ro-back { font-size: 13px; font-weight: 600; color: var(--cp-accent); text-decoration: none; white-space: nowrap; }
+.ro-back:hover { text-decoration: underline; }
+.ro-topbar-title { flex: 1 1 auto; min-width: 0; font-size: 14px; font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ro-refresh { flex: 0 0 auto; font-family: inherit; font-size: 12px; font-weight: 600; color: var(--cp-accent); background: none; border: none; cursor: pointer; padding: 4px 6px; white-space: nowrap; }
+.ro-refresh:hover { text-decoration: underline; }
+.ro-mode { flex: 0 0 auto; font-size: 11px; font-weight: 700; padding: 4px 12px; border-radius: 99px; text-transform: uppercase; letter-spacing: 0.4px; white-space: nowrap; background: var(--cp-accent-soft); color: var(--cp-accent); }
+.ro-mode-local { background: rgba(47,143,78,0.16); color: #2f8f4e; }
+[data-theme="dark"] .ro-mode-local { background: rgba(90,190,120,0.18); color: #6ecb8b; }
 .ro-shell { display: flex; align-items: stretch; }
 .ro-pane { flex: 0 0 auto; transition: width 0.18s ease; overflow: visible; }
 .ro-toc { width: 250px; border-right: 1px solid var(--cp-border); }
@@ -1993,6 +2412,7 @@ body { font-family: "Segoe UI", Aptos, Calibri, -apple-system, sans-serif; backg
 .ro-margin-head { position: sticky; top: 48px; z-index: 6; display: flex; align-items: center; gap: 8px; padding: 12px 14px; background: var(--cp-bg); border-bottom: 1px solid var(--cp-border); }
 .ro-margin-title { flex: 1 1 auto; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.3px; color: var(--cp-text-muted); }
 .ro-margin.collapsed .ro-margin-head, .ro-margin.collapsed .ro-margin-body { display: none; }
+.ro-margin-body { position: relative; }
 .ro-margin .ro-rail { display: none; }
 .ro-margin.collapsed .ro-rail { display: flex; position: sticky; top: 48px; width: 38px; height: calc(100vh - 48px); flex-direction: column; align-items: center; gap: 10px; padding-top: 12px; background: none; border: none; cursor: pointer; color: var(--cp-text-muted); font-size: 14px; }
 .ro-margin.collapsed .ro-rail:hover { color: var(--cp-text); }
@@ -2021,10 +2441,24 @@ body { font-family: "Segoe UI", Aptos, Calibri, -apple-system, sans-serif; backg
 .rh-hline { font-size: 10px; color: var(--cp-text-muted); }
 .rh-count { margin-left: auto; font-size: 10px; font-weight: 700; min-width: 16px; height: 16px; padding: 0 5px; border-radius: 8px; background: var(--cp-surface-soft); color: var(--cp-text-muted); display: inline-flex; align-items: center; justify-content: center; }
 .rh-res { color: #2f8f4e; font-size: 12px; }
+.pc-drift { font-size: 9px; font-weight: 700; text-transform: uppercase; letter-spacing: .03em; padding: 0 4px; border-radius: 6px; margin-left: 4px; cursor: help; }
+.pc-drift-stale { background: rgba(220, 38, 38, 0.12); color: var(--cp-danger); }
+.pc-drift-moved { background: rgba(245, 158, 11, 0.14); color: var(--cp-warning); }
 .rh-summary { font-size: 12px; color: var(--cp-text-muted); margin-top: 5px; line-height: 1.35; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 .rh-thread.rh-expanded .rh-summary { display: none; }
 .rh-full { display: none; margin-top: 6px; }
 .rh-thread.rh-expanded .rh-full { display: block; }
+/* Personal comments always show their full text (not a clamped 2-line summary);
+   a single very long comment scrolls within the card rather than overflowing the
+   page's vertical space. */
+.pc-card .rh-summary { display: none; }
+.pc-card .rh-full { display: block; }
+.pc-card .pc-view .rh-body { max-height: calc(100vh - 160px); overflow-y: auto; }
+/* Replies (follow-up notes, e.g. the assistant recording how it addressed the comment). */
+.pc-replies { margin-top: 8px; border-top: 1px dashed var(--cp-border); padding-top: 6px; }
+.pc-reply { margin-top: 6px; padding-left: 8px; border-left: 2px solid var(--cp-accent); }
+.pc-reply-meta { font-size: 10px; font-weight: 700; color: var(--cp-accent); margin-bottom: 2px; }
+.pc-reply .rh-body { font-size: 12px; }
 .rh-anchor { font-size: 11px; color: var(--cp-text-muted); margin-bottom: 6px; }
 .rh-comment { margin: 6px 0; }
 .rh-comment + .rh-comment { border-top: 1px dashed var(--cp-border); padding-top: 6px; }
@@ -2068,6 +2502,21 @@ body { font-family: "Segoe UI", Aptos, Calibri, -apple-system, sans-serif; backg
 .rh-marker-active { background: var(--cp-accent); color: var(--cp-accent-fg); }
 .rh-marker-resolved { background: var(--cp-success); color: #fff; }
 body.show-markers .rh-marker { display: inline-flex; }
+/* Personal Comments: hover affordance + add dot + edit controls (file-reviewing mode). */
+.ro-commentable.pc-hover, .ro-commentable.pc-active { box-shadow: 0 0 0 2px var(--cp-accent); border-radius: 6px; }
+[data-theme="dark"] .ro-commentable.pc-hover, [data-theme="dark"] .ro-commentable.pc-active { box-shadow: 0 0 0 2px #b23a58; }
+.pc-add { position: absolute; top: 4px; right: 4px; width: 24px; height: 24px; border-radius: 50%; border: none; background: var(--cp-accent); color: #fff; font-size: 14px; font-weight: 700; line-height: 1; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; z-index: 6; box-shadow: 0 1px 5px rgba(0,0,0,0.25); }
+.pc-add:hover { transform: scale(1.12); }
+.pc-card .rh-count { display: none; }
+.pc-card .pc-ico { flex: 0 0 auto; margin-left: 4px; padding: 2px 4px; font-size: 13px; line-height: 1; border: none; background: none; color: var(--cp-text-muted); cursor: pointer; border-radius: 4px; }
+.pc-card .pc-ico:hover { color: var(--cp-accent); background: var(--cp-surface-soft); }
+.pc-card .pc-del:hover { color: #c0392b; }
+.pc-card .pc-resolve:hover { color: #2f8f4e; }
+.pc-card .pc-save { display: none; font-family: "Segoe MDL2 Assets", "Segoe Fluent Icons"; font-size: 14px; }
+.pc-card.pc-editing .pc-save { display: inline-flex; }
+.pc-card.pc-editing .pc-edit { display: none; }
+.pc-card.pc-resolved .rh-badge { text-decoration: line-through; color: var(--cp-text-muted); }
+.pc-text { width: 100%; min-height: 66px; font-family: inherit; font-size: 13px; padding: 8px; border: 1px solid var(--cp-border); border-radius: 6px; background: var(--cp-bg); color: var(--cp-text); resize: vertical; box-sizing: border-box; }
 .mermaid-block { margin: 14px 0; text-align: center; overflow-x: auto; }
 .mermaid-block svg { max-width: 100%; height: auto; }
 .mermaid-block.mermaid-error { text-align: left; }
@@ -2077,9 +2526,10 @@ body.show-markers .rh-marker { display: inline-flex; }
   if (window.matchMedia('(prefers-color-scheme: dark)').matches) document.documentElement.dataset.theme = 'dark';
 <\/script></head><body>
   <div class="ro-topbar">
-    <a class="ro-back" href="${escHtml(back)}">\u2190 Discovery</a>
+    <a class="ro-back" href="${escHtml(back)}">\u2190 ${escHtml(backText)}</a>
     <span class="ro-topbar-title">${escHtml(title)}</span>
-    ${openAdo}
+    ${refreshBtn}
+    ${modeTag}
   </div>
   <div class="ro-shell">
     <aside class="ro-pane ro-toc" id="roToc">
@@ -2095,9 +2545,9 @@ body.show-markers .rh-marker { display: inline-flex; }
         <div class="ro-doc">${bodyHtml}</div>
       </div>
     </main>
-    <aside class="ro-margin collapsed" id="roMargin">
-      <div class="ro-margin-head"><span class="ro-margin-title">Review History</span><button class="ro-toggle" data-target="roMargin" title="Hide">\u00bb</button></div>
-      <button class="ro-rail" data-target="roMargin" title="Show review history">\u00ab<span class="ro-rail-label">Review History</span></button>
+    <aside class="ro-margin ${marginCollapsed}" id="roMargin">
+      <div class="ro-margin-head"><span class="ro-margin-title">${escHtml(paneTitle)}</span><button class="ro-toggle" data-target="roMargin" title="Hide">\u00bb</button></div>
+      <button class="ro-rail" data-target="roMargin" title="Show ${escHtml(paneTitle.toLowerCase())}">\u00ab<span class="ro-rail-label">${escHtml(paneTitle)}</span></button>
       <div class="ro-margin-body" id="roMarginBody">${historyHtml}</div>
     </aside>
   </div>
@@ -2116,8 +2566,16 @@ body.show-markers .rh-marker { display: inline-flex; }
     // summary; clicking one focuses it (Bordeaux border on the card + its section),
     // expands its comments, and reflows the column so nothing overlaps.
     (function () {
-      var RO_SOURCE_MAP = ${JSON.stringify(sourceMap || [])};
-      var RO_HISTORY_URL = ${JSON.stringify(historyUrl || "")};
+      var RO_SOURCE_MAP = ${jsonForScript(sourceMap || [])};
+      var RO_HISTORY_URL = ${jsonForScript(reviewing ? "" : (historyUrl || ""))};
+      // Personal-comments (file-reviewing) mode config.
+      var RO_REVIEWING = ${reviewing ? "true" : "false"};
+      var RO_REPO = ${jsonForScript(reviewRepo || "")};
+      var RO_BRANCH = ${jsonForScript(reviewBranch || "")};
+      var RO_PATH = ${jsonForScript(reviewPath || "")};
+      var RO_USER = ${jsonForScript(currentUser || "You")};
+      var RO_PERSONAL_COMMENTS = ${jsonForScript(personalComments || [])};
+      var RO_PC_DATASEQ = ${Number(pcDataSeq) || 0};
       var marginEl = document.getElementById('roMargin');
       var docEl = document.querySelector('.ro-doc');
       if (!marginEl || !docEl) return;
@@ -2129,7 +2587,7 @@ body.show-markers .rh-marker { display: inline-flex; }
         // replaced each mermaid <pre> with a <div class="mermaid-block"> in place;
         // the server range map counted that <pre>, so the div must occupy its slot
         // to keep the index alignment 1:1.
-        docEl.querySelectorAll('p, li, blockquote, table, pre, .mermaid-block').forEach(function (el) {
+        docEl.querySelectorAll('h1, h2, h3, h4, h5, h6, p, li, blockquote, table, pre, .mermaid-block').forEach(function (el) {
           if (el.closest('.ro-commentable')) return; // outermost only, mirrors the map
           el.classList.add('ro-commentable');
           blocks.push(el);
@@ -2149,7 +2607,13 @@ body.show-markers .rh-marker { display: inline-flex; }
       // Position each card at its anchor's vertical offset; stack downward when
       // cards would overlap so every card stays as close to its anchor as it can.
       function layout() {
-        var mt = marginEl.getBoundingClientRect().top + window.scrollY;
+        // Cards are position:absolute inside .ro-margin-body (which is
+        // position:relative), so top is measured from the body — i.e. BELOW the
+        // sticky header. A card with no line anchor (file-level) lands at the top
+        // of the body, clear of the header (previously it sat at top:0 of
+        // .ro-margin, behind the header, and its first line clipped).
+        var bodyEl = document.getElementById('roMarginBody') || marginEl;
+        var mt = bodyEl.getBoundingClientRect().top + window.scrollY;
         var items = cards.map(function (card) {
           var line = parseInt(card.getAttribute('data-line'), 10);
           var b = Number.isFinite(line) ? blockForLine(line) : null;
@@ -2157,13 +2621,13 @@ body.show-markers .rh-marker { display: inline-flex; }
           return { card: card, y: Math.max(0, y) };
         });
         items.sort(function (a, b) { return a.y - b.y; });
-        var cursor = 0;
+        var cursor = 8;
         items.forEach(function (it) {
           var top = Math.max(it.y, cursor);
           it.card.style.top = top + 'px';
           cursor = top + it.card.offsetHeight + 8;
         });
-        marginEl.style.minHeight = cursor + 'px';
+        bodyEl.style.minHeight = cursor + 'px';
       }
       function clearFocus() {
         cards.forEach(function (c) { c.classList.remove('rh-focused', 'rh-expanded'); });
@@ -2219,12 +2683,299 @@ body.show-markers .rh-marker { display: inline-flex; }
       // up the cards, anchor markers and layout.
       function loadHistory() {
         var body = document.getElementById('roMarginBody');
+        // File-reviewing mode: no PR history to fetch; the pane already shows the
+        // Reviewer Comments empty state. Just wire up (zero) cards.
+        if (!RO_HISTORY_URL) { setupCards(); return; }
         fetch(RO_HISTORY_URL).then(function (r) { return r.json(); }).then(function (d) {
           if (body) body.innerHTML = (d && d.html) || '<div class="ro-empty">No review history.</div>';
           setupCards();
         }).catch(function () {
           if (body) body.innerHTML = '<div class="ro-empty">Could not load review history.</div>';
         });
+      }
+      // ---- Personal Comments (file-reviewing mode) ----------------------------
+      // Hover a block to border it + reveal an "add" dot; click the dot to open a
+      // draft card in the margin. Empty drafts vanish when the block loses focus;
+      // a typed draft auto-saves. Existing comments get the same anchor markers,
+      // focus and layout as PR review, plus edit/delete.
+      var pcBody = function () { return document.getElementById('roMarginBody'); };
+      var pcDraft = null; // the single in-progress draft card, or null
+      var pcShowResolvedState = true;      // hide/show resolved cards (MCP-driven)
+      var pcLastDataSeq = RO_PC_DATASEQ;   // last comment-data version this page has applied
+      var pcLastCmdSeq = 0;                // last one-shot UI command applied
+      var pcPollInit = false;              // first poll only syncs baselines
+      function pcEsc(s) { return String(s == null ? '' : s).replace(/[&<>"]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; }); }
+      function pcWhen(iso) { try { return new Date(iso).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }); } catch (e) { return ''; } }
+      function pcSnippet(t) {
+        // Collapse whitespace WITHOUT a backslash regex: inside this server
+        // template literal, /\s+/ would become /s+/ and strip every "s".
+        var s = String(t || ''), out = '', prevWs = false;
+        var TAB = String.fromCharCode(9), LF = String.fromCharCode(10), CR = String.fromCharCode(13), FF = String.fromCharCode(12), VT = String.fromCharCode(11);
+        for (var i = 0; i < s.length; i++) {
+          var ch = s.charAt(i);
+          if (ch === ' ' || ch === TAB || ch === LF || ch === CR || ch === FF || ch === VT) { if (!prevWs && out) out += ' '; prevWs = true; }
+          else { out += ch; prevWs = false; }
+        }
+        return pcEsc(out.replace(/^ +| +$/g, '').slice(0, 90));
+      }
+      function pcLineForBlock(b) { var i = blocks.indexOf(b); var sm = RO_SOURCE_MAP[i]; return sm ? sm.startLine : null; }
+      function clearMarkers() { docEl.querySelectorAll('.rh-marker').forEach(function (m) { m.remove(); }); docEl.querySelectorAll('[data-pc-mk]').forEach(function (b) { b.__mk = 0; b.removeAttribute('data-pc-mk'); }); }
+      function pcRefresh() {
+        cards = [].slice.call(marginEl.querySelectorAll('.pc-card'));
+        if (!cards.length) { var b = pcBody(); if (b && !b.querySelector('.ro-empty')) b.innerHTML = '<div class="ro-empty">No personal comments yet.</div>'; }
+        clearMarkers();
+        docEl.querySelectorAll('h1,h2,h3,h4,h5,h6,p,li,blockquote,table,pre,.mermaid-block').forEach(function (b) { b.__mk = 0; });
+        makeMarkers();
+        // Apply the current hide/show-resolved view state after any re-render.
+        cards.forEach(function (card) { if (card.classList.contains('pc-resolved')) card.hidden = !pcShowResolvedState; });
+        if (!pcShowResolvedState) docEl.querySelectorAll('.rh-marker-resolved').forEach(function (m) { m.style.display = 'none'; });
+        document.body.classList.toggle('show-markers', !marginEl.classList.contains('collapsed') && cards.length > 0);
+        layout(); setTimeout(layout, 60);
+      }
+      function pcApplyShowResolved(show) { pcShowResolvedState = (show !== false); pcRefresh(); }
+      function pcReportSelected(id) { pcApi('POST', '/api/v1/personal-comments/select', { id: id || '' }); }
+      function pcFocusById(id) {
+        for (var i = 0; i < cards.length; i++) {
+          if (cards[i].getAttribute('data-id') === id) {
+            if (marginEl.classList.contains('collapsed')) marginEl.classList.remove('collapsed');
+            if (cards[i].hidden) { pcShowResolvedState = true; cards[i].hidden = false; }
+            focus(cards[i], 'card');
+            return true;
+          }
+        }
+        return false;
+      }
+      function pcReloadComments() {
+        var q = '?repo=' + encodeURIComponent(RO_REPO) + '&branch=' + encodeURIComponent(RO_BRANCH) + '&path=' + encodeURIComponent(RO_PATH);
+        return fetch('/api/v1/personal-comments' + q).then(function (r) { return r.ok ? r.json() : null; }).then(function (d) {
+          if (!d || !d.ok) return;
+          // Don't clobber an in-progress draft/edit.
+          if (pcDraft || marginEl.querySelector('.pc-editing')) return;
+          var body = pcBody(); if (body) body.innerHTML = '';
+          (d.comments || []).forEach(function (c) { pcBody().appendChild(pcBuildCard(c, false)); });
+          if (!(d.comments || []).length && body) body.innerHTML = '<div class="ro-empty">No personal comments yet.</div>';
+          pcRefresh();
+        }).catch(function () {});
+      }
+      function pcPoll() {
+        fetch('/api/v1/state').then(function (r) { return r.ok ? r.json() : null; }).then(function (s) {
+          if (!s) return;
+          if (!pcPollInit) { pcPollInit = true; if (typeof s.pcCommandSeq === 'number') pcLastCmdSeq = s.pcCommandSeq; if (typeof s.pcDataSeq === 'number') pcLastDataSeq = Math.max(pcLastDataSeq, s.pcDataSeq); return; }
+          if (typeof s.pcDataSeq === 'number' && s.pcDataSeq > pcLastDataSeq) { pcLastDataSeq = s.pcDataSeq; pcReloadComments(); }
+          if (typeof s.pcCommandSeq === 'number' && s.pcCommandSeq > pcLastCmdSeq) {
+            pcLastCmdSeq = s.pcCommandSeq;
+            var cmd = s.pcCommand;
+            if (cmd && cmd.type === 'focus' && cmd.id) { if (!pcFocusById(cmd.id)) { pcReloadComments().then(function () { pcFocusById(cmd.id); }); } }
+            else if (cmd && cmd.type === 'showResolved') pcApplyShowResolved(cmd.show !== false);
+            else if (cmd && cmd.type === 'reload') location.reload();
+          }
+        }).catch(function () {});
+      }
+      function pcRepliesHtml(c) {
+        var reps = (c && c.replies) || [];
+        if (!reps.length) return '';
+        var items = reps.map(function (r) {
+          return '<div class="pc-reply"><div class="pc-reply-meta">' + pcEsc(r.author || '') + ' \u00b7 ' + pcWhen(r.createdAt || new Date().toISOString()) + '</div>'
+            + '<div class="rh-body">' + (r.html || pcEsc(r.content || '')) + '</div></div>';
+        }).join('');
+        return '<div class="pc-replies">' + items + '</div>';
+      }
+      function pcBuildCard(c, isDraft) {
+        var card = document.createElement('div');
+        card.className = 'rh-thread pc-card' + (isDraft ? ' pc-draft' : '') + (c.resolved ? ' pc-resolved' : '') + (c.anchorState === 'stale' ? ' pc-stale' : c.anchorState === 'moved' ? ' pc-moved' : '');
+        if (c.line != null) card.setAttribute('data-line', c.line);
+        if (c.id) card.setAttribute('data-id', c.id);
+        card.__data = c;
+        var resolveIco = isDraft ? '' : '<button type="button" class="pc-ico pc-resolve" title="' + (c.resolved ? 'Reopen' : 'Resolve') + '">' + (c.resolved ? '\u21ba' : '\u2713') + '</button>';
+        var resTag = c.resolved ? '<span class="rh-res" title="Resolved">\u2713</span>' : '';
+        var driftTag = c.anchorState === 'stale'
+          ? '<span class="pc-drift pc-drift-stale" title="The block this note anchored to was edited away or removed \u2014 the position is approximate.">moved?</span>'
+          : c.anchorState === 'moved'
+          ? '<span class="pc-drift pc-drift-moved" title="The block text changed; tracked to its heading section.">tracked</span>'
+          : '';
+        card.innerHTML =
+          '<div class="rh-head"><span class="rh-badge">' + pcEsc(c.author || RO_USER) + ' \u00b7 ' + pcWhen(c.updatedAt || c.createdAt || new Date().toISOString()) + '</span>'
+          + '<span class="rh-hline">' + (c.line != null ? ':' + c.line : '') + '</span>' + driftTag + resTag + '<span class="rh-count">1</span>'
+          + '<button type="button" class="pc-ico pc-save" title="Save">\ue74e</button>'
+          + resolveIco
+          + '<button type="button" class="pc-ico pc-edit" title="Edit">\u270e</button>'
+          + '<button type="button" class="pc-ico pc-del" title="Delete">\u{1f5d1}</button></div>'
+          + '<div class="rh-summary"><span class="rh-who"></span> ' + pcSnippet(c.content) + '</div>'
+          + '<div class="rh-full">'
+          + '<div class="pc-view"><div class="rh-body">' + (c.html || pcEsc(c.content)) + '</div>' + pcRepliesHtml(c) + '</div>'
+          + '<div class="pc-editbox" hidden><textarea class="pc-text" placeholder="Add a comment\u2026 (saves when you click away)"></textarea></div>'
+          + '</div>';
+        pcWireCard(card);
+        return card;
+      }
+      function pcShowEdit(card, open) {
+        card.querySelector('.pc-view').hidden = open;
+        card.querySelector('.pc-editbox').hidden = !open;
+        card.classList.toggle('pc-editing', open);
+        card.classList.toggle('rh-expanded', true);
+      }
+      function pcApi(method, url, body) {
+        return fetch(url, { method: method, headers: { 'Content-Type': 'application/json' }, body: body ? JSON.stringify(body) : undefined }).then(function (r) { return r.json().catch(function () { return {}; }); });
+      }
+      function pcCoords() { return { repo: RO_REPO, branch: RO_BRANCH, path: RO_PATH }; }
+      function pcRemoveDraft() {
+        if (!pcDraft) return;
+        var b = pcDraft.__block; if (b) b.classList.remove('pc-active');
+        pcDraft.remove(); pcDraft = null; pcRefresh();
+      }
+      function pcCommit(card) {
+        if (card.__saving || !card.isConnected) return;
+        var ta = card.querySelector('.pc-text'); if (!ta) return;
+        var text = ta.value.trim();
+        var isDraft = card.classList.contains('pc-draft');
+        var orig = (card.__data && card.__data.content) || '';
+        if (isDraft) {
+          if (!text) { pcRemoveDraft(); return; }
+          card.__saving = true;
+          var payload = Object.assign({}, pcCoords(), { line: card.__data.line, content: text });
+          pcApi('POST', '/api/v1/personal-comments', payload).then(function (d) {
+            card.__saving = false;
+            if (!d || !d.ok || !d.comment) { return; }
+            if (typeof d.dataSeq === 'number') pcLastDataSeq = d.dataSeq;
+            card.classList.remove('pc-draft');
+            var b = card.__block; if (b) b.classList.remove('pc-active');
+            var nb = card.__block; card = pcReplace(card, d.comment); if (nb) card.__block = nb;
+            pcDraft = null; pcRefresh();
+          });
+        } else {
+          // Existing comment: emptying it saves an empty comment (allowed) — only
+          // an untouched edit is a no-op.
+          if (text === orig) { pcShowEdit(card, false); return; }
+          card.__saving = true;
+          var pl = Object.assign({}, pcCoords(), { content: text });
+          pcApi('PUT', '/api/v1/personal-comments/' + encodeURIComponent(card.getAttribute('data-id')), pl).then(function (d) {
+            card.__saving = false;
+            if (!d || !d.ok) return;
+            if (typeof d.dataSeq === 'number') pcLastDataSeq = d.dataSeq;
+            if (d.deleted) { pcRemoveCardDom(card); return; }
+            pcReplace(card, d.comment); pcRefresh();
+          });
+        }
+      }
+      function pcReplace(card, c) {
+        var fresh = pcBuildCard(c, false);
+        card.replaceWith(fresh);
+        return fresh;
+      }
+      function pcRemoveCardDom(card) { card.remove(); pcRefresh(); }
+      function pcDelete(card) {
+        if (card.classList.contains('pc-draft')) { pcRemoveDraft(); return; }
+        var id = card.getAttribute('data-id');
+        pcApi('DELETE', '/api/v1/personal-comments/' + encodeURIComponent(id), pcCoords()).then(function (d) { if (d && typeof d.dataSeq === 'number') pcLastDataSeq = d.dataSeq; pcRemoveCardDom(card); });
+      }
+      function pcToggleResolved(card) {
+        if (card.classList.contains('pc-draft') || card.__resolving) return;
+        var id = card.getAttribute('data-id'); if (!id) return;
+        var next = !(card.__data && card.__data.resolved);
+        card.__resolving = true;
+        pcApi('POST', '/api/v1/personal-comments/' + encodeURIComponent(id) + '/resolve', Object.assign({}, pcCoords(), { resolved: next })).then(function (d) {
+          card.__resolving = false;
+          if (!d || !d.ok || !d.comment) return;
+          if (typeof d.dataSeq === 'number') pcLastDataSeq = d.dataSeq;
+          // Update the card IN PLACE so it keeps its expanded/focused state
+          // (rebuilding collapsed it, which read as "resolve didn't work").
+          card.__data = d.comment;
+          card.classList.toggle('pc-resolved', !!d.comment.resolved);
+          var resBtn = card.querySelector('.pc-resolve');
+          if (resBtn) { resBtn.textContent = d.comment.resolved ? '\u21ba' : '\u2713'; resBtn.title = d.comment.resolved ? 'Reopen' : 'Resolve'; }
+          var head = card.querySelector('.rh-head');
+          var res = head.querySelector('.rh-res');
+          if (d.comment.resolved && !res) { var span = document.createElement('span'); span.className = 'rh-res'; span.title = 'Resolved'; span.textContent = '\u2713'; head.insertBefore(span, head.querySelector('.rh-count')); }
+          else if (!d.comment.resolved && res) { res.remove(); }
+          pcRefresh(); // recolor the anchor marker (resolved -> green)
+        });
+      }
+      function pcWireCard(card) {
+        card.addEventListener('click', function (e) {
+          if (e.target.closest && e.target.closest('button, textarea, a')) return;
+          if (card.classList.contains('rh-expanded')) { clearFocus(); layout(); pcReportSelected(null); return; }
+          focus(card, 'block'); pcReportSelected(card.getAttribute('data-id'));
+        });
+        var editBtn = card.querySelector('.pc-edit'); if (editBtn) editBtn.addEventListener('click', function (e) { e.stopPropagation(); var ta = card.querySelector('.pc-text'); ta.value = (card.__data && card.__data.content) || ''; pcShowEdit(card, true); ta.focus(); });
+        var delBtn = card.querySelector('.pc-del'); if (delBtn) delBtn.addEventListener('click', function (e) { e.stopPropagation(); pcDelete(card); });
+        var resBtn = card.querySelector('.pc-resolve'); if (resBtn) resBtn.addEventListener('click', function (e) { e.stopPropagation(); pcToggleResolved(card); });
+        var saveBtn = card.querySelector('.pc-save'); if (saveBtn) saveBtn.addEventListener('click', function (e) { e.stopPropagation(); pcCommit(card); });
+        var ta = card.querySelector('.pc-text');
+        if (ta) {
+          // Commits on Save, Ctrl+Enter, or losing focus.
+          ta.addEventListener('keydown', function (e) {
+            if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') { e.preventDefault(); ta.blur(); }
+          });
+          ta.addEventListener('blur', function () { setTimeout(function () { var ae = document.activeElement; if (ae && card.contains(ae)) return; pcCommit(card); }, 150); });
+        }
+      }
+      function pcCreateDraft(block, line) {
+        if (pcDraft) { var ta0 = pcDraft.querySelector('.pc-text'); if (ta0 && ta0.value.trim()) { pcCommit(pcDraft); } else { pcRemoveDraft(); } }
+        if (marginEl.classList.contains('collapsed')) marginEl.classList.remove('collapsed');
+        var empty = pcBody().querySelector('.ro-empty'); if (empty) empty.remove();
+        var c = { id: '', line: line, author: RO_USER, content: '', createdAt: new Date().toISOString() };
+        var card = pcBuildCard(c, true);
+        card.__block = block;
+        pcBody().appendChild(card);
+        pcDraft = card;
+        block.classList.add('pc-active');
+        pcShowEdit(card, true);
+        pcRefresh();
+        var ta = card.querySelector('.pc-text'); if (ta) ta.focus();
+        focus(card, 'card');
+      }
+      function pcAddDot(block) {
+        if (block.querySelector('.pc-add')) return;
+        block.style.position = 'relative';
+        var dot = document.createElement('button');
+        dot.type = 'button'; dot.className = 'pc-add'; dot.textContent = '\uff0b';
+        dot.title = 'Add personal comment';
+        dot.addEventListener('click', function (e) { e.stopPropagation(); pcCreateDraft(block, pcLineForBlock(block)); });
+        block.appendChild(dot);
+      }
+      function pcWireHover() {
+        blocks.forEach(function (b) {
+          b.addEventListener('mouseenter', function () { b.classList.add('pc-hover'); pcAddDot(b); });
+          b.addEventListener('mouseleave', function () {
+            b.classList.remove('pc-hover');
+            var dot = b.querySelector('.pc-add'); if (dot) dot.remove();
+            // An empty, unfocused draft anchored here vanishes when the block loses focus.
+            if (pcDraft && pcDraft.__block === b) {
+              var ta = pcDraft.querySelector('.pc-text');
+              if (ta && !ta.value.trim() && document.activeElement !== ta) pcRemoveDraft();
+            }
+          });
+        });
+      }
+      function pcCardForBlock(block) {
+        var line = pcLineForBlock(block);
+        if (line == null) return null;
+        for (var i = 0; i < cards.length; i++) { if (parseInt(cards[i].getAttribute('data-line'), 10) === line) return cards[i]; }
+        return null;
+      }
+      // Clicking a different section clears the current section's border/focus and
+      // un-highlights its comment; clicking a section that has a comment focuses it.
+      function pcWireContentClicks() {
+        docEl.addEventListener('click', function (e) {
+          if (e.target.closest('.pc-add, .rh-marker, a, button, textarea, input')) return;
+          var focusedBlock = docEl.querySelector('.section-focused');
+          var block = e.target.closest('.ro-commentable');
+          if (block && block === focusedBlock) return; // clicking the focused section: keep it
+          var card = block ? pcCardForBlock(block) : null;
+          if (card) { focus(card, 'card'); pcReportSelected(card.getAttribute('data-id')); }
+          else if (focusedBlock) { clearFocus(); layout(); pcReportSelected(null); }
+        });
+      }
+      function pcLoad() {
+        var body = pcBody();
+        if (body) body.innerHTML = '';
+        (RO_PERSONAL_COMMENTS || []).forEach(function (c) { pcBody().appendChild(pcBuildCard(c, false)); });
+        if (!(RO_PERSONAL_COMMENTS || []).length && body) body.innerHTML = '<div class="ro-empty">No personal comments yet.</div>';
+        pcWireHover();
+        pcWireContentClicks();
+        pcRefresh();
+        // Live channel: poll for MCP-driven data changes + one-shot UI commands.
+        setInterval(pcPoll, 1200); pcPoll();
       }
       function init() {
         collectBlocks();
@@ -2238,7 +2989,7 @@ body.show-markers .rh-marker { display: inline-flex; }
           if (shown) { layout(); setTimeout(layout, 60); }
         });
         mo.observe(marginEl, { attributes: true, attributeFilter: ['class'] });
-        loadHistory();
+        if (RO_REVIEWING) pcLoad(); else loadHistory();
       }
       // Run after the mermaid transform has claimed its blocks (it registers its
       // own DOMContentLoaded handler earlier, so it runs first).
@@ -2246,6 +2997,7 @@ body.show-markers .rh-marker { display: inline-flex; }
       else init();
     })();
   <\/script>
+${NAV_WATCHER}
 </body></html>`;
 }
 
@@ -2797,11 +3549,11 @@ details[open] .resolved-summary::before { content: '▾ '; }
 window.tippani = (function () {
   // Mutable baseline: updated after a successful save so the editor is no longer
   // dirty and the next diff is measured against the saved state.
-  let RAW_MARKDOWN = ${JSON.stringify(rawMarkdown || "")};
-  const SPEC_FILE_PATH = ${JSON.stringify(specPath)};
+  let RAW_MARKDOWN = ${jsonForScript(rawMarkdown || "")};
+  const SPEC_FILE_PATH = ${jsonForScript(specPath)};
   const FILENAME = SPEC_FILE_PATH.split("/").pop();
   // Branch tip at load time — sent on save so ADO rejects a stale push (#49).
-  const BASE_OBJECT_ID = ${JSON.stringify(baseObjectId || null)};
+  const BASE_OBJECT_ID = ${jsonForScript(baseObjectId || null)};
   const ORIG_TITLE = document.title;
   let editor = null;
   let editMode = false;
@@ -3263,11 +4015,11 @@ window.tippani = (function () {
 })();
 </script>
 <script>
-const SPEC_PATH = ${JSON.stringify(specPath)};
-const CURRENT_FILE_INDEX = ${JSON.stringify(currentFileIndex)};
-const SOURCE_MAP = ${JSON.stringify(sourceMap)};
-const TOC_DATA = ${JSON.stringify(toc)};
-const THREADS_DATA = ${JSON.stringify(allThreads.map(t => ({
+const SPEC_PATH = ${jsonForScript(specPath)};
+const CURRENT_FILE_INDEX = ${jsonForScript(currentFileIndex)};
+const SOURCE_MAP = ${jsonForScript(sourceMap)};
+const TOC_DATA = ${jsonForScript(toc)};
+const THREADS_DATA = ${jsonForScript(allThreads.map(t => ({
   id: t.id,
   line: t.threadContext?.rightFileStart?.line || null,
   file: t.threadContext?.filePath || null,
@@ -3907,13 +4659,19 @@ document.addEventListener('keydown', (e) => {
       const s = await r.json();
       if (s.version !== lastVersion) {
         lastVersion = s.version;
+        // The steady-state poll omits draft bodies; fetch them only now that
+        // something changed, so 1.2s polls don't ship every draft every time.
+        let full = s;
+        if (full.drafts === undefined || full.specDrafts === undefined) {
+          try { const rf = await fetch('/api/v1/state?full=1'); if (rf.ok) full = await rf.json(); } catch {}
+        }
         // Focus change from external client.
         if (s.focusedThreadId != null && s.focusedThreadId !== _focusedThreadId) {
           focusThread(s.focusedThreadId);
         }
         // Apply / clear drafts.
         const seenThisRound = new Set();
-        Object.entries(s.drafts || {}).forEach(([id, d]) => {
+        Object.entries(full.drafts || {}).forEach(([id, d]) => {
           const tid = Number(id);
           seenThisRound.add(tid);
           const k = seenDraftKey(tid, d);
@@ -3938,7 +4696,7 @@ document.addEventListener('keydown', (e) => {
           // A staged spec edit for THIS file changed: refresh only the CURRENT
           // view (don't switch it) and, if editing, auto-load it into the editor
           // (item 4, last-write-wins).
-          const sd = (s.specDrafts || {})[CURRENT_FILE_INDEX];
+          const sd = (full.specDrafts || {})[CURRENT_FILE_INDEX];
           const key = sd ? sd.updatedAt : 0;
           if (key !== lastSpecDraftKey) {
             lastSpecDraftKey = key;
@@ -4164,14 +4922,21 @@ async function main() {
   const explicitFile = args.find((a) => a.startsWith("--file="))?.split("=").slice(1).join("=") || positional[1] || null;
 
   const browseMode = args.includes("--browse");
-  _browseMode = browseMode;
-  if (!_prId && !browseMode) {
+  // A local repo can be reviewed with no ADO PR: --local-repo populates the
+  // Local tab and (alone) boots the portal in browse mode.
+  const localRepoArg = (args.find(a => a.startsWith("--local-repo="))?.split("=").slice(1).join("=")) || process.env.TIPPANI_LOCAL_REPO || null;
+  _localRepoPath = localRepoArg ? String(localRepoArg).trim() : "";
+  if (_localRepoPath) approveLocalRoot(_localRepoPath); // --local-repo is an explicit user approval
+  const browseModeEffective = browseMode || (!!_localRepoPath && !_prId);
+  _browseMode = browseModeEffective;
+  if (!_prId && !browseModeEffective) {
     console.log("Usage: tippani <PR_ID> [options]");
     console.log("");
     console.log("Options:");
     console.log("  --org=<url>       ADO org URL (e.g. https://dev.azure.com/myorg)");
     console.log("  --project=<name>  ADO project name");
     console.log("  --repo=<name>     ADO repo name (optional; auto-detected from the PR)");
+    console.log("  --local-repo=<p>  Review a LOCAL git repo (populates the Local tab)");
     console.log("  --file=<path>     Open a specific file directly");
     console.log("  --refresh         Force re-fetch from ADO (ignore cache)");
     console.log("  --offline         Work from cache only, no ADO connection needed");
@@ -4191,15 +4956,15 @@ async function main() {
 
   // Resolve ADO config
   const adoConfig = getConfig();
-  if (!adoConfig.org || !adoConfig.project) {
+  if ((!adoConfig.org || !adoConfig.project) && !_localRepoPath) {
     console.error("Error: --org and --project are required (or set in ~/.tippani/config.json).");
     console.error("Run: tippani <PR_ID> --org=https://dev.azure.com/YOURORG --project='YOUR PROJECT' --save-config");
     process.exit(1);
   }
-  ADO_ORG = adoConfig.org.replace(/\/+$/, "");
-  if (!ADO_ORG.startsWith("https://")) ADO_ORG = "https://" + ADO_ORG;
-  ADO_PROJECT = adoConfig.project;
-  ADO_REPO = adoConfig.repo || adoConfig.project;
+  ADO_ORG = (adoConfig.org || "").replace(/\/+$/, "");
+  if (ADO_ORG && !ADO_ORG.startsWith("https://")) ADO_ORG = "https://" + ADO_ORG;
+  ADO_PROJECT = adoConfig.project || "";
+  ADO_REPO = adoConfig.repo || adoConfig.project || "";
 
   // Save config if requested
   if (args.includes("--save-config")) {
@@ -4230,10 +4995,10 @@ async function main() {
   // and re-drives into PR-bound mode at runtime via GET /open/:prId (bindPr).
   // So browse mode only sets up the connection + empty PR state here, then falls
   // through to the shared app below.
-  if (browseMode) {
+  if (browseModeEffective) {
     if (adoToken) _conn = getAdoConnectionBearer(adoToken);
     else { const pat = loadPat(); if (pat) _conn = getAdoConnection(pat); }
-    if (!_conn) { console.error("Browse mode requires an ADO token (--ado-token / TIPPANI_ADO_TOKEN)."); process.exit(1); }
+    if (!_conn && !_localRepoPath) { console.error("Browse mode requires an ADO token (--ado-token / TIPPANI_ADO_TOKEN)."); process.exit(1); }
     _prId = 0;
     _pr = null;
     _branch = null;
@@ -4245,7 +5010,7 @@ async function main() {
 
   // PR-bound startup: authenticate, then load the PR into module state. Skipped
   // in browse mode (no PR yet) — the Discovery home binds a PR later via /open.
-  if (!browseMode) {
+  if (!browseModeEffective) {
 
   // Try cache first
   _cache = loadCache(_prId);
@@ -4406,6 +5171,21 @@ async function main() {
   const app = express();
   app.use(express.json());
 
+  // DNS-rebinding guard: the portal binds loopback only, so a legitimate
+  // request's Host is always localhost / 127.0.0.1 / [::1]. A rebind attack
+  // reaches us with the attacker's hostname in Host (it resolves to 127.0.0.1
+  // in the victim's browser), so reject any other Host outright — this runs on
+  // EVERY request, including the GETs that set review context.
+  const ALLOWED_HOSTS = new Set(["localhost", "127.0.0.1", "[::1]", "::1"]);
+  app.use((req, res, next) => {
+    const host = String(req.headers.host || "");
+    const name = host.replace(/:\d+$/, ""); // strip :port
+    if (!ALLOWED_HOSTS.has(name)) {
+      return res.status(403).json({ error: "Forbidden: host not allowed" });
+    }
+    next();
+  });
+
   // CSRF protection: reject cross-origin mutations
   app.use((req, res, next) => {
     // The token-gated control API (/api/v1/*) does its own bearer-token auth
@@ -4558,29 +5338,140 @@ async function main() {
     const repoName = String(req.query.repoName || "").trim();
     const project = String(req.query.project || ADO_PROJECT).trim();
     const branch = String(req.query.branch || "main").trim().replace(/^refs\/heads\//, "") || "main";
+    // Fully-local review: `local` is the clone's absolute path. Content comes from
+    // the clone via real git (working tree for the checked-out branch, else
+    // `git show`), rendered read-only with the Personal Comments pane. NEVER
+    // touches ADO/_conn — local mode is entirely offline.
+    const localPath = String(req.query.local || "").trim();
+    if (localPath) {
+      if (!specPath || !specPath.toLowerCase().endsWith(".md")) return res.redirect("/discovery?tab=branches");
+      try {
+        const got = await readLocalSpecContent({ path: localPath, branch, filePath: specPath });
+        if (!got.ok) return res.status(502).send(got.error || "Could not open the local spec.");
+        const { metadata, body } = stripFrontmatter(got.raw);
+        const { toc } = buildSourceMap(body);
+        const { html, ranges } = await renderSpecBody(body, specSanitizeSchema, { includeHeadings: true });
+        const bodyHtml = html.replace(/(<img\b[^>]*\bsrc=")([^"]+)(")/gi, (m, pre, src, post) => {
+          if (/^(https?:|data:|\/\/|\/spec\/media)/i.test(src)) return m;
+          return pre + `/spec/media?local=${encodeURIComponent(localPath)}&spec=${encodeURIComponent(specPath)}&branch=${encodeURIComponent(branch)}&src=${encodeURIComponent(src)}` + post;
+        });
+        const title = metadata.title || specPath.split("/").pop();
+        const backParam = String(req.query.back || "");
+        const safeBack = /^\/[^/]/.test(backParam) ? backParam : "";
+        const backHref = safeBack || "/discovery?tab=branches";
+        const localRepoKey = await localRepoKeyFor(localPath, branch, specPath);
+        const personalComments = (await listPersonalComments({ repo: localRepoKey, branch, path: specPath, rawText: body, sourceMap: ranges })).comments || [];
+        const commentCount = personalComments.length;
+        _focus.setPcContext({ repo: localRepoKey, branch, path: specPath });
+        const pcDataSeq = _focus.get().pcDataSeq;
+        return res.type("html").send(buildReadonlySpecPage({ title, bodyHtml, toc, specPath, repo: title, adoUrl: "", backHref, backLabel: "Branch", historyUrl: "", sourceMap: ranges, reviewing: true, editMode: "local", commentCount, reviewRepo: localRepoKey, reviewBranch: branch, reviewPath: specPath, currentUser: "You", personalComments, pcDataSeq }));
+      } catch (e) {
+        console.error(`/spec local failed for ${specPath}:`, e.message);
+        return res.status(502).send("Could not open the local spec. Check the server console.");
+      }
+    }
     if (!isValidRepoId(repoId) || !specPath || !specPath.toLowerCase().endsWith(".md")) return res.redirect("/discovery?tab=specs");
     if (_isOffline || !_conn) return res.status(503).send("Cannot open a spec while offline.");
     try {
       const raw = await getSpecContentAt(_conn, repoId, specPath, branch);
       const { metadata, body } = stripFrontmatter(raw);
       const { toc } = buildSourceMap(body);
-      const { html, ranges } = await renderSpecBody(body, specSanitizeSchema, {});
+      const { html, ranges } = await renderSpecBody(body, specSanitizeSchema, { includeHeadings: true });
       const bodyHtml = html.replace(/(<img\b[^>]*\bsrc=")([^"]+)(")/gi, (m, pre, src, post) => {
         if (/^(https?:|data:|\/\/|\/spec\/media)/i.test(src)) return m;
         return pre + `/spec/media?repo=${encodeURIComponent(repoId)}&spec=${encodeURIComponent(specPath)}&branch=${encodeURIComponent(branch)}&src=${encodeURIComponent(src)}` + post;
       });
       const title = metadata.title || specPath.split("/").pop();
       const adoUrl = repoName ? buildSpecWebUrl(ADO_ORG, project, repoName, specPath) : "";
-      // Back to the specs tab with the originating search re-run.
+      // Back to the specs tab with the originating search re-run, unless a caller
+      // (e.g. the branch page) passes an explicit relative `back` to return to.
+      const backParam = String(req.query.back || "");
+      const safeBack = /^\/[^/]/.test(backParam) ? backParam : "";
       const backQ = String(req.query.q || "");
-      const backHref = "/discovery?tab=specs" + (backQ ? "&q=" + encodeURIComponent(backQ) : "") + (project ? "&project=" + encodeURIComponent(project) : "");
+      const backHref = safeBack || ("/discovery?tab=specs" + (backQ ? "&q=" + encodeURIComponent(backQ) : "") + (project ? "&project=" + encodeURIComponent(project) : ""));
+      // Label the back link for where it actually goes (a branch page vs. Specs).
+      const backLabel = safeBack.startsWith("/branch") ? "Branch" : "Specs";
+      // File-reviewing mode = opened from a branch: the margin becomes a Reviewer
+      // Comments pane and the corner shows the editing-mode badge. `mode` is
+      // remote/local, threaded from the branch file link.
+      const reviewing = safeBack.startsWith("/branch");
+      const modeParam = String(req.query.mode || "");
+      const editMode = reviewing && (modeParam === "remote" || modeParam === "local") ? modeParam : null;
+      // Personal comments are file/branch scoped; load them + the signed-in user so
+      // the page can render existing notes and stamp new ones.
+      const personalComments = reviewing ? (await listPersonalComments({ repo: repoId, branch, path: specPath, rawText: body, sourceMap: ranges })).comments || [] : [];
+      const me = reviewing ? await getMe() : null;
+      const commentCount = personalComments.length;
+      // Record which file the open reviewing page shows so param-less MCP tools
+      // ("read all comments", "add comment") act on it. The data-seq baseline
+      // lets the page ignore its OWN mutations and only re-fetch on external ones.
+      if (reviewing) _focus.setPcContext({ repo: repoId, branch, path: specPath });
+      const pcDataSeq = _focus.get().pcDataSeq;
       // History is fetched asynchronously by the page (see /spec/history) so the
       // spec paints without waiting on the ADO commit->PR->threads round-trips.
       const historyUrl = "/spec/history?repo=" + encodeURIComponent(repoId) + "&path=" + encodeURIComponent(specPath) + "&branch=" + encodeURIComponent(branch);
-      res.type("html").send(buildReadonlySpecPage({ title, bodyHtml, toc, specPath, repo: repoName, adoUrl, backHref, historyUrl, sourceMap: ranges }));
+      res.type("html").send(buildReadonlySpecPage({ title, bodyHtml, toc, specPath, repo: repoName, adoUrl, backHref, backLabel, historyUrl, sourceMap: ranges, reviewing, editMode, commentCount, reviewRepo: repoId, reviewBranch: branch, reviewPath: specPath, currentUser: me?.displayName || "You", personalComments, pcDataSeq }));
     } catch (e) {
       console.error(`/spec read-only failed for ${specPath}:`, e.message);
       res.status(502).send("Could not open the spec. Check the server console.");
+    }
+  });
+
+  // Fully-local branch page: list a local branch's changed markdown files (vs.
+  // its base), read from the clone with real git. No ADO. `path` is the clone's
+  // absolute path (from the native picker), `ref` the branch. Display-only for
+  // now; opening a file is a later step.
+  app.get("/local-branch", async (req, res) => {
+    const repoPath = String(req.query.path || "").trim();
+    const ref = String(req.query.ref || req.query.branch || "").trim().replace(/^refs\/heads\//, "");
+    const backHref = "/discovery?tab=branches";
+    const displayName = repoPath ? (repoPath.split(/[\\/]/).filter(Boolean).pop() || repoPath) : "";
+    if (!repoPath || !ref) return res.redirect("/discovery?tab=branches");
+    try {
+      const result = await listLocalBranchOnlyMd({ path: repoPath, branch: ref });
+      if (!result.ok) {
+        return res.type("html").send(buildBranchPage({ repoName: displayName, project: "", ref, rows: [], backHref, adoUrl: "", error: result.error, mode: "local" }));
+      }
+      const selfHref = `/local-branch?path=${encodeURIComponent(repoPath)}&ref=${encodeURIComponent(ref)}`;
+      const rows = branchFileRows(result.paths, { localPath: repoPath, ref, back: selfHref });
+      res.type("html").send(buildBranchPage({ repoName: displayName, project: "", ref, rows, backHref, adoUrl: "", error: null, mode: "local" }));
+    } catch (e) {
+      console.error(`/local-branch failed for ${repoPath}@${ref}:`, e.message);
+      res.type("html").send(buildBranchPage({ repoName: displayName, project: "", ref, rows: [], backHref, adoUrl: "", error: "Could not open the local branch. Check the server console.", mode: "local" }));
+    }
+  });
+
+  // Discovery branch page: list a branch's UNIQUE markdown files as a read-only
+  // review surface (README hidden by default). Each file opens the /spec view
+  // pinned to this branch. Reached from a remote branch card (repo=GUID) or a
+  // local branch card mapped to its ADO origin (repo=name + project).
+  app.get("/branch", async (req, res) => {
+    const repoParam = String(req.query.repo || req.query.repoName || "").trim();
+    const project = String(req.query.project || ADO_PROJECT).trim();
+    const ref = String(req.query.ref || "").trim().replace(/^refs\/heads\//, "");
+    if (!repoParam || !ref) return res.redirect("/discovery?tab=branches");
+    const backHref = "/discovery?tab=branches";
+    // A remote card passes repo=<GUID>; a local card maps to its ADO origin and
+    // passes only repoName. That distinction is the editing mode we badge on /spec.
+    const editMode = isValidRepoId(String(req.query.repo || "").trim()) ? "remote" : "local";
+    const orgBase = ADO_ORG.replace(/\/+$/, "");
+    const adoUrlFor = (name) => name ? `${orgBase}/${encodeURIComponent(project)}/_git/${encodeURIComponent(name)}?version=GB${encodeURIComponent(ref)}` : "";
+    try {
+      const result = await listBranchFiles({ project, repo: repoParam, ref });
+      if (!result.ok) {
+        const displayName = String(req.query.repoName || repoParam);
+        return res.type("html").send(buildBranchPage({ repoName: displayName, project, ref, rows: [], backHref, adoUrl: adoUrlFor(displayName), error: result.error }));
+      }
+      const { repoId, repoName } = result;
+      // Files link back to this exact branch page (not the Specs tab).
+      const selfHref = `/branch?project=${encodeURIComponent(project)}&repo=${encodeURIComponent(repoId)}&repoName=${encodeURIComponent(repoName)}&ref=${encodeURIComponent(ref)}`;
+      const ctx = { repoId, repoName, project, ref, back: selfHref, mode: editMode };
+      const rows = branchFileRows(result.paths, ctx);
+      res.type("html").send(buildBranchPage({ repoName, project, ref, rows, backHref, adoUrl: adoUrlFor(repoName), error: null, mode: editMode }));
+    } catch (e) {
+      console.error(`/branch failed for ${repoParam}@${ref}:`, e.message);
+      const displayName = String(req.query.repoName || repoParam);
+      res.type("html").send(buildBranchPage({ repoName: displayName, project, ref, rows: [], backHref, adoUrl: adoUrlFor(displayName), error: "Could not open the branch. Check the server console." }));
     }
   });
 
@@ -4606,6 +5497,26 @@ async function main() {
   // Repo-scoped by GUID; image-extension gated so it can't read arbitrary files.
   app.get("/spec/media", async (req, res) => {
     try {
+      // Fully-local image: resolve relative to the spec and read from the clone's
+      // working tree on disk. No ADO.
+      const localPath = String(req.query.local || "").trim();
+      if (localPath) {
+        const specPathL = String(req.query.spec || "").trim();
+        if (!specPathL) return res.status(404).end();
+        const resolvedL = resolveImagePath(specPathL, req.query.src);
+        if (!resolvedL) return res.status(404).end();
+        const rel = String(resolvedL).replace(/^\/+/, "");
+        if (!rel || rel.includes("\0") || /(^|[\\/])\.\.([\\/]|$)/.test(rel)) return res.status(404).end();
+        const typeL = imageContentType(rel);
+        if (!typeL) return res.status(404).end();
+        const v = validateLocalRepo(localPath);
+        if (!v.ok) return res.status(404).end();
+        let buf;
+        try { buf = fs.readFileSync(path.join(String(localPath).trim(), rel)); } catch { return res.status(404).end(); }
+        if (!buf || buf.length === 0) return res.status(404).end();
+        if (isLfsPointer(buf)) return res.status(502).end();
+        return res.set("Content-Type", typeL).set(secureImageHeaders()).send(buf);
+      }
       const repoId = String(req.query.repo || "").trim();
       const specPath = String(req.query.spec || "").trim();
       if (!isValidRepoId(repoId) || !specPath) return res.status(404).end();
@@ -4975,6 +5886,622 @@ async function main() {
     return { files: out, count: out.length };
   }
 
+  // Discovery Branches tab: list the signed-in user's branches across the repos
+  // in a project. ADO's getRefs(includeMyBranches=true) returns the caller's
+  // own/favorited branches (+ default) per repo; branchesForRepo drops the
+  // default and shapes rows. Repos are queried with bounded concurrency.
+  async function listMyBranches({ project } = {}) {
+    if (_isOffline || !_conn) return { branches: [], error: "offline" };
+    const proj = (project && String(project).trim()) || ADO_PROJECT;
+    const gitApi = await _conn.getGitApi();
+    let repos;
+    try {
+      repos = await gitApi.getRepositories(proj);
+    } catch (e) {
+      console.error("List repositories failed:", friendlyAdoError(e, "List repositories"));
+      return { branches: [], project: proj, error: "Could not list repositories. Check the server console." };
+    }
+    const list = (repos || []).filter((r) => r && r.id);
+    const all = [];
+    let cursor = 0;
+    const worker = async () => {
+      for (;;) {
+        const i = cursor++;
+        if (i >= list.length) break;
+        const repo = list[i];
+        try {
+          // getRefs(repoId, project, filter, includeLinks, includeStatuses, includeMyBranches)
+          const refs = await gitApi.getRefs(repo.id, proj, undefined, false, false, true);
+          for (const row of branchesForRepo(refs, repo, ADO_ORG)) all.push(row);
+        } catch (e) {
+          console.error(`getRefs failed for ${repo.name}:`, friendlyAdoError(e, "List branches"));
+        }
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(8, list.length) }, worker));
+    const branches = sortBranches(all);
+    return { branches, project: proj, count: branches.length };
+  }
+
+  // Personal Comments (read-only spec page, file-reviewing mode): the signed-in
+  // user's own notes on a draft file, stored locally per (repo, branch, path).
+  // Identity is the ADO authenticated user; content is rendered safely.
+  let _me = null;
+  async function getMe() {
+    if (_me) return _me;
+    if (_isOffline || !_conn) return { displayName: "You", id: null };
+    try {
+      const cd = await _conn.connect();
+      _me = { displayName: (cd && cd.authenticatedUser && cd.authenticatedUser.displayName) || "You", id: (cd && cd.authenticatedUser && cd.authenticatedUser.id) || null };
+    } catch { _me = { displayName: "You", id: null }; }
+    return _me;
+  }
+  async function _pcWithHtml(comment) {
+    const replies = [];
+    for (const r of comment.replies || []) replies.push({ ...r, html: await renderMarkdownSafe(r.content || "") });
+    return { ...comment, html: await renderMarkdownSafe(comment.content || ""), replies };
+  }
+  async function listPersonalComments({ repo, branch, path: filePath, rawText, sourceMap } = {}) {
+    if (!repo || !branch || !filePath) return { ok: false, error: "Missing repo/branch/path." };
+    let list;
+    try { list = loadPersonalComments(repo, branch, filePath); }
+    catch (e) { return { ok: false, error: `Could not read comments: ${e.code || e.message}` }; }
+    // When the caller supplies the current source (a page render), re-resolve
+    // each comment's content anchor against it — backfilling a fresh comment's
+    // anchor and re-pointing any that drifted when the file was edited — and
+    // persist if anything moved so the on-disk line tracks the block.
+    if (rawText != null && Array.isArray(sourceMap)) {
+      const ra = pcReanchor(list, rawText, sourceMap);
+      if (ra.changed) {
+        try { savePersonalComments(repo, branch, filePath, ra.comments); } catch { /* re-anchor persistence is best-effort */ }
+      }
+      list = ra.comments;
+    }
+    list = pcSort(list);
+    const comments = [];
+    for (const c of list) comments.push(await _pcWithHtml(c));
+    return { ok: true, comments };
+  }
+  async function createPersonalComment({ repo, branch, path: filePath, line, content } = {}) {
+    if (!repo || !branch || !filePath) return { ok: false, error: "Missing repo/branch/path." };
+    const text = String(content == null ? "" : content).trim();
+    if (!text) return { ok: false, error: "Empty comment." };
+    const me = await getMe();
+    const id = Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+    const c = pcNew({ id, line, author: me.displayName, content: text, now: new Date().toISOString() });
+    try {
+      savePersonalComments(repo, branch, filePath, pcAdd(loadPersonalComments(repo, branch, filePath), c));
+    } catch (e) {
+      return { ok: false, error: `Could not save comment: ${e.code || e.message}` };
+    }
+    return { ok: true, comment: await _pcWithHtml(c), dataSeq: _focus.bumpPcData() };
+  }
+  async function editPersonalComment({ repo, branch, path: filePath, id, content } = {}) {
+    if (!repo || !branch || !filePath || !id) return { ok: false, error: "Missing repo/branch/path/id." };
+    try {
+      const cur = loadPersonalComments(repo, branch, filePath);
+      if (!pcFind(cur, id)) return { ok: false, error: "Not found." };
+      // Editing an existing comment to empty is allowed — it saves an empty comment
+      // (deletion is an explicit action, not a side effect of clearing the text).
+      const text = String(content == null ? "" : content).trim();
+      const list = pcUpdate(cur, id, text, new Date().toISOString());
+      savePersonalComments(repo, branch, filePath, list);
+      return { ok: true, comment: await _pcWithHtml(pcFind(list, id)), dataSeq: _focus.bumpPcData() };
+    } catch (e) {
+      return { ok: false, error: `Could not edit comment: ${e.code || e.message}` };
+    }
+  }
+  async function deletePersonalComment({ repo, branch, path: filePath, id } = {}) {
+    if (!repo || !branch || !filePath || !id) return { ok: false, error: "Missing repo/branch/path/id." };
+    try {
+      savePersonalComments(repo, branch, filePath, pcRemove(loadPersonalComments(repo, branch, filePath), id));
+    } catch (e) {
+      return { ok: false, error: `Could not delete comment: ${e.code || e.message}` };
+    }
+    return { ok: true, id, dataSeq: _focus.bumpPcData() };
+  }
+  async function resolvePersonalComment({ repo, branch, path: filePath, id, resolved } = {}) {
+    if (!repo || !branch || !filePath || !id) return { ok: false, error: "Missing repo/branch/path/id." };
+    try {
+      const cur = loadPersonalComments(repo, branch, filePath);
+      if (!pcFind(cur, id)) return { ok: false, error: "Not found." };
+      const list = pcSetResolved(cur, id, !!resolved, new Date().toISOString());
+      savePersonalComments(repo, branch, filePath, list);
+      return { ok: true, comment: await _pcWithHtml(pcFind(list, id)), dataSeq: _focus.bumpPcData() };
+    } catch (e) {
+      return { ok: false, error: `Could not resolve comment: ${e.code || e.message}` };
+    }
+  }
+  // Append a reply (a follow-up note) to a comment — e.g. the assistant recording
+  // how it addressed the feedback before resolving.
+  async function replyPersonalComment({ repo, branch, path: filePath, id, author, content } = {}) {
+    if (!repo || !branch || !filePath || !id) return { ok: false, error: "Missing repo/branch/path/id." };
+    const text = String(content == null ? "" : content).trim();
+    if (!text) return { ok: false, error: "Empty reply." };
+    try {
+      const cur = loadPersonalComments(repo, branch, filePath);
+      if (!pcFind(cur, id)) return { ok: false, error: "Not found." };
+      const list = pcAddReply(cur, id, { author: author || "You", content: text, now: new Date().toISOString() });
+      savePersonalComments(repo, branch, filePath, list);
+      return { ok: true, comment: await _pcWithHtml(pcFind(list, id)), dataSeq: _focus.bumpPcData() };
+    } catch (e) {
+      return { ok: false, error: `Could not reply: ${e.code || e.message}` };
+    }
+  }
+
+  // --- Personal Comments: MCP-facing operations ---------------------------------
+  // These default to the file the open reviewing page reported (pcContext) and
+  // to the selected comment (pcSelectedId), and push UI commands (focus a
+  // comment, hide/show resolved) so MCP actions reflect live in the open page.
+  function pcSummary(c) {
+    return { id: c.id, line: c.line == null ? null : c.line, anchorState: c.anchorState || "ok", author: c.author, content: c.content, resolved: !!c.resolved, createdAt: c.createdAt, updatedAt: c.updatedAt, replies: (c.replies || []).map((r) => ({ author: r.author, content: r.content, createdAt: r.createdAt })) };
+  }
+  function pcCtx(args = {}) {
+    const cur = _focus.get().pcContext;
+    return { repo: args.repo || (cur && cur.repo), branch: args.branch || (cur && cur.branch), path: args.path || (cur && cur.path) };
+  }
+  async function mcpReadPersonalComments(args = {}) {
+    const { repo, branch, path: filePath } = pcCtx(args);
+    if (!repo || !branch || !filePath) return { ok: false, error: "No open reviewing file \u2014 open a file first or pass repo/branch/path." };
+    let list;
+    try { list = pcSort(loadPersonalComments(repo, branch, filePath)); }
+    catch (e) { return { ok: false, error: `Could not read comments: ${e.code || e.message}` }; }
+    return { ok: true, file: { repo, branch, path: filePath }, selected: _focus.get().pcSelectedId, count: list.length, resolvedCount: list.filter((c) => c.resolved).length, comments: list.map(pcSummary) };
+  }
+  async function mcpAddPersonalComment(args = {}) {
+    const { repo, branch, path: filePath } = pcCtx(args);
+    const r = await createPersonalComment({ repo, branch, path: filePath, line: args.line, content: args.content });
+    if (!r.ok) return r;
+    _focus.setPcSelected(r.comment.id);
+    _focus.setPcCommand({ type: "focus", id: r.comment.id });
+    return { ok: true, comment: pcSummary(r.comment), file: { repo, branch, path: filePath } };
+  }
+  async function mcpEditPersonalComment(args = {}) {
+    const { repo, branch, path: filePath } = pcCtx(args);
+    const id = args.id || _focus.get().pcSelectedId;
+    if (!id) return { ok: false, error: "No comment id and none selected." };
+    const r = await editPersonalComment({ repo, branch, path: filePath, id, content: args.content });
+    return r.ok ? { ok: true, comment: pcSummary(r.comment), file: { repo, branch, path: filePath } } : r;
+  }
+  async function mcpDeletePersonalComment(args = {}) {
+    const { repo, branch, path: filePath } = pcCtx(args);
+    const id = args.id || _focus.get().pcSelectedId;
+    if (!id) return { ok: false, error: "No comment id and none selected." };
+    const r = await deletePersonalComment({ repo, branch, path: filePath, id });
+    if (r.ok && _focus.get().pcSelectedId === id) _focus.setPcSelected(null);
+    return r.ok ? { ...r, file: { repo, branch, path: filePath } } : r;
+  }
+  async function mcpResolvePersonalComment(args = {}) {
+    const { repo, branch, path: filePath } = pcCtx(args);
+    const id = args.id || _focus.get().pcSelectedId;
+    if (!id) return { ok: false, error: "No comment id and none selected." };
+    if (!repo || !branch || !filePath) return { ok: false, error: "No open reviewing file \u2014 open a file first or pass repo/branch/path." };
+    // Post the "how it was addressed" note (if any) AND flip resolved in a
+    // SINGLE load/apply/save, so the store is written once — previously this ran
+    // reply then resolve as two separate load→save cycles (a lost-update race).
+    const note = String(args.note == null ? "" : args.note).trim();
+    const now = new Date().toISOString();
+    try {
+      let list = loadPersonalComments(repo, branch, filePath);
+      if (!pcFind(list, id)) return { ok: false, error: "Not found." };
+      if (note) list = pcAddReply(list, id, { author: args.author || "Assistant", content: note, now });
+      list = pcSetResolved(list, id, args.resolved !== false, now);
+      savePersonalComments(repo, branch, filePath, list);
+      _focus.bumpPcData();
+      return { ok: true, comment: pcSummary(pcFind(list, id)), file: { repo, branch, path: filePath } };
+    } catch (e) {
+      return { ok: false, error: `Could not resolve comment: ${e.code || e.message}` };
+    }
+  }
+  async function mcpReplyPersonalComment(args = {}) {
+    const { repo, branch, path: filePath } = pcCtx(args);
+    const id = args.id || _focus.get().pcSelectedId;
+    if (!id) return { ok: false, error: "No comment id and none selected." };
+    const r = await replyPersonalComment({ repo, branch, path: filePath, id, author: args.author || "Assistant", content: args.content });
+    if (r.ok) { _focus.setPcSelected(id); _focus.setPcCommand({ type: "focus", id }); return { ok: true, comment: pcSummary(r.comment), file: { repo, branch, path: filePath } }; }
+    return r;
+  }
+  async function mcpDeleteResolvedPersonalComments(args = {}) {
+    const { repo, branch, path: filePath } = pcCtx(args);
+    if (!repo || !branch || !filePath) return { ok: false, error: "No open reviewing file." };
+    const cur = loadPersonalComments(repo, branch, filePath);
+    const kept = cur.filter((c) => !c.resolved);
+    savePersonalComments(repo, branch, filePath, kept);
+    _focus.bumpPcData();
+    return { ok: true, removed: cur.length - kept.length, remaining: kept.length };
+  }
+  async function mcpClearPersonalComments(args = {}) {
+    const { repo, branch, path: filePath } = pcCtx(args);
+    if (!repo || !branch || !filePath) return { ok: false, error: "No open reviewing file." };
+    const n = loadPersonalComments(repo, branch, filePath).length;
+    savePersonalComments(repo, branch, filePath, []);
+    _focus.setPcSelected(null);
+    _focus.bumpPcData();
+    return { ok: true, removed: n };
+  }
+  async function mcpNavPersonalComment(args = {}) {
+    const { repo, branch, path: filePath } = pcCtx(args);
+    if (!repo || !branch || !filePath) return { ok: false, error: "No open reviewing file." };
+    const list = pcSort(loadPersonalComments(repo, branch, filePath));
+    if (!list.length) return { ok: false, error: "No comments to navigate." };
+    const targetId = pcNavTarget(list, _focus.get().pcSelectedId, args.direction || "next");
+    _focus.setPcSelected(targetId);
+    _focus.setPcCommand({ type: "focus", id: targetId });
+    const c = pcFind(list, targetId);
+    return { ok: true, selected: targetId, comment: c ? pcSummary(c) : null };
+  }
+  async function mcpJumpPersonalComment(args = {}) {
+    const { repo, branch, path: filePath } = pcCtx(args);
+    if (!repo || !branch || !filePath) return { ok: false, error: "No open reviewing file." };
+    const list = pcSort(loadPersonalComments(repo, branch, filePath));
+    let target = null;
+    if (args.id) target = pcFind(list, args.id);
+    else if (args.line != null) target = list.find((c) => c.line === Number(args.line)) || null;
+    if (!target) return { ok: false, error: "Comment not found." };
+    _focus.setPcSelected(target.id);
+    _focus.setPcCommand({ type: "focus", id: target.id });
+    return { ok: true, selected: target.id, comment: pcSummary(target) };
+  }
+  async function mcpSetPcResolvedVisibility(args = {}) {
+    const show = args.show !== false;
+    _focus.setPcCommand({ type: "showResolved", show });
+    return { ok: true, showResolved: show };
+  }
+  // Ask the open reviewing page to reload its file (re-fetch from ADO) so a push
+  // made outside Tippani becomes visible — the Copilot-callable remote refresh.
+  async function mcpRefreshSpec() {
+    _focus.setPcCommand({ type: "reload" });
+    return { ok: true };
+  }
+  // Open the Branches file-list page for a repo+branch in the user's browser.
+  // A localPath opens the fully-local branch view (no ADO); otherwise remote.
+  async function mcpOpenBranch({ project, repo, branch, localPath } = {}) {
+    const b = String(branch || "").replace(/^refs\/heads\//, "").trim();
+    const lp = String(localPath || "").trim();
+    if (lp) {
+      if (!b) return { ok: false, error: "branch required." };
+      const p = `/local-branch?path=${encodeURIComponent(lp)}&ref=${encodeURIComponent(b)}`;
+      _focus.setNav(p);
+      return { ok: true, opened: p };
+    }
+    const proj = (project && String(project).trim()) || ADO_PROJECT;
+    if (!repo || !b) return { ok: false, error: "repo and branch required." };
+    const p = `/branch?project=${encodeURIComponent(proj)}&repo=${encodeURIComponent(repo)}&ref=${encodeURIComponent(b)}`;
+    _focus.setNav(p);
+    return { ok: true, opened: p };
+  }
+  // Open one spec file read-only in the reviewing view (so the user + the
+  // personal-comment tools have a target). A localPath reads from the on-disk
+  // clone (mode=local, no ADO); otherwise resolves the ADO repo to its canonical
+  // id/name and pins the review context (back=/branch, mode=remote).
+  async function mcpOpenBranchFile({ project, repo, repoName, branch, path: filePath, localPath } = {}) {
+    const b = String(branch || "").replace(/^refs\/heads\//, "").trim();
+    const lp = String(localPath || "").trim();
+    if (lp) {
+      if (!b || !filePath) return { ok: false, error: "branch and path required." };
+      const back = `/local-branch?path=${encodeURIComponent(lp)}&ref=${encodeURIComponent(b)}`;
+      const p = buildSpecHref({ localPath: lp, ref: b, path: filePath, back });
+      // Set the reviewing context up front (mirrors what the /spec page reports
+      // on load) so a follow-up read/resolve/reply works immediately, without
+      // waiting for the browser to navigate and report back.
+      _focus.setPcContext({ repo: await localRepoKeyFor(lp, b, filePath), branch: b, path: filePath });
+      _focus.setPcSelected(null);
+      _focus.setNav(p);
+      return { ok: true, opened: p, localPath: lp };
+    }
+    if (_isOffline || !_conn) return { ok: false, error: "offline" };
+    const proj = (project && String(project).trim()) || ADO_PROJECT;
+    const repoRef = String(repo || repoName || "").trim();
+    if (!repoRef || !b || !filePath) return { ok: false, error: "repo, branch and path required." };
+    let info;
+    try { const gitApi = await _conn.getGitApi(); info = await gitApi.getRepository(repoRef, proj); }
+    catch (e) { return { ok: false, error: "Could not find that repository." }; }
+    if (!info || !info.id) return { ok: false, error: "Could not find that repository." };
+    const back = `/branch?project=${encodeURIComponent(proj)}&repo=${encodeURIComponent(info.id)}&repoName=${encodeURIComponent(info.name)}&ref=${encodeURIComponent(b)}`;
+    const p = `/spec?repo=${encodeURIComponent(info.id)}&path=${encodeURIComponent(filePath)}&repoName=${encodeURIComponent(info.name)}&project=${encodeURIComponent(proj)}&branch=${encodeURIComponent(b)}&back=${encodeURIComponent(back)}&mode=remote`;
+    _focus.setPcContext({ repo: info.id, branch: b, path: filePath });
+    _focus.setPcSelected(null);
+    _focus.setNav(p);
+    return { ok: true, opened: p, repo: info.id, repoName: info.name };
+  }
+
+  // Discovery branch page: list the markdown files that are UNIQUE to a branch —
+  // i.e. the files it changed relative to where it forked from the repo's default
+  // branch (not every file in the tree). Diffs default..branch at the common
+  // commit via the ADO Git API; row shaping / README classification is pure
+  // (branch-files.js). `repo` may be a GUID (remote card) or a name (local card
+  // mapped from its ADO origin) — it's resolved to the canonical repo here.
+  async function listBranchFiles({ project, repo, ref } = {}) {
+    if (_isOffline || !_conn) return { ok: false, error: "offline" };
+    const repoRef = String(repo || "").trim();
+    if (!repoRef) return { ok: false, error: "Missing repo." };
+    const proj = (project && String(project).trim()) || ADO_PROJECT;
+    const version = String(ref || "").replace(/^refs\/heads\//, "").trim();
+    if (!version) return { ok: false, error: "Missing branch." };
+    try {
+      const gitApi = await _conn.getGitApi();
+      // Resolve the repo (accepts id or name) to its canonical id/name + default.
+      let repoInfo;
+      try {
+        repoInfo = await gitApi.getRepository(repoRef, proj);
+      } catch (e) {
+        console.error(`getRepository failed for ${repoRef}:`, friendlyAdoError(e, "Resolve repo"));
+        return { ok: false, error: "Could not find that repository." };
+      }
+      if (!repoInfo || !repoInfo.id) return { ok: false, error: "Could not find that repository." };
+      const repoId = repoInfo.id;
+      const repoName = repoInfo.name || repoRef;
+      const base = shortBranchName(repoInfo.defaultBranch || "");
+      if (!base || base === version) {
+        // No default to diff against (or this IS the default): nothing unique.
+        return { ok: true, project: proj, ref: version, repoId, repoName, base, paths: [], count: 0 };
+      }
+      // diffCommonCommit=true -> compare merge-base(base, branch)..branch, so the
+      // result is exactly what the branch changed since it forked.
+      const diffs = await gitApi.getCommitDiffs(
+        repoId,
+        proj,
+        true,
+        2000,
+        0,
+        { version: base, versionType: 0 },
+        { version, versionType: 0 }
+      );
+      const paths = mdPathsFromChanges(diffs && diffs.changes);
+      return { ok: true, project: proj, ref: version, repoId, repoName, base, paths, count: paths.length };
+    } catch (e) {
+      console.error(`listBranchFiles failed for ${repoRef}@${version}:`, friendlyAdoError(e, "List branch files"));
+      return { ok: false, error: "Could not list the branch's files. Check the server console." };
+    }
+  }
+
+  // Discovery "local repo" tile: validate a local clone path and report its
+  // current branch. Also records it as the current local repo so the Branches
+  // "Local" tab (and an MCP/CLI caller) can drive off a single path. Pure
+  // validation lives in local-repo.js.
+  async function openLocalRepo({ path: repoPath } = {}) {
+    const v = validateLocalRepo(repoPath);
+    if (v.ok) { _localRepoPath = String(repoPath || "").trim(); approveLocalRoot(_localRepoPath); }
+    return v;
+  }
+
+  // Discovery Branches tab (Local mode): list the branches of a local clone by
+  // reading its refs from disk — loose refs under .git/refs/heads plus
+  // .git/packed-refs — and flagging the checked-out branch. No `git` shell-out;
+  // pure parsing lives in local-repo.js.
+  async function listLocalBranches({ path: repoPath } = {}) {
+    const resolved = resolveGitDir(repoPath);
+    if (!resolved.ok) return { ok: false, error: resolved.error };
+    // Listing a clone's branches is the deliberate "open this repo" action, so
+    // it approves the root for the subsequent file-content reads (allow-list).
+    approveLocalRoot(repoPath);
+    const gitDir = resolved.gitDir;
+    let headBranch = null;
+    try { headBranch = parseGitHead(fs.readFileSync(path.join(gitDir, "HEAD"), "utf8")); } catch { /* detached / unreadable */ }
+    // Loose refs: every file under refs/heads is a branch; its path (with '/')
+    // is the branch name.
+    const loose = [];
+    const walk = (dir, prefix) => {
+      let entries;
+      try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
+      for (const e of entries) {
+        const full = path.join(dir, e.name);
+        const name = prefix ? `${prefix}/${e.name}` : e.name;
+        if (e.isDirectory()) walk(full, name);
+        else loose.push(name);
+      }
+    };
+    walk(path.join(gitDir, "refs", "heads"), "");
+    // Packed refs (branches git has packed away).
+    let packed = [];
+    try { packed = parsePackedRefs(fs.readFileSync(path.join(gitDir, "packed-refs"), "utf8")); } catch { /* none */ }
+    const all = mergeLocalBranches(loose, packed, headBranch);
+    // Only the user's own branches: drop the clone's default (from
+    // refs/remotes/origin/HEAD, else main/master).
+    let originDefault = null;
+    try { originDefault = parseOriginHeadDefault(fs.readFileSync(path.join(gitDir, "refs", "remotes", "origin", "HEAD"), "utf8")); } catch { /* none */ }
+    const branches = userCreatedBranches(all, originDefault);
+    return { ok: true, path: String(repoPath || "").trim(), branches, count: branches.length, current: headBranch };
+  }
+
+  // Open a native OS folder-picker dialog on the user's desktop and return the
+  // chosen absolute repo path. The portal runs locally, so the server can show
+  // the dialog; the browser folder picker hides the real path, which server-side
+  // git needs. Windows-only. Uses the modern Win10/11 IFileOpenDialog (the same
+  // dialog Explorer uses) via COM interop, falling back to the classic
+  // FolderBrowserDialog if the modern one can't be created. The script is
+  // written to a temp .ps1 (avoids shell-escaping the embedded C#).
+  async function pickLocalFolder() {
+    if (process.platform !== "win32") {
+      return { ok: false, error: "The folder picker is Windows-only here." };
+    }
+    const script = `$ErrorActionPreference = 'Stop'
+$path = $null
+$modernOk = $false
+try {
+  $src = @'
+using System;
+using System.Runtime.InteropServices;
+public static class TippaniFolderPicker {
+  [ComImport, ClassInterface(ClassInterfaceType.None), Guid("DC1C5A9C-E88A-4DDE-A5A1-60F82A20AEF7")]
+  private class FileOpenDialogRCW { }
+  [ComImport, Guid("42F85136-DB7E-439C-85F1-E4075D135FC8"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+  private interface IFileOpenDialog {
+    [PreserveSig] uint Show(IntPtr parent);
+    void SetFileTypes(); void SetFileTypeIndex(uint i); void GetFileTypeIndex(out uint i);
+    void Advise(); void Unadvise();
+    void SetOptions(uint fos); void GetOptions(out uint fos);
+    void SetDefaultFolder(IntPtr psi); void SetFolder(IntPtr psi); void GetFolder(out IntPtr ppsi);
+    void GetCurrentSelection(out IntPtr ppsi);
+    void SetFileName([MarshalAs(UnmanagedType.LPWStr)] string n); void GetFileName([MarshalAs(UnmanagedType.LPWStr)] out string n);
+    void SetTitle([MarshalAs(UnmanagedType.LPWStr)] string t);
+    void SetOkButtonLabel(); void SetFileNameLabel();
+    void GetResult(out IShellItem ppsi);
+    void AddPlace(); void SetDefaultExtension(); void Close(); void SetClientGuid(); void ClearClientData(); void SetFilter();
+    void GetResults(); void GetSelectedItems();
+  }
+  [ComImport, Guid("43826D1E-E718-42EE-BC55-A1E261C37BFE"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+  private interface IShellItem {
+    void BindToHandler(); void GetParent();
+    void GetDisplayName(uint sigdn, [MarshalAs(UnmanagedType.LPWStr)] out string name);
+    void GetAttributes(); void Compare();
+  }
+  public static string Pick() {
+    var dlg = (IFileOpenDialog)new FileOpenDialogRCW();
+    dlg.SetOptions(0x20u | 0x40u);
+    dlg.SetTitle("Select a local git repository");
+    uint hr = dlg.Show(IntPtr.Zero);
+    if (hr != 0) { return null; }
+    IShellItem item; dlg.GetResult(out item);
+    string p; item.GetDisplayName(0x80058000u, out p);
+    return p;
+  }
+}
+'@
+  Add-Type -TypeDefinition $src -Language CSharp | Out-Null
+  $path = [TippaniFolderPicker]::Pick()
+  $modernOk = $true
+} catch {
+  $modernOk = $false
+}
+if (-not $modernOk) {
+  try {
+    Add-Type -AssemblyName System.Windows.Forms | Out-Null
+    $o = New-Object System.Windows.Forms.Form; $o.TopMost = $true; $o.ShowInTaskbar = $false; $o.Opacity = 0; $o.Show()
+    $d = New-Object System.Windows.Forms.FolderBrowserDialog; $d.Description = 'Select a local git repository'; $d.ShowNewFolderButton = $false
+    $r = $d.ShowDialog($o); $o.Close()
+    if ($r -eq [System.Windows.Forms.DialogResult]::OK) { $path = $d.SelectedPath }
+  } catch { $path = $null }
+}
+if ($path) { [Console]::Out.Write($path) }
+`;
+    const tmp = path.join(os.tmpdir(), `tippani-pick-${Date.now()}-${Math.random().toString(36).slice(2)}.ps1`);
+    try { fs.writeFileSync(tmp, script, "utf8"); } catch (e) { return { ok: false, error: "Could not stage the folder picker." }; }
+    return await new Promise((resolve) => {
+      execFile("powershell", ["-NoProfile", "-STA", "-ExecutionPolicy", "Bypass", "-File", tmp],
+        { windowsHide: true, timeout: 5 * 60 * 1000 }, (err, stdout) => {
+          try { fs.unlinkSync(tmp); } catch { /* best effort */ }
+          const picked = String(stdout || "").trim();
+          if (!picked) return resolve({ ok: false, canceled: true });
+          const v = validateLocalRepo(picked);
+          if (!v.ok) return resolve({ ok: false, error: "That folder isn't a git repository.", path: picked });
+          resolve({ ok: true, path: picked, branch: v.branch });
+        });
+    });
+  }
+
+  // A local-only git runner: invokes the system git in the clone's directory.
+  // Read-only subcommands only (symbolic-ref, rev-parse, diff), no network.
+  function runGit(repoPath) {
+    return (args) => new Promise((resolve) => {
+      // A 15s timeout so a wedged git (network prompt, lock contention) can't
+      // hang the request forever — the picker shell already sets one; this path
+      // didn't. A killed/timed-out process surfaces as a non-zero code.
+      execFile("git", ["-C", repoPath, ...args], { maxBuffer: 64 * 1024 * 1024, windowsHide: true, timeout: 15000 },
+        (err, stdout, stderr) => resolve({
+          code: err ? (err.code ?? 1) : 0,
+          stdout: stdout || "",
+          stderr: (stderr || "") + (err && err.killed ? " [git timed out]" : ""),
+        }));
+    });
+  }
+
+  // A STABLE personal-comments repo id for a local clone: its origin URL
+  // (survives moving/renaming the clone), falling back to the realpath'd clone
+  // path when there's no origin. Migrates any notes stored under the old
+  // absolute-path key for this (branch,file) to the stable key, so re-keying
+  // never orphans existing notes. Returns the id to pass as `repo`.
+  async function localRepoKeyFor(localPath, branch, filePath) {
+    const raw = String(localPath || "").trim();
+    let id = null;
+    try {
+      const r = await runGit(raw)(["config", "--get", "remote.origin.url"]);
+      if (r.code === 0 && r.stdout.trim()) {
+        id = "localorigin:" + r.stdout.trim().replace(/\.git$/i, "").replace(/[/\\]+$/, "").toLowerCase();
+      }
+    } catch { /* fall through to a path-based id */ }
+    let real = raw;
+    try { real = fs.realpathSync(raw); } catch { /* keep raw */ }
+    if (!id) id = "local:" + real;
+    // Lazy per-file migration from the legacy raw-path / realpath keys.
+    if (branch != null && filePath != null) {
+      for (const legacy of new Set(["local:" + raw, "local:" + real])) {
+        try { pcStoreMigrate(PERSONAL_COMMENTS_DIR, legacy, id, branch, filePath); } catch { /* best-effort */ }
+      }
+    }
+    return id;
+  }
+
+  // Resolve the base revision to diff a branch against: the clone's origin
+  // default (refs/remotes/origin/HEAD) first, then main/master/develop/trunk
+  // (local or origin/). baseCandidates() owns the ordering and rejects
+  // leading-`-` names; it no longer dead-ends when the default is develop/trunk.
+  async function resolveLocalBase(run) {
+    let originDefault = "";
+    const sr = await run(["symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD"]);
+    if (sr.code === 0 && sr.stdout.trim()) originDefault = sr.stdout.trim();
+    for (const c of baseCandidates(originDefault)) {
+      const v = await run(["rev-parse", "--verify", "--quiet", `${c}^{commit}`]);
+      if (v.code === 0 && v.stdout.trim()) return c;
+    }
+    return null;
+  }
+
+  // The markdown files a local branch changed vs. its base, using the real git
+  // in the clone (git diff base...branch). Correct on any repo layout — packs,
+  // multi-pack-index, cruft packs, deltas. No ADO. Returns
+  // { ok, path, branch, base, paths, count } or { ok:false, error }.
+  async function listLocalBranchOnlyMd({ path: repoPath, branch } = {}) {
+    const br = String(branch || "").trim();
+    if (!br || br.startsWith("-")) return { ok: false, error: "Invalid branch name." };
+    const v = validateLocalRepo(repoPath);
+    if (!v.ok) return { ok: false, error: v.error };
+    if (!isApprovedRoot(repoPath)) return { ok: false, error: "Repo not approved for local review \u2014 open it in Tippani (the Repo box) first." };
+    const run = runGit(String(repoPath).trim());
+    const base = await resolveLocalBase(run);
+    if (!base) return { ok: false, error: "Could not resolve a base branch (main/master) in this clone." };
+    const r = await run(["diff", "--name-only", "--diff-filter=ACMR", `${base}...${br}`, "--"]);
+    if (r.code !== 0) return { ok: false, error: "Could not diff the branch. Check the server console." };
+    const seen = new Set();
+    const paths = [];
+    for (const raw of r.stdout.split(/\r?\n/)) {
+      const p = raw.trim();
+      if (!p || !p.toLowerCase().endsWith(".md")) continue;
+      if (seen.has(p)) continue;
+      seen.add(p);
+      paths.push(p);
+    }
+    return { ok: true, path: String(repoPath).trim(), branch: br, base, paths, count: paths.length };
+  }
+
+  // Read a spec's content from the local clone — working tree for the checked-out
+  // branch (so uncommitted edits are reviewed), else `git show <branch>:<file>`.
+  // Real git; no ADO. Returns { ok, raw, isCurrent } or { ok:false, error }.
+  async function readLocalSpecContent({ path: repoPath, branch, filePath } = {}) {
+    const br = String(branch || "").trim();
+    const fp = String(filePath || "").trim().replace(/^\/+/, "");
+    if (!br || br.startsWith("-")) return { ok: false, error: "Invalid branch." };
+    if (!fp || fp.startsWith("-") || fp.includes("\0") || /(^|[\\/])\.\.([\\/]|$)/.test(fp)) return { ok: false, error: "Invalid file path." };
+    const v = validateLocalRepo(repoPath);
+    if (!v.ok) return { ok: false, error: v.error };
+    if (!isApprovedRoot(repoPath)) return { ok: false, error: "Repo not approved for local review \u2014 open it in Tippani (the Repo box) first." };
+    const cleanRepo = String(repoPath).trim();
+    const run = runGit(cleanRepo);
+    const cur = await run(["rev-parse", "--abbrev-ref", "HEAD"]);
+    const isCurrent = cur.code === 0 && cur.stdout.trim() === br;
+    if (isCurrent) {
+      // Symlink-safe: resolve the path and prove it stays inside the clone
+      // (an in-repo symlink pointing outside must not leak arbitrary files).
+      const safe = safeLocalPath(cleanRepo, fp);
+      if (!safe) return { ok: false, error: "Invalid file path." };
+      try { return { ok: true, raw: fs.readFileSync(safe, "utf8"), isCurrent: true }; }
+      catch { return { ok: false, error: "Could not read the file from disk." }; }
+    }
+    const show = await run(["show", `${br}:${fp}`]);
+    if (show.code !== 0) return { ok: false, error: "Could not read the file from the branch." };
+    return { ok: true, raw: show.stdout, isCurrent: false };
+  }
+
   app.post("/api/comment", async (req, res) => {
     const action = addPending(_prId, { type: 'comment', filePath: req.body.filePath, line: req.body.line, content: req.body.content });
     if (!_isOffline && _conn) {
@@ -5294,6 +6821,30 @@ async function main() {
     searchWorkItems,
     searchSpecs,
     getFileCommits,
+    listMyBranches,
+    openLocalRepo,
+    listLocalBranches,
+    pickLocalFolder,
+    listPersonalComments,
+    createPersonalComment,
+    editPersonalComment,
+    deletePersonalComment,
+    resolvePersonalComment,
+    replyPersonalComment,
+    mcpReadPersonalComments,
+    mcpAddPersonalComment,
+    mcpEditPersonalComment,
+    mcpDeletePersonalComment,
+    mcpResolvePersonalComment,
+    mcpReplyPersonalComment,
+    mcpDeleteResolvedPersonalComments,
+    mcpClearPersonalComments,
+    mcpNavPersonalComment,
+    mcpJumpPersonalComment,
+    mcpSetPcResolvedVisibility,
+    mcpRefreshSpec,
+    mcpOpenBranch,
+    mcpOpenBranchFile,
   });
 
   const server = app.listen(PORT, "127.0.0.1", () => {

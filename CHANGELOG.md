@@ -1,5 +1,64 @@
 # Changelog
 
+## Unreleased — Personal comments + local (ADO-less) review
+
+File/branch-scoped **personal comments** on a draft spec (no PR), and a
+**local-clone review** path that reads branches/files straight from a git clone
+via server-side git. From branch `clickstop-1`.
+
+### Review-response hardening (adversarial PR review)
+- **Durable comment store.** Writes are atomic (temp-file + `renameSync`) and
+  now **throw** on failure, so `create`/`edit`/`resolve`/`reply` return
+  `{ ok: false }` instead of a false success; a corrupt store is **quarantined**
+  (`*.corrupt-<ts>`) and surfaced rather than silently read as "zero comments"
+  and overwritten. Disk I/O extracted to `personal-comments-store.js` with tests.
+- **Stored-XSS fix.** Inline `<script>` data embeds go through a new
+  `jsonForScript` helper (escapes `<`, U+2028/9) so a comment (or spec/thread
+  text) containing `</script>…` can't break out of the script. Applied to the
+  personal-comments embed and its siblings across the reviewing/editor pages.
+- **Anchors survive edits.** Comments now carry a content-addressed anchor
+  (`blockHash` + heading path) re-resolved on every render: a hash match
+  re-points the line exactly when a block moves, a heading-path match tracks a
+  lightly-edited block (`moved`), and a deleted block is marked `stale` rather
+  than silently mispointing. Exposed to MCP (`anchorState`) and shown as a card
+  badge. Pure engine in `personal-comments.js` with tests.
+- **Local-git hardening.** `runGit` gets a 15s timeout (a wedged git can't hang
+  a request); base-branch resolution now includes `develop`/`trunk` (no
+  dead-end); the working-tree read is **symlink-safe** (realpath containment,
+  not a `..`-string check). Testable helpers in `local-git.js`.
+- **Single-write resolve.** `resolve`-with-note applies the reply + the resolved
+  flag in one load/save (was two cycles). Mutating MCP handlers echo the
+  resolved `{repo,branch,path}` so a stale ambient context is visible.
+- **DNS-rebind guard.** A Host allow-list (localhost/127.0.0.1/[::1]) rejects
+  rebind attempts on every request.
+- **Local reads gated to approved roots.** A caller-supplied `?local=`/MCP path
+  can no longer read arbitrary `.md` anywhere: local reads require a root the
+  user deliberately opened (Repo box / `openLocalRepo` / `--local-repo`),
+  persisted across sessions and realpath-matched.
+- **Comments keyed by repo identity.** Personal comments key on the clone's
+  origin URL (falling back to the realpath) instead of the raw absolute path, so
+  moving/renaming the clone no longer orphans notes; existing path-keyed notes
+  migrate lazily per file.
+- **Slim state polling.** `/api/v1/state` ships only the small seq/version
+  header by default; the 1.2s pollers fetch the heavy draft bodies with
+  `?full=1` only when the version bumps.
+- **CI.** `.github/workflows/ci.yml` runs the full suite on Node 20/22/24 for
+  every push/PR (the offline portal smokes stay dev-only — they need a cached
+  PR fixture).
+- **LLM-facing strings.** `refresh_spec` no longer claims "reloads from ADO" in
+  local mode; comment-tool grammar fixed.
+- **MCP boots ADO-less for local review.** The shim no longer `process.exit(1)`s
+  at startup when there's no Azure DevOps token — it starts in local-only mode
+  (local review works; ADO tools ask for a token if used). A token that IS
+  supplied but is the wrong kind still fails fast, so a misbound account still
+  surfaces on Test connection.
+
+### Two description claims corrected (apply on the PR)
+- The MCP server now boots **without** an ADO token for local review (it starts
+  in local-only mode); a token is only needed for the ADO tools.
+- The **address** step is out-of-band: `edit_spec` is PR-bound and there is no
+  branch-write tool, so this is the read-only half of the loop.
+
 ## 1.6.0 (2026-07-16)
 
 A review-optimized UX layer: surgical agent edits, a three-view spec toggle, a feedback triage filter, a PR picker, and editor find/replace — plus a security-hardening pass over the new surface. From [#67](https://github.com/mavaali/tippani/pull/67).

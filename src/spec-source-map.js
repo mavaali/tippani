@@ -21,17 +21,21 @@ import { rehypeRewriteImageSrc } from "./image-src.js";
 
 // The tags the client's commentable selector matches, in the same set.
 export const COMMENTABLE_TAGS = new Set(["p", "li", "blockquote", "table", "pre"]);
+// Headings are commentable only on the read-only spec page (opt-in), so the PR
+// review page's block alignment is unchanged.
+export const HEADING_TAGS = new Set(["h1", "h2", "h3", "h4", "h5", "h6"]);
 
 // unified plugin: walk the hast tree and push {startLine,endLine} for each
 // OUTERMOST commentable block, in document order. It does not descend into a
 // matched block — the client marks the outermost matched block commentable and
 // skips nested p/li/etc. via `.closest('.commentable')` — so the count and order
-// mirror the DOM exactly.
-export function rehypeCollectBlockRanges(ranges) {
+// mirror the DOM exactly. With opts.includeHeadings, h1–h6 are matched too.
+export function rehypeCollectBlockRanges(ranges, opts = {}) {
+  const matches = (tag) => COMMENTABLE_TAGS.has(tag) || (opts.includeHeadings && HEADING_TAGS.has(tag));
   return () => (tree) => {
     const walk = (node) => {
       for (const child of node.children || []) {
-        if (child.type === "element" && COMMENTABLE_TAGS.has(child.tagName)) {
+        if (child.type === "element" && matches(child.tagName)) {
           const p = child.position || {};
           ranges.push({
             startLine: p.start?.line ?? null,
@@ -49,13 +53,13 @@ export function rehypeCollectBlockRanges(ranges) {
 
 // Collect block ranges for a markdown body without rendering to a string.
 // Exposed for testing; renderSpecBody is the production path.
-export async function collectBlockRanges(content) {
+export async function collectBlockRanges(content, opts = {}) {
   const ranges = [];
   const proc = unified()
     .use(remarkParse)
     .use(remarkGfm)
     .use(remarkRehype)
-    .use(rehypeCollectBlockRanges(ranges));
+    .use(rehypeCollectBlockRanges(ranges, opts));
   const tree = proc.parse(normalizeMermaidContainers(content));
   await proc.run(tree);
   return ranges;
@@ -73,7 +77,7 @@ export async function renderSpecBody(content, sanitizeSchema, options = {}) {
     .use(remarkParse)
     .use(remarkGfm)
     .use(remarkRehype)
-    .use(rehypeCollectBlockRanges(ranges));
+    .use(rehypeCollectBlockRanges(ranges, { includeHeadings: !!options.includeHeadings }));
   if (options.rewriteImagesForFileIndex != null) {
     proc = proc.use(rehypeRewriteImageSrc(options.rewriteImagesForFileIndex));
   }
