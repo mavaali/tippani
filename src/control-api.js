@@ -585,9 +585,9 @@ export function registerControlApi(app, deps) {
     }
   });
 
-  app.get("/api/v1/state", requireAuth(), (_req, res) => {
+  app.get("/api/v1/state", requireAuth(), (req, res) => {
     const f = focus.get();
-    res.json({
+    const body = {
       focusedThreadId: f.focusedThreadId,
       version: f.version,
       navUrl: f.navUrl,
@@ -601,9 +601,15 @@ export function registerControlApi(app, deps) {
       pcCommand: f.pcCommand,
       pcCommandSeq: f.pcCommandSeq,
       pcDataSeq: f.pcDataSeq,
-      drafts: drafts.list(),
-      specDrafts: specDrafts ? specDrafts.list() : {},
-    });
+    };
+    // The heavy draft bodies are only needed when something actually changed;
+    // the 1.2s pollers compare seqs/version and re-fetch with ?full=1 on a bump,
+    // so the steady-state poll ships just the small header, not every draft.
+    if (req.query && (req.query.full === "1" || req.query.full === "true")) {
+      body.drafts = drafts.list();
+      body.specDrafts = specDrafts ? specDrafts.list() : {};
+    }
+    res.json(body);
   });
 
   // POST /api/v1/threads/:id/reply — token-gated wrapper over the same

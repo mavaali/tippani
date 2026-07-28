@@ -31,23 +31,28 @@ via server-side git. From branch `clickstop-1`.
   resolved `{repo,branch,path}` so a stale ambient context is visible.
 - **DNS-rebind guard.** A Host allow-list (localhost/127.0.0.1/[::1]) rejects
   rebind attempts on every request.
+- **Local reads gated to approved roots.** A caller-supplied `?local=`/MCP path
+  can no longer read arbitrary `.md` anywhere: local reads require a root the
+  user deliberately opened (Repo box / `openLocalRepo` / `--local-repo`),
+  persisted across sessions and realpath-matched.
+- **Comments keyed by repo identity.** Personal comments key on the clone's
+  origin URL (falling back to the realpath) instead of the raw absolute path, so
+  moving/renaming the clone no longer orphans notes; existing path-keyed notes
+  migrate lazily per file.
+- **Slim state polling.** `/api/v1/state` ships only the small seq/version
+  header by default; the 1.2s pollers fetch the heavy draft bodies with
+  `?full=1` only when the version bumps.
 - **CI.** `.github/workflows/ci.yml` runs the full suite on Node 20/22/24 for
   every push/PR (the offline portal smokes stay dev-only — they need a cached
   PR fixture).
 - **LLM-facing strings.** `refresh_spec` no longer claims "reloads from ADO" in
   local mode; comment-tool grammar fixed.
 
-### Known non-blocking follow-ups (documented, not gated)
-- **Local read scope.** The MCP reads any `.md` under the user-supplied clone;
-  this is a loopback-only, single-user tool where the same user supplies the
-  path, so a hard root allow-list is deferred (it would harm the point-at-a-clone
-  UX) — tracked as a follow-up.
-- **Store key = clone path.** Personal comments are keyed by the absolute clone
-  path; moving the clone orphans notes. Re-keying by repo identity (origin URL)
-  needs a migration and is deferred.
-- **`/api/v1/state` payload.** State polling still ships full draft bodies;
-  slimming it to seq-only-until-changed needs a coordinated client change and is
-  deferred (perf, non-functional).
+### Two description claims corrected (apply on the PR)
+- The MCP local loop still needs a valid ADO token at startup (`mcp.js` exits
+  without one) — only the browser portal is fully offline.
+- The **address** step is out-of-band: `edit_spec` is PR-bound and there is no
+  branch-write tool, so this is the read-only half of the loop.
 
 ## 1.6.0 (2026-07-16)
 

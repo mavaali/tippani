@@ -52,7 +52,7 @@ import { branchFileRows, visibleFileCount, mdPathsFromChanges, buildSpecHref } f
 import { validateLocalRepo, resolveGitDir, parseGitHead, parsePackedRefs, mergeLocalBranches, parseOriginHeadDefault, userCreatedBranches } from "./local-repo.js";
 import { baseCandidates, safeLocalPath } from "./local-git.js";
 import { newComment as pcNew, addComment as pcAdd, updateComment as pcUpdate, removeComment as pcRemove, findComment as pcFind, sortComments as pcSort, setResolved as pcSetResolved, addReply as pcAddReply, navTargetId as pcNavTarget, reanchorComments as pcReanchor } from "./personal-comments.js";
-import { personalCommentsKey as pcStoreKey, loadPersonalComments as pcStoreLoad, savePersonalComments as pcStoreSave } from "./personal-comments-store.js";
+import { personalCommentsKey as pcStoreKey, loadPersonalComments as pcStoreLoad, savePersonalComments as pcStoreSave, migrateKey as pcStoreMigrate } from "./personal-comments-store.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -193,6 +193,43 @@ function loadPersonalComments(repoId, branch, filePath) {
 
 function savePersonalComments(repoId, branch, filePath, comments) {
   pcStoreSave(PERSONAL_COMMENTS_DIR, repoId, branch, filePath, comments);
+}
+
+// --- Approved local-review roots (allow-list) ---
+// The local review path reads .md straight off disk from a caller-supplied repo
+// path (?local=…, MCP open_branch_file). Left open, a (possibly prompt-injected)
+// agent could read any .md under any git repo on the machine. So local reads are
+// gated to roots the user DELIBERATELY approved — i.e. opened via the Repo box /
+// openLocalRepo or the --local-repo launch arg. Approvals persist so a later MCP
+// session still trusts a repo the user set up earlier. realpath-based, so a
+// symlinked alias of an approved root still matches.
+const LOCAL_ROOTS_FILE = path.join(CONFIG_DIR, "local-roots.json");
+const _approvedRoots = new Set();
+(function loadApprovedRoots() {
+  try {
+    const arr = JSON.parse(fs.readFileSync(LOCAL_ROOTS_FILE, "utf8"));
+    if (Array.isArray(arr)) for (const r of arr) if (typeof r === "string" && r) _approvedRoots.add(r);
+  } catch { /* none yet */ }
+})();
+function approveLocalRoot(p) {
+  let real;
+  try { real = fs.realpathSync(String(p || "").trim()); } catch { return null; }
+  if (!_approvedRoots.has(real)) {
+    _approvedRoots.add(real);
+    try {
+      fs.mkdirSync(CONFIG_DIR, { recursive: true, mode: 0o700 });
+      fs.writeFileSync(LOCAL_ROOTS_FILE, JSON.stringify([..._approvedRoots], null, 2), { mode: 0o600 });
+    } catch { /* persistence best-effort; the in-memory approval still holds */ }
+  }
+  return real;
+}
+function isApprovedRoot(p) {
+  let real;
+  try { real = fs.realpathSync(String(p || "").trim()); } catch { return false; }
+  for (const root of _approvedRoots) {
+    if (real === root || real.startsWith(root + path.sep)) return true;
+  }
+  return false;
 }
 
 // --- ADO error helper ---
@@ -4622,13 +4659,19 @@ document.addEventListener('keydown', (e) => {
       const s = await r.json();
       if (s.version !== lastVersion) {
         lastVersion = s.version;
+        // The steady-state poll omits draft bodies; fetch them only now that
+        // something changed, so 1.2s polls don't ship every draft every time.
+        let full = s;
+        if (full.drafts === undefined || full.specDrafts === undefined) {
+          try { const rf = await fetch('/api/v1/state?full=1'); if (rf.ok) full = await rf.json(); } catch {}
+        }
         // Focus change from external client.
         if (s.focusedThreadId != null && s.focusedThreadId !== _focusedThreadId) {
           focusThread(s.focusedThreadId);
         }
         // Apply / clear drafts.
         const seenThisRound = new Set();
-        Object.entries(s.drafts || {}).forEach(([id, d]) => {
+        Object.entries(full.drafts || {}).forEach(([id, d]) => {
           const tid = Number(id);
           seenThisRound.add(tid);
           const k = seenDraftKey(tid, d);
@@ -4653,7 +4696,7 @@ document.addEventListener('keydown', (e) => {
           // A staged spec edit for THIS file changed: refresh only the CURRENT
           // view (don't switch it) and, if editing, auto-load it into the editor
           // (item 4, last-write-wins).
-          const sd = (s.specDrafts || {})[CURRENT_FILE_INDEX];
+          const sd = (full.specDrafts || {})[CURRENT_FILE_INDEX];
           const key = sd ? sd.updatedAt : 0;
           if (key !== lastSpecDraftKey) {
             lastSpecDraftKey = key;
@@ -4883,6 +4926,7 @@ async function main() {
   // Local tab and (alone) boots the portal in browse mode.
   const localRepoArg = (args.find(a => a.startsWith("--local-repo="))?.split("=").slice(1).join("=")) || process.env.TIPPANI_LOCAL_REPO || null;
   _localRepoPath = localRepoArg ? String(localRepoArg).trim() : "";
+  if (_localRepoPath) approveLocalRoot(_localRepoPath); // --local-repo is an explicit user approval
   const browseModeEffective = browseMode || (!!_localRepoPath && !_prId);
   _browseMode = browseModeEffective;
   if (!_prId && !browseModeEffective) {
@@ -5315,7 +5359,7 @@ async function main() {
         const backParam = String(req.query.back || "");
         const safeBack = /^\/[^/]/.test(backParam) ? backParam : "";
         const backHref = safeBack || "/discovery?tab=branches";
-        const localRepoKey = "local:" + localPath;
+        const localRepoKey = await localRepoKeyFor(localPath, branch, specPath);
         const personalComments = (await listPersonalComments({ repo: localRepoKey, branch, path: specPath, rawText: body, sourceMap: ranges })).comments || [];
         const commentCount = personalComments.length;
         _focus.setPcContext({ repo: localRepoKey, branch, path: specPath });
@@ -6140,7 +6184,7 @@ async function main() {
       // Set the reviewing context up front (mirrors what the /spec page reports
       // on load) so a follow-up read/resolve/reply works immediately, without
       // waiting for the browser to navigate and report back.
-      _focus.setPcContext({ repo: "local:" + lp, branch: b, path: filePath });
+      _focus.setPcContext({ repo: await localRepoKeyFor(lp, b, filePath), branch: b, path: filePath });
       _focus.setPcSelected(null);
       _focus.setNav(p);
       return { ok: true, opened: p, localPath: lp };
@@ -6217,7 +6261,7 @@ async function main() {
   // validation lives in local-repo.js.
   async function openLocalRepo({ path: repoPath } = {}) {
     const v = validateLocalRepo(repoPath);
-    if (v.ok) _localRepoPath = String(repoPath || "").trim();
+    if (v.ok) { _localRepoPath = String(repoPath || "").trim(); approveLocalRoot(_localRepoPath); }
     return v;
   }
 
@@ -6228,6 +6272,9 @@ async function main() {
   async function listLocalBranches({ path: repoPath } = {}) {
     const resolved = resolveGitDir(repoPath);
     if (!resolved.ok) return { ok: false, error: resolved.error };
+    // Listing a clone's branches is the deliberate "open this repo" action, so
+    // it approves the root for the subsequent file-content reads (allow-list).
+    approveLocalRoot(repoPath);
     const gitDir = resolved.gitDir;
     let headBranch = null;
     try { headBranch = parseGitHead(fs.readFileSync(path.join(gitDir, "HEAD"), "utf8")); } catch { /* detached / unreadable */ }
@@ -6359,6 +6406,32 @@ if ($path) { [Console]::Out.Write($path) }
     });
   }
 
+  // A STABLE personal-comments repo id for a local clone: its origin URL
+  // (survives moving/renaming the clone), falling back to the realpath'd clone
+  // path when there's no origin. Migrates any notes stored under the old
+  // absolute-path key for this (branch,file) to the stable key, so re-keying
+  // never orphans existing notes. Returns the id to pass as `repo`.
+  async function localRepoKeyFor(localPath, branch, filePath) {
+    const raw = String(localPath || "").trim();
+    let id = null;
+    try {
+      const r = await runGit(raw)(["config", "--get", "remote.origin.url"]);
+      if (r.code === 0 && r.stdout.trim()) {
+        id = "localorigin:" + r.stdout.trim().replace(/\.git$/i, "").replace(/[/\\]+$/, "").toLowerCase();
+      }
+    } catch { /* fall through to a path-based id */ }
+    let real = raw;
+    try { real = fs.realpathSync(raw); } catch { /* keep raw */ }
+    if (!id) id = "local:" + real;
+    // Lazy per-file migration from the legacy raw-path / realpath keys.
+    if (branch != null && filePath != null) {
+      for (const legacy of new Set(["local:" + raw, "local:" + real])) {
+        try { pcStoreMigrate(PERSONAL_COMMENTS_DIR, legacy, id, branch, filePath); } catch { /* best-effort */ }
+      }
+    }
+    return id;
+  }
+
   // Resolve the base revision to diff a branch against: the clone's origin
   // default (refs/remotes/origin/HEAD) first, then main/master/develop/trunk
   // (local or origin/). baseCandidates() owns the ordering and rejects
@@ -6383,6 +6456,7 @@ if ($path) { [Console]::Out.Write($path) }
     if (!br || br.startsWith("-")) return { ok: false, error: "Invalid branch name." };
     const v = validateLocalRepo(repoPath);
     if (!v.ok) return { ok: false, error: v.error };
+    if (!isApprovedRoot(repoPath)) return { ok: false, error: "Repo not approved for local review \u2014 open it in Tippani (the Repo box) first." };
     const run = runGit(String(repoPath).trim());
     const base = await resolveLocalBase(run);
     if (!base) return { ok: false, error: "Could not resolve a base branch (main/master) in this clone." };
@@ -6410,6 +6484,7 @@ if ($path) { [Console]::Out.Write($path) }
     if (!fp || fp.startsWith("-") || fp.includes("\0") || /(^|[\\/])\.\.([\\/]|$)/.test(fp)) return { ok: false, error: "Invalid file path." };
     const v = validateLocalRepo(repoPath);
     if (!v.ok) return { ok: false, error: v.error };
+    if (!isApprovedRoot(repoPath)) return { ok: false, error: "Repo not approved for local review \u2014 open it in Tippani (the Repo box) first." };
     const cleanRepo = String(repoPath).trim();
     const run = runGit(cleanRepo);
     const cur = await run(["rev-parse", "--abbrev-ref", "HEAD"]);

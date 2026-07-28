@@ -8,6 +8,7 @@ import {
   personalCommentsKey,
   loadPersonalComments,
   savePersonalComments,
+  migrateKey,
 } from "./personal-comments-store.js";
 
 let passed = 0;
@@ -69,6 +70,32 @@ test("save failure throws (does not silently swallow)", () => {
   const asFile = path.join(dir, "not-a-dir");
   fs.writeFileSync(asFile, "x");
   assert.throws(() => savePersonalComments(asFile, R, B, F, [{ id: "1" }]));
+});
+
+test("migrateKey moves notes from a legacy repo id to a stable one", () => {
+  const dir = tmpDir();
+  const LEGACY = "local:/old/abs/path", STABLE = "localorigin:https://x/y";
+  savePersonalComments(dir, LEGACY, B, F, [{ id: "1", content: "keep me" }]);
+  const moved = migrateKey(dir, LEGACY, STABLE, B, F);
+  assert.equal(moved, true);
+  assert.deepEqual(loadPersonalComments(dir, STABLE, B, F), [{ id: "1", content: "keep me" }]);
+  // The legacy primary file is moved aside, not left as a live duplicate.
+  assert.deepEqual(loadPersonalComments(dir, LEGACY, B, F), []);
+});
+
+test("migrateKey is a no-op when the destination already exists", () => {
+  const dir = tmpDir();
+  const LEGACY = "local:/old", STABLE = "localorigin:u";
+  savePersonalComments(dir, LEGACY, B, F, [{ id: "1", content: "old" }]);
+  savePersonalComments(dir, STABLE, B, F, [{ id: "2", content: "new" }]);
+  assert.equal(migrateKey(dir, LEGACY, STABLE, B, F), false);
+  assert.equal(loadPersonalComments(dir, STABLE, B, F)[0].content, "new");
+});
+
+test("migrateKey no-ops for same id or missing source", () => {
+  const dir = tmpDir();
+  assert.equal(migrateKey(dir, "x", "x", B, F), false);
+  assert.equal(migrateKey(dir, "local:/absent", "localorigin:z", B, F), false);
 });
 
 console.log(`\npersonal-comments-store: ${passed} passed, ${failed} failed`);

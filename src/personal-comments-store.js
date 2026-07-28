@@ -69,3 +69,21 @@ export function savePersonalComments(dir, repoId, branch, filePath, comments) {
     throw e;
   }
 }
+
+// One-time, per-(branch,file) migration from a legacy repo id to a stable one
+// (e.g. absolute clone path -> origin-URL identity, so moving the clone no
+// longer orphans notes). No-op when the destination already exists or the
+// source doesn't. Returns true when it moved a store. Best-effort; never throws.
+export function migrateKey(dir, fromRepoId, toRepoId, branch, filePath) {
+  if (!fromRepoId || !toRepoId || fromRepoId === toRepoId) return false;
+  const toP = storePath(dir, toRepoId, branch, filePath);
+  const fromP = storePath(dir, fromRepoId, branch, filePath);
+  try {
+    if (fs.existsSync(toP) || !fs.existsSync(fromP)) return false;
+    const parsed = JSON.parse(fs.readFileSync(fromP, "utf-8"));
+    const comments = Array.isArray(parsed.comments) ? parsed.comments : [];
+    savePersonalComments(dir, toRepoId, branch, filePath, comments);
+    try { fs.renameSync(fromP, `${fromP}.migrated-${Date.now()}`); } catch { /* leave source */ }
+    return true;
+  } catch { return false; }
+}

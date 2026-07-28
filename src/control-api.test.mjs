@@ -297,8 +297,13 @@ try {
     const r = await call("/api/v1/state");
     check("state: 200", r.status === 200);
     check("state: focusedThreadId reflects last focus", r.body.focusedThreadId === null);
-    check("state: drafts empty after delete", Object.keys(r.body.drafts).length === 0);
+    // The steady-state poll omits the heavy draft bodies...
+    check("state: slim poll omits drafts", r.body.drafts === undefined);
     check("state: version is a number", typeof r.body.version === "number");
+    // ...and ?full=1 includes them.
+    const rf = await call("/api/v1/state?full=1");
+    check("state?full: drafts empty after delete", Object.keys(rf.body.drafts).length === 0);
+    check("state?full: specDrafts present", typeof rf.body.specDrafts === "object");
   }
 
   // --- GET /api/v1/specs/:fileIndex ---

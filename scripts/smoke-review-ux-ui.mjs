@@ -123,9 +123,9 @@ async function main() {
 
     // ---- auto-load (last-write-wins) server side ----
     await api("DELETE", "/api/v1/specs/0/draft");
-    const before = (await api("GET", "/api/v1/state")).json?.specDrafts?.["0"];
+    const before = (await api("GET", "/api/v1/state?full=1")).json?.specDrafts?.["0"];
     const staged = await api("POST", "/api/v1/specs/0/edit", { edits: [{ kind: "find", find: "Overview", replace: "UISMOKE_AUTOLOAD", where: "first" }] });
-    const st = await api("GET", "/api/v1/state");
+    const st = await api("GET", "/api/v1/state?full=1");
     check("live-staged draft appears in state for the open editor to auto-load",
       staged.status === 200 && !!st.json?.specDrafts?.["0"] &&
       st.json.specDrafts["0"].content.includes("UISMOKE_AUTOLOAD") &&
