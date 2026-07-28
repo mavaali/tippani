@@ -43,6 +43,7 @@ import { classifyOpenFilePath } from "./open-file-path.js";
 import { fileReviewContext } from "./comment-key.js";
 import { isAllowedHost } from "./host-guard.js";
 import { buildPushChangeSet } from "./push-changeset.js";
+import { adoCall } from "./ado-call.js";
 import {
   decodeConfigValue,
   extOf,
@@ -614,7 +615,8 @@ function viewedWarning(err) {
 async function getBranchTip(conn, branchRef) {
   const gitApi = await conn.getGitApi();
   const shortBranch = branchRef.replace("refs/heads/", "");
-  const refs = await gitApi.getRefs(ADO_REPO, ADO_PROJECT, `heads/${shortBranch}`);
+  // Clickstop 2, step 9: bound the ADO call so a wedged network call can't hang.
+  const refs = await adoCall(() => gitApi.getRefs(ADO_REPO, ADO_PROJECT, `heads/${shortBranch}`), { label: "getRefs" });
   const ref = (refs || []).find((r) => r.name === branchRef);
   if (!ref) throw new Error(`Branch ref not found: ${branchRef}`);
   return ref.objectId;
