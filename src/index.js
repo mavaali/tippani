@@ -44,6 +44,7 @@ import { fileReviewContext } from "./comment-key.js";
 import { isAllowedHost } from "./host-guard.js";
 import { buildPushChangeSet } from "./push-changeset.js";
 import { adoCall } from "./ado-call.js";
+import { makeRepoSession, createSessionTokens } from "./repo-session.js";
 import {
   decodeConfigValue,
   extOf,
@@ -4926,6 +4927,16 @@ const _locks = createLockStore({ ttlMs: 10_000 });
 const _specDrafts = createDraftStore({ onChange: () => _focus.bumpVersion() });
 const _specLocks = createLockStore({ ttlMs: 10_000 });
 const _inflight = createInflightStore();
+// Pre-PR remote-authoring sessions (clickstop 2, step 10). A `(repo, branch)`
+// session with no PR yet; token bound only after a successful build so a failed
+// open never clobbers another session's shared state. Consumed by the remote
+// write path (create_branch / stage / push).
+const _authSessions = createSessionTokens();
+function openAuthoringSession({ id, repo, branch, files = [], path = null, tokenPath = null }) {
+  const session = makeRepoSession({ repo, branch, files, path });
+  if (id && tokenPath) _authSessions.bind(id, tokenPath);
+  return session;
+}
 // Session token authorises external (non-browser-same-origin) mutations.
 // Generated fresh per process and printed to stdout at startup.
 const _sessionToken = crypto.randomBytes(24).toString("base64url");
