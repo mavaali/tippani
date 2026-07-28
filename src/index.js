@@ -39,6 +39,7 @@ import { isExpiredJwt } from "./ado-token-check.js";
 import { buildPrCriteria, summarizePr, mergeRolePrs, prStatusLabel } from "./pr-criteria.js";
 import { navSkipsBarePathClobber, navShouldNavigate, navTarget } from "./nav-guard.js";
 import { createApprovedRoots } from "./approved-roots.js";
+import { classifyOpenFilePath } from "./open-file-path.js";
 import {
   decodeConfigValue,
   extOf,
@@ -1884,11 +1885,34 @@ table.wi-results { width: 100%; table-layout: fixed; border-collapse: collapse; 
     } catch (e) { status.textContent = 'Failed: ' + e.message; }
   }
   function runActiveBranches() { if (brMode === 'local') runLocalBranches(); else runBranches(); }
+  // Clickstop 2 (Open file tab): resolve the typed path, then render a clickable
+  // card (valid) or an inline, non-clickable error. All text goes through esc()
+  // (never raw HTML), so a path/error containing markup can't break out.
+  async function runOpenFile() {
+    var input = document.getElementById('ofPath');
+    var out = document.getElementById('ofResults');
+    if (!input || !out) return;
+    var p = (input.value || '').trim();
+    if (!p) { out.innerHTML = ''; return; }
+    out.innerHTML = '<div class="wi-note">Checking\u2026</div>';
+    try {
+      var r = await fetch('/api/v1/open-file', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ path: p }) });
+      var d = await r.json();
+      if (d && d.ok) {
+        var href = '/open-file-view?path=' + encodeURIComponent(d.realpath);
+        out.innerHTML = '<div class="pr-list"><a class="pr-card" href="' + esc(href) + '"><div class="pr-top"><span class="pr-id">Open</span><span class="pr-status">read-only</span></div><div class="pr-title">' + esc(d.realpath) + '</div></a></div>';
+      } else {
+        out.innerHTML = '<div class="empty" style="color:var(--cp-danger,#c0392b)">' + esc((d && d.error) || 'Not a valid .md file path.') + '</div>';
+      }
+    } catch (e) {
+      out.innerHTML = '<div class="empty" style="color:var(--cp-danger,#c0392b)">' + esc(String((e && e.message) || e)) + '</div>';
+    }
+  }
   window.addEventListener('DOMContentLoaded', function () {
     document.querySelectorAll('.tab').forEach(function (t) { t.addEventListener('click', function () { activateTab(t.dataset.tab); }); });
     var params = new URLSearchParams(location.search);
     var t = params.get('tab');
-    activateTab(t === 'workitems' || t === 'specs' || t === 'branches' ? t : 'queue');
+    activateTab(t === 'workitems' || t === 'specs' || t === 'branches' || t === 'openfile' ? t : 'queue');
     // Review queue slicers (client-side faceted filter, same engine as Specs).
     mountFacets(
       document.querySelector('.pane[data-pane="queue"] .pr-list'),
@@ -1940,6 +1964,8 @@ table.wi-results { width: 100%; table-layout: fixed; border-collapse: collapse; 
     });
     var brRefresh = document.getElementById('brRefreshBtn'); if (brRefresh) brRefresh.addEventListener('click', runActiveBranches);
     var brBrowse = document.getElementById('brBrowseBtn'); if (brBrowse) brBrowse.addEventListener('click', pickWorkspace);
+    var ofBtn = document.getElementById('ofOpenBtn'); if (ofBtn) ofBtn.addEventListener('click', runOpenFile);
+    var ofBox = document.getElementById('ofPath'); if (ofBox) ofBox.addEventListener('keydown', function (e) { if (e.key === 'Enter') { e.preventDefault(); runOpenFile(); } });
     var brPathInput = document.getElementById('brLocalPath');
     if (brPathInput) {
       brPathInput.addEventListener('keydown', function (e) { if (e.key === 'Enter') { e.preventDefault(); runLocalBranches(); } });
@@ -2001,6 +2027,7 @@ table.wi-results { width: 100%; table-layout: fixed; border-collapse: collapse; 
       <button class="tab" data-tab="queue" type="button">Review queue</button>
       <button class="tab" data-tab="workitems" type="button">Work items</button>
       <button class="tab" data-tab="branches" type="button">Branches</button>
+      <button class="tab" data-tab="openfile" type="button">Open file</button>
     </div>
 
     <div class="pane" data-pane="queue">
@@ -2060,6 +2087,18 @@ table.wi-results { width: 100%; table-layout: fixed; border-collapse: collapse; 
       </div>
       <div class="wi-actions" id="brActions"><span id="brStatus" class="wi-status"></span><button id="brRefreshBtn" class="wi-search" type="button">Refresh</button></div>
       <div id="brResults"></div>
+    </div>
+
+    <div class="pane" data-pane="openfile">
+      <div class="wi-row">
+        <span class="wi-label">File</span>
+        <div class="br-ws-field">
+          <input id="ofPath" class="br-local-input" type="text" spellcheck="false" placeholder="Type or paste a path to a .md file\u2026">
+        </div>
+        <button id="ofOpenBtn" class="wi-search" type="button">Open</button>
+      </div>
+      <div class="wi-note">Open any single <code>.md</code> file read-only. The file must sit inside a folder you've already opened in Tippani (Branches \u2192 Local).</div>
+      <div id="ofResults"></div>
     </div>
   </div>
 ${NAV_WATCHER}
@@ -6805,6 +6844,7 @@ if ($path) { [Console]::Out.Write($path) }
     openLocalRepo,
     listLocalBranches,
     pickLocalFolder,
+    resolveOpenFile: ({ path: p } = {}) => classifyOpenFilePath(p, { fs, path, isContained }),
     listPersonalComments,
     createPersonalComment,
     editPersonalComment,

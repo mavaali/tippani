@@ -36,6 +36,7 @@ export function registerControlApi(app, deps) {
     openLocalRepo,      // async ({path}) => {ok, path, branch} (optional) — Discovery local-repo tile
     listLocalBranches,  // async ({path}) => {ok, path, branches} (optional) — Discovery Branches tab (Local)
     pickLocalFolder,    // async () => {ok, path, branch} | {canceled} (optional) — native folder dialog
+    resolveOpenFile,    // ({path}) => {ok, realpath} | {ok:false, reason, error} (optional) — clickstop 2 Open file
     listPersonalComments,   // async ({repo, branch, path}) => {ok, comments} (optional) — Personal Comments
     createPersonalComment,  // async ({repo, branch, path, line, content}) => {ok, comment} (optional)
     editPersonalComment,    // async ({repo, branch, path, id, content}) => {ok, comment|deleted} (optional)
@@ -483,6 +484,21 @@ export function registerControlApi(app, deps) {
     if (typeof pickLocalFolder !== "function") return res.status(501).json({ error: "folder picker not wired" });
     try {
       res.json(await pickLocalFolder());
+    } catch (e) {
+      res.status(502).json({ error: String(e?.message || e) });
+    }
+  });
+
+  // Clickstop 2 (Open file tab): resolve a caller-typed path to a one-off .md.
+  // Returns the classification { ok, realpath } or { ok:false, reason, error } so
+  // the box renders a clickable card or an inline error. resolveOpenFile enforces
+  // the approved-root containment (a path is never read outside an approved root).
+  // same-origin (browser) or bearer (MCP). Missing handler -> 501.
+  app.post("/api/v1/open-file", requireAuth({ mutation: true }), async (req, res) => {
+    if (typeof resolveOpenFile !== "function") return res.status(501).json({ error: "open file not wired" });
+    try {
+      const { path: filePath } = req.body || {};
+      res.json(await resolveOpenFile({ path: filePath }));
     } catch (e) {
       res.status(502).json({ error: String(e?.message || e) });
     }

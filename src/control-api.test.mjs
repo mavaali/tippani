@@ -70,6 +70,11 @@ registerControlApi(app, {
   specDiff: async (idx) => ({ hunks: [{ startLine: 3, endLine: 3, oldHtml: "<p>a</p>", newHtml: "<p>b</p>" }], source: "test", updatedAt: 1 }),
   renderDraft: async (idx, { draft } = {}) => ({ html: draft ? "<p>DRAFT</p>" : "<p>COMMITTED</p>" }),
   listPrs: async (q) => ({ prs: [{ id: 1, title: "PR One", author: "Kay" }], mine: q.creator !== "any", status: 1 }),
+  // Clickstop 2: Open file resolve. Fake classifier — "/ok/a.md" resolves, else error.
+  resolveOpenFile: ({ path: p } = {}) =>
+    p === "/ok/a.md"
+      ? { ok: true, realpath: "/ok/a.md" }
+      : { ok: false, reason: "outside-root", error: "outside every approved folder" },
 });
 
 const server = await new Promise((resolve) => {
@@ -420,6 +425,28 @@ try {
     check("prs: mine true by default", r.body.mine === true);
     const r2 = await call("/api/v1/prs?creator=any", { headers: authHeaders });
     check("prs: creator=any widens", r2.body.mine === false);
+  }
+
+  // --- Open file resolve (clickstop 2, step 2) ---
+  {
+    const r = await fetch(BASE + "/api/v1/open-file", { method: "POST" });
+    check("open-file: missing X-Tippani-Client -> 403", r.status === 403);
+  }
+  {
+    const r = await fetch(BASE + "/api/v1/open-file", {
+      method: "POST",
+      headers: { "X-Tippani-Client": "test", "Content-Type": "application/json" },
+      body: JSON.stringify({ path: "/ok/a.md" }),
+    });
+    check("open-file: mutation without bearer -> 401", r.status === 401);
+  }
+  {
+    const r = await call("/api/v1/open-file", { method: "POST", headers: authHeaders, body: { path: "/ok/a.md" } });
+    check("open-file: valid -> ok + realpath", r.status === 200 && r.body.ok === true && r.body.realpath === "/ok/a.md");
+  }
+  {
+    const r = await call("/api/v1/open-file", { method: "POST", headers: authHeaders, body: { path: "/etc/passwd.md" } });
+    check("open-file: invalid -> ok:false + reason + error", r.status === 200 && r.body.ok === false && r.body.reason === "outside-root" && typeof r.body.error === "string");
   }
 
 } finally {
