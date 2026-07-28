@@ -8,6 +8,7 @@ import {
   createFocusStore,
   createDraftStore,
   createLockStore,
+  createKeyedLockStore,
 } from "./api-state.js";
 import { registerControlApi } from "./control-api.js";
 
@@ -54,6 +55,30 @@ const locks = createLockStore({ ttlMs: 60_000 });
 const specDrafts = createDraftStore({ onChange: () => focus.bumpVersion() });
 const specLocks = createLockStore({ ttlMs: 60_000 });
 
+// Clickstop 2 step 11: fake durable remote-draft store (in-memory) + push dep.
+const remoteDraftMap = new Map();
+const remoteSpecDrafts = {
+  put(key, val, meta = {}) {
+    if (val.path === "/fail/write.md") throw new Error("disk full"); // forced write failure
+    const rec = { repo: val.repo, branch: val.branch, path: val.path, body: val.body, baseObjectId: val.baseObjectId || null, updatedAt: "t", source: meta.source || "external" };
+    remoteDraftMap.set(key, rec);
+    return rec;
+  },
+  get(key) { return remoteDraftMap.get(key) || null; },
+  delete(key) { return remoteDraftMap.delete(key); },
+  list() { return Object.fromEntries(remoteDraftMap); },
+  forBranch(repo, branch) { return [...remoteDraftMap.values()].filter((d) => d.repo === repo && d.branch === branch); },
+};
+const remoteSpecLocks = createKeyedLockStore({ ttlMs: 60_000 });
+const pushRemoteSpec = async ({ repo, branch, oldObjectId }) => {
+  if (oldObjectId === "stale") return { ok: false, status: 409, body: { ok: false, error: "branch moved; re-stage" } };
+  const staged = remoteSpecDrafts.forBranch(repo, branch);
+  if (staged.length === 0) return { ok: false, status: 400, body: { ok: false, error: "nothing staged" } };
+  const files = staged.map((d) => d.path);
+  for (const d of staged) remoteSpecDrafts.delete(`${repo}\n${branch}\n${d.path}`);
+  return { ok: true, status: 200, body: { ok: true, commitId: "c1", pushedFiles: files } };
+};
+
 let lastAdoToken = null;
 const app = express();
 app.use(express.json());
@@ -75,6 +100,9 @@ registerControlApi(app, {
     p === "/ok/a.md"
       ? { ok: true, realpath: "/ok/a.md" }
       : { ok: false, reason: "outside-root", error: "outside every approved folder" },
+  remoteSpecDrafts,
+  remoteSpecLocks,
+  pushRemoteSpec,
 });
 
 const server = await new Promise((resolve) => {
@@ -447,6 +475,69 @@ try {
   {
     const r = await call("/api/v1/open-file", { method: "POST", headers: authHeaders, body: { path: "/etc/passwd.md" } });
     check("open-file: invalid -> ok:false + reason + error", r.status === 200 && r.body.ok === false && r.body.reason === "outside-root" && typeof r.body.error === "string");
+  }
+
+  // --- Remote (pre-PR) spec authoring (clickstop 2, step 11) ---
+  const RREPO = "MyRepo", RBRANCH = "spec/x";
+  {
+    const r = await fetch(BASE + "/api/v1/specs/draft", { method: "PUT" });
+    check("remote-draft: missing X-Tippani-Client -> 403", r.status === 403);
+  }
+  {
+    const r = await fetch(BASE + "/api/v1/specs/draft", {
+      method: "PUT", headers: { "X-Tippani-Client": "test", "Content-Type": "application/json" },
+      body: JSON.stringify({ repo: RREPO, branch: RBRANCH, path: "docs/spec.md", body: "x" }),
+    });
+    check("remote-draft: mutation without bearer -> 401", r.status === 401);
+  }
+  {
+    const r = await call("/api/v1/specs/draft", { method: "PUT", headers: authHeaders, body: { repo: RREPO, branch: RBRANCH } });
+    check("remote-draft: missing path -> 400", r.status === 400);
+    const r2 = await call("/api/v1/specs/draft", { method: "PUT", headers: authHeaders, body: { repo: RREPO, branch: RBRANCH, path: "docs/spec.md" } });
+    check("remote-draft: non-string body -> 400", r2.status === 400);
+  }
+  {
+    // Stage sets the draft; GET round-trips it.
+    const r = await call("/api/v1/specs/draft", { method: "PUT", headers: authHeaders, body: { repo: RREPO, branch: RBRANCH, path: "docs/spec.md", body: "# Spec\n\nhi", baseObjectId: "base1" } });
+    check("remote-draft: stage -> ok", r.status === 200 && r.body.ok === true && r.body.draft.body === "# Spec\n\nhi");
+    const g = await call(`/api/v1/specs/draft?repo=${RREPO}&branch=${RBRANCH}&path=docs/spec.md`, { headers: authHeaders });
+    check("remote-draft: GET round-trips the staged body", g.status === 200 && g.body.draft && g.body.draft.body === "# Spec\n\nhi");
+  }
+  {
+    // Two-writer collision: while the user holds the file, an agent stage 409s;
+    // the user's own mirror write bypasses the lock.
+    await call("/api/v1/specs/draft/lock", { method: "POST", headers: authHeaders, body: { repo: RREPO, branch: RBRANCH, path: "docs/lock.md" } });
+    const agent = await call("/api/v1/specs/draft", { method: "PUT", headers: authHeaders, body: { repo: RREPO, branch: RBRANCH, path: "docs/lock.md", body: "agent" } });
+    check("remote-draft: agent-vs-user collision -> 409 (not a silent overwrite)", agent.status === 409);
+    const mirror = await call("/api/v1/specs/draft", { method: "PUT", headers: authHeaders, body: { repo: RREPO, branch: RBRANCH, path: "docs/lock.md", body: "user", source: "user-mirror" } });
+    check("remote-draft: user-mirror bypasses the lock", mirror.status === 200);
+  }
+  {
+    // A forced store write failure returns {ok:false} (no false success).
+    const r = await call("/api/v1/specs/draft", { method: "PUT", headers: authHeaders, body: { repo: RREPO, branch: RBRANCH, path: "/fail/write.md", body: "x" } });
+    check("remote-draft: write failure -> {ok:false}", r.status === 500 && r.body.ok === false);
+  }
+  {
+    // /state omits the heavy draft bodies without ?full=1.
+    const slim = (await call("/api/v1/state", { headers: authHeaders })).body;
+    check("remote-draft: /state omits bodies without full", slim.remoteSpecDrafts === undefined);
+    const full = (await call("/api/v1/state?full=1", { headers: authHeaders })).body;
+    check("remote-draft: /state?full=1 includes staged drafts", full.remoteSpecDrafts && typeof full.remoteSpecDrafts === "object");
+  }
+  {
+    // Multi-file push is one call (all-or-nothing): stage a second file on the
+    // same branch, push -> both land in a single push.
+    await call("/api/v1/specs/draft", { method: "PUT", headers: authHeaders, body: { repo: RREPO, branch: RBRANCH, path: "docs/two.md", body: "second" } });
+    const staged = (await call("/api/v1/state?full=1", { headers: authHeaders })).body.remoteSpecDrafts;
+    check("remote-draft: two files staged on the branch", Object.keys(staged).length >= 2);
+    const push = await call("/api/v1/specs/draft/push", { method: "POST", headers: authHeaders, body: { repo: RREPO, branch: RBRANCH, message: "Add specs" } });
+    check("remote-draft: push -> ok, all files in one commit", push.status === 200 && push.body.ok === true && push.body.pushedFiles.length >= 2 && !!push.body.commitId);
+  }
+  {
+    // Stale oldObjectId -> 409 (someone moved the branch), not a lost write.
+    await call("/api/v1/specs/draft", { method: "PUT", headers: authHeaders, body: { repo: RREPO, branch: RBRANCH, path: "docs/stale.md", body: "z" } });
+    const push = await call("/api/v1/specs/draft/push", { method: "POST", headers: authHeaders, body: { repo: RREPO, branch: RBRANCH, oldObjectId: "stale" } });
+    check("remote-draft: stale oldObjectId -> 409", push.status === 409 && push.body.ok === false);
   }
 
 } finally {

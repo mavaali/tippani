@@ -26,6 +26,7 @@ import {
   createFocusStore,
   createDraftStore,
   createLockStore,
+  createKeyedLockStore,
   createInflightStore,
 } from "./api-state.js";
 import { registerControlApi } from "./control-api.js";
@@ -45,6 +46,7 @@ import { isAllowedHost } from "./host-guard.js";
 import { buildPushChangeSet } from "./push-changeset.js";
 import { adoCall } from "./ado-call.js";
 import { makeRepoSession, createSessionTokens } from "./repo-session.js";
+import { saveSpecDraft, loadSpecDraft, deleteSpecDraft } from "./spec-draft-store.js";
 import {
   decodeConfigValue,
   extOf,
@@ -4937,6 +4939,84 @@ function openAuthoringSession({ id, repo, branch, files = [], path = null, token
   if (id && tokenPath) _authSessions.bind(id, tokenPath);
   return session;
 }
+
+// Remote spec-authoring staged drafts (clickstop 2, step 11). Durable on disk
+// (atomic write + quarantine-on-corrupt via spec-draft-store), keyed by
+// (repo,branch,path). An in-memory index maps the control-API's composite key
+// back to (repo,branch,path) so /state?full=1 and the push can enumerate them.
+const SPEC_DRAFTS_DIR = path.join(CONFIG_DIR, "spec-drafts");
+const _remoteSpecLocks = createKeyedLockStore({ ttlMs: 10_000 });
+const _remoteDraftIndex = new Map(); // key -> {repo,branch,path}
+const _remoteSpecDrafts = {
+  put(key, { repo, branch, path: filePath, body, baseObjectId }, meta = {}) {
+    const rec = saveSpecDraft(SPEC_DRAFTS_DIR, repo, branch, filePath, {
+      body, baseObjectId, updatedAt: new Date().toISOString(),
+    });
+    _remoteDraftIndex.set(key, { repo, branch, path: filePath });
+    return { ...rec, source: meta.source || "external" };
+  },
+  get(key) {
+    const loc = _remoteDraftIndex.get(key);
+    if (!loc) return null;
+    try { return loadSpecDraft(SPEC_DRAFTS_DIR, loc.repo, loc.branch, loc.path); }
+    catch { return null; } // corrupt file already quarantined by the store
+  },
+  delete(key) {
+    const loc = _remoteDraftIndex.get(key);
+    if (!loc) return false;
+    deleteSpecDraft(SPEC_DRAFTS_DIR, loc.repo, loc.branch, loc.path);
+    _remoteDraftIndex.delete(key);
+    return true;
+  },
+  list() {
+    const out = {};
+    for (const [key, loc] of _remoteDraftIndex) {
+      try { const d = loadSpecDraft(SPEC_DRAFTS_DIR, loc.repo, loc.branch, loc.path); if (d) out[key] = d; }
+      catch { /* quarantined; omit */ }
+    }
+    return out;
+  },
+  forBranch(repo, branch) {
+    const items = [];
+    for (const [, loc] of _remoteDraftIndex) {
+      if (loc.repo === repo && loc.branch === branch) {
+        try { const d = loadSpecDraft(SPEC_DRAFTS_DIR, loc.repo, loc.branch, loc.path); if (d) items.push(d); }
+        catch { /* quarantined; omit */ }
+      }
+    }
+    return items;
+  },
+};
+
+// Push every staged draft for (repo,branch) as ONE commit (all-or-nothing).
+// Optimistic concurrency: if the branch moved since the caller staged, 409.
+async function pushRemoteSpec({ repo, branch, message, oldObjectId }) {
+  if (!_conn) return { ok: false, status: 503, body: { ok: false, error: "no ADO connection" } };
+  const branchRef = branch.startsWith("refs/heads/") ? branch : `refs/heads/${branch}`;
+  const staged = _remoteSpecDrafts.forBranch(repo, branch);
+  if (staged.length === 0) return { ok: false, status: 400, body: { ok: false, error: "no staged drafts for this branch" } };
+  let currentTip;
+  try { currentTip = await getBranchTip(_conn, branchRef); }
+  catch (e) { return { ok: false, status: 502, body: { ok: false, error: "failed to read branch tip: " + (e?.message || e) } }; }
+  if (oldObjectId && oldObjectId !== currentTip) {
+    return { ok: false, status: 409, body: { ok: false, error: "branch moved; re-stage against the new tip", currentTip } };
+  }
+  // Split into ADO adds (new files) vs edits (existing) by whether the draft
+  // captured a base object id when it was opened.
+  const adds = staged.filter((d) => !d.baseObjectId).map((d) => ({ path: d.path, content: d.body }));
+  const edits = staged.filter((d) => d.baseObjectId).map((d) => ({ path: d.path, content: d.body }));
+  const push = buildPushChangeSet({ adds, edits, message: message || "Update spec", branchRef, oldObjectId: currentTip });
+  let result;
+  try {
+    const gitApi = await _conn.getGitApi();
+    result = await adoCall(() => gitApi.createPush(push, ADO_REPO, ADO_PROJECT), { label: "createPush" });
+  } catch (e) {
+    return { ok: false, status: 502, body: { ok: false, error: "push failed: " + (e?.message || e) } };
+  }
+  const commitId = result?.commits?.[0]?.commitId || result?.refUpdates?.[0]?.newObjectId || null;
+  for (const d of staged) _remoteSpecDrafts.delete(`${repo}\n${branch}\n${d.path}`);
+  return { ok: true, status: 200, body: { ok: true, commitId, pushedFiles: staged.map((d) => d.path) } };
+}
 // Session token authorises external (non-browser-same-origin) mutations.
 // Generated fresh per process and printed to stdout at startup.
 const _sessionToken = crypto.randomBytes(24).toString("base64url");
@@ -6914,6 +6994,9 @@ if ($path) { [Console]::Out.Write($path) }
     listLocalBranches,
     pickLocalFolder,
     resolveOpenFile: ({ path: p } = {}) => classifyOpenFilePath(p, { fs, path, isContained }),
+    remoteSpecDrafts: _remoteSpecDrafts,
+    remoteSpecLocks: _remoteSpecLocks,
+    pushRemoteSpec,
     listPersonalComments,
     createPersonalComment,
     editPersonalComment,

@@ -37,6 +37,9 @@ export function registerControlApi(app, deps) {
     listLocalBranches,  // async ({path}) => {ok, path, branches} (optional) — Discovery Branches tab (Local)
     pickLocalFolder,    // async () => {ok, path, branch} | {canceled} (optional) — native folder dialog
     resolveOpenFile,    // ({path}) => {ok, realpath} | {ok:false, reason, error} (optional) — clickstop 2 Open file
+    remoteSpecDrafts,   // durable staged-draft store keyed by (repo,branch,path) (optional) — clickstop 2 remote authoring
+    remoteSpecLocks,    // lock store keyed by (repo,branch,path) (optional) — two-writer 409 guard
+    pushRemoteSpec,     // async ({repo,branch,message,oldObjectId}) => {ok,status,body} (optional) — one-commit push of all staged files
     listPersonalComments,   // async ({repo, branch, path}) => {ok, comments} (optional) — Personal Comments
     createPersonalComment,  // async ({repo, branch, path, line, content}) => {ok, comment} (optional)
     editPersonalComment,    // async ({repo, branch, path, id, content}) => {ok, comment|deleted} (optional)
@@ -241,6 +244,75 @@ export function registerControlApi(app, deps) {
     const ok = setAdoToken(token);
     if (!ok) return res.status(400).json({ error: "token rejected" });
     res.json({ ok: true });
+  });
+
+  // ---- Remote (pre-PR) spec authoring (clickstop 2, step 11) ----
+  // A whole-file markdown draft is STAGED durably keyed by (repo,branch,path),
+  // then PUSHED as one commit for the branch. Distinct from the PR-bound
+  // fileIndex draft path below. Registered BEFORE the `/specs/:fileIndex` param
+  // routes so the literal `/specs/draft` path isn't captured as fileIndex="draft".
+  function remoteKey(repo, branch, filePath) { return `${repo}\n${branch}\n${filePath}`; }
+
+  app.get("/api/v1/specs/draft", requireAuth(), (req, res) => {
+    if (!remoteSpecDrafts) return res.status(501).json({ error: "remote spec drafts not wired" });
+    const { repo, branch, path: filePath } = req.query || {};
+    if (!repo || !branch || !filePath) return res.status(400).json({ error: "repo, branch, path required" });
+    const d = remoteSpecDrafts.get(remoteKey(repo, branch, filePath));
+    res.json({ ok: true, draft: d || null });
+  });
+
+  app.put("/api/v1/specs/draft", requireAuth({ mutation: true }), (req, res) => {
+    if (!remoteSpecDrafts) return res.status(501).json({ error: "remote spec drafts not wired" });
+    const { repo, branch, path: filePath, body, baseObjectId, source } = req.body || {};
+    if (!repo || !branch || !filePath) return res.status(400).json({ error: "repo, branch, path required" });
+    if (typeof body !== "string") return res.status(400).json({ error: "body (string) required" });
+    const key = remoteKey(repo, branch, filePath);
+    // Two-writer guard: while the user holds this file open in the editor, an
+    // agent stage collides into a 409 (not a silent overwrite). The user's own
+    // mirror writes bypass the lock, exactly like the fileIndex draft path.
+    if (remoteSpecLocks && remoteSpecLocks.isLocked(key) && source !== "user-mirror") {
+      return res.status(409).json({ error: "user is editing this file", retryAfterMs: 10_000 });
+    }
+    // The durable store THROWS on a write failure; surface {ok:false} rather
+    // than telling the agent a stage succeeded when it didn't.
+    try {
+      const d = remoteSpecDrafts.put(key, { repo, branch, path: filePath, body, baseObjectId: baseObjectId || null }, { source: source || "external" });
+      res.json({ ok: true, key, draft: d, version: focus.get().version });
+    } catch (e) {
+      res.status(500).json({ ok: false, error: "failed to stage draft: " + (e?.message || e) });
+    }
+  });
+
+  app.delete("/api/v1/specs/draft", requireAuth({ mutation: true }), (req, res) => {
+    if (!remoteSpecDrafts) return res.status(501).json({ error: "remote spec drafts not wired" });
+    const { repo, branch, path: filePath } = req.body || {};
+    if (!repo || !branch || !filePath) return res.status(400).json({ error: "repo, branch, path required" });
+    const had = remoteSpecDrafts.delete(remoteKey(repo, branch, filePath));
+    res.json({ ok: true, removed: had, version: focus.get().version });
+  });
+
+  app.post("/api/v1/specs/draft/lock", requireAuth({ mutation: true }), (req, res) => {
+    if (!remoteSpecLocks) return res.status(501).json({ error: "remote spec locks not wired" });
+    const { repo, branch, path: filePath } = req.body || {};
+    if (!repo || !branch || !filePath) return res.status(400).json({ error: "repo, branch, path required" });
+    const exp = remoteSpecLocks.touch(remoteKey(repo, branch, filePath));
+    res.json({ ok: true, expiresAt: exp });
+  });
+
+  // Push EVERY staged draft for (repo,branch) as ONE commit (all-or-nothing —
+  // buildPushChangeSet emits a single createPush). The push dep enforces
+  // optimistic concurrency: a stale oldObjectId (someone else moved the branch)
+  // comes back 409, not a lost write.
+  app.post("/api/v1/specs/draft/push", requireAuth({ mutation: true }), async (req, res) => {
+    if (typeof pushRemoteSpec !== "function") return res.status(501).json({ error: "remote push not wired" });
+    const { repo, branch, message, oldObjectId } = req.body || {};
+    if (!repo || !branch) return res.status(400).json({ error: "repo, branch required" });
+    try {
+      const r = await pushRemoteSpec({ repo, branch, message, oldObjectId });
+      res.status(r.status || (r.ok ? 200 : 500)).json(r.body ?? r);
+    } catch (e) {
+      res.status(502).json({ ok: false, error: String(e?.message || e) });
+    }
   });
 
   app.get("/api/v1/specs/:fileIndex", requireAuth(), async (req, res) => {
@@ -625,6 +697,7 @@ export function registerControlApi(app, deps) {
     if (req.query && (req.query.full === "1" || req.query.full === "true")) {
       body.drafts = drafts.list();
       body.specDrafts = specDrafts ? specDrafts.list() : {};
+      body.remoteSpecDrafts = remoteSpecDrafts ? remoteSpecDrafts.list() : {};
     }
     res.json(body);
   });
