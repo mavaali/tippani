@@ -37,10 +37,26 @@ if (!process.env.TIPPANI_ADO_TOKEN && cliFallbackEnabled()) {
   const cliToken = await acquireAdoTokenFromCli({ audience: process.env.TIPPANI_ADO_AUDIENCE });
   if (cliToken) process.env.TIPPANI_ADO_TOKEN = cliToken;
 }
-const adoCheck = inspectAdoToken(process.env.TIPPANI_ADO_TOKEN, process.env.TIPPANI_ADO_AUDIENCE);
-if (!adoCheck.ok) {
-  console.error(tokenRejectionMessage(adoCheck));
-  process.exit(1);
+// A token is required only for the ADO surface (open_pr, list_prs, PR review).
+// Local review (open_branch / open_branch_file / personal comments) reads a git
+// clone with NO ADO at all — the portal already boots local-only without a
+// token — so a MISSING token must not stop the server: it starts in local-only
+// mode and the ADO tools return a clear "needs a token" error if used. A token
+// that IS supplied but is the wrong kind (a GitHub token, expired, wrong
+// audience) is still a misconfiguration, so we fail fast there and Test
+// connection surfaces it instead of silently degrading.
+if (process.env.TIPPANI_ADO_TOKEN) {
+  const adoCheck = inspectAdoToken(process.env.TIPPANI_ADO_TOKEN, process.env.TIPPANI_ADO_AUDIENCE);
+  if (!adoCheck.ok) {
+    console.error(tokenRejectionMessage(adoCheck));
+    process.exit(1);
+  }
+} else {
+  console.error(
+    "tippani-mcp: no Azure DevOps token \u2014 starting in local-only mode. " +
+    "Local review (open_branch / open_branch_file / personal comments) works " +
+    "without one; ADO tools (open_pr, list_prs) will need a token."
+  );
 }
 
 const session = createPortalSession({ reapOnStart: true });

@@ -47,10 +47,15 @@ via server-side git. From branch `clickstop-1`.
   PR fixture).
 - **LLM-facing strings.** `refresh_spec` no longer claims "reloads from ADO" in
   local mode; comment-tool grammar fixed.
+- **MCP boots ADO-less for local review.** The shim no longer `process.exit(1)`s
+  at startup when there's no Azure DevOps token — it starts in local-only mode
+  (local review works; ADO tools ask for a token if used). A token that IS
+  supplied but is the wrong kind still fails fast, so a misbound account still
+  surfaces on Test connection.
 
 ### Two description claims corrected (apply on the PR)
-- The MCP local loop still needs a valid ADO token at startup (`mcp.js` exits
-  without one) — only the browser portal is fully offline.
+- The MCP server now boots **without** an ADO token for local review (it starts
+  in local-only mode); a token is only needed for the ADO tools.
 - The **address** step is out-of-band: `edit_spec` is PR-bound and there is no
   branch-write tool, so this is the read-only half of the loop.
 
