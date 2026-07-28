@@ -12,6 +12,7 @@ import {
   createFocusStore,
   createDraftStore,
   createLockStore,
+  createKeyedLockStore,
 } from "./api-state.js";
 import { registerControlApi } from "./control-api.js";
 import { buildTools, createHttpClient, loadSessionToken } from "./mcp-tools.js";
@@ -44,6 +45,16 @@ const focus = createFocusStore();
 const drafts = createDraftStore({ onChange: () => focus.bumpVersion() });
 const locks = createLockStore({ ttlMs: 60_000 });
 const specDrafts = createDraftStore({ onChange: () => focus.bumpVersion() });
+
+// Clickstop 2 step 13: in-memory remote-draft store backing the write tools.
+const _remoteDraftMap = new Map();
+const remoteDraftStore = {
+  put(key, val, meta = {}) { const rec = { repo: val.repo, branch: val.branch, path: val.path, body: val.body, baseObjectId: val.baseObjectId || null, updatedAt: "t", source: meta.source || "external" }; _remoteDraftMap.set(key, rec); return rec; },
+  get(key) { return _remoteDraftMap.get(key) || null; },
+  delete(key) { return _remoteDraftMap.delete(key); },
+  list() { return Object.fromEntries(_remoteDraftMap); },
+  forBranch(repo, branch) { return [..._remoteDraftMap.values()].filter((d) => d.repo === repo && d.branch === branch); },
+};
 
 // Stub reply/resolve helpers that match the doReply/doResolve contract.
 const postedReplies = [];
@@ -83,6 +94,13 @@ registerControlApi(app, {
     p === "/ok/a.md"
       ? { ok: true, opened: "/open-file-view?path=" + p, realpath: p }
       : { ok: false, reason: "outside-root", error: "outside every approved folder" },
+  // Clickstop 2 step 13: remote-authoring write deps (in-memory fakes).
+  mcpCreateBranch: async ({ branch, base }) =>
+    branch ? { ok: true, repo: "MyRepo", branch, branchRef: `refs/heads/${branch}`, base: base || "main", created: true, objectId: "tip1" } : { ok: false, error: "branch is required" },
+  remoteSpecDrafts: remoteDraftStore,
+  remoteSpecLocks: createKeyedLockStore({ ttlMs: 60_000 }),
+  pushRemoteSpec: async ({ repo, branch }) => ({ ok: true, status: 200, body: { ok: true, commitId: "c1", pushedFiles: remoteDraftStore.forBranch(repo, branch).map((d) => d.path) } }),
+  openPr: async (args) => ({ ok: true, pullRequestId: 77, url: "http://pr/77", isDraft: !!args.isDraft, workItemId: args.workItemTitle ? 88 : null, workItemCreated: !!args.workItemTitle, linked: !!args.workItemTitle }),
 });
 
 const server = await new Promise((res) => {
@@ -121,8 +139,9 @@ try {
     "delete_personal_comment", "resolve_personal_comment", "reply_personal_comment", "delete_resolved_personal_comments",
     "delete_all_personal_comments", "navigate_personal_comments", "jump_to_personal_comment",
     "show_resolved_personal_comments", "open_branch", "open_branch_file", "open_local_file", "refresh_spec",
+    "create_branch", "stage_spec", "push_spec", "create_spec_pr",
   ];
-  check("tools: exactly 41 registered", tools.length === 41);
+  check("tools: exactly 45 registered", tools.length === 45);
   for (const n of expected) {
     check(`tools: includes ${n}`, !!byName[n]);
     check(`tools: ${n} has description`, typeof byName[n].description === "string" && byName[n].description.length > 20);
@@ -165,6 +184,38 @@ try {
     try { await byName.open_local_file.handler({ path: "/etc/passwd.md" }); }
     catch (e) { rejected = true; rejStatus = e.status; }
     check("open_local_file: outside-root rejected (400, not read)", rejected && rejStatus === 400);
+  }
+
+  // --- Remote authoring write tools (clickstop 2, step 13) ---
+  {
+    const r = await byName.create_branch.handler({ branch: "spec/x" });
+    check("create_branch: creates + echoes repo/branch", r.ok === true && r.context.repo === "MyRepo" && r.context.branch === "spec/x");
+    check("create_branch: next-step points at stage_spec", /stage_spec/.test(r.nextStep));
+  }
+  {
+    const r = await byName.stage_spec.handler({ repo: "MyRepo", branch: "spec/x", path: "docs/spec.md", body: "# Spec\n\nhi" });
+    check("stage_spec: stages + echoes full context", r.ok === true && r.context.repo === "MyRepo" && r.context.branch === "spec/x" && r.context.path === "docs/spec.md");
+    check("stage_spec: next-step points at push_spec", /push_spec/.test(r.nextStep));
+    // Verify the body reached the store via a second file, then a multi-file push.
+    await byName.stage_spec.handler({ repo: "MyRepo", branch: "spec/x", path: "docs/two.md", body: "second" });
+  }
+  {
+    const r = await byName.push_spec.handler({ repo: "MyRepo", branch: "spec/x", message: "Add specs" });
+    check("push_spec: commits all staged files in one commit", r.ok === true && r.commitId === "c1" && r.pushedFiles.length === 2);
+    check("push_spec: next-step points at create_spec_pr", /create_spec_pr/.test(r.nextStep));
+  }
+  {
+    const r = await byName.create_spec_pr.handler({ title: "Add spec", sourceBranch: "spec/x", targetBranch: "main", isDraft: true, workItemTitle: "Spec review", workItemType: "Task" });
+    check("create_spec_pr: opens PR + links work item", r.ok === true && r.pullRequestId === 77 && r.workItemId === 88 && r.linked === true);
+    check("create_spec_pr: echoes the source branch", r.context.branch === "spec/x");
+    check("create_spec_pr: next-step points at review", /review/i.test(r.nextStep));
+  }
+  {
+    // Every write tool description carries the never-raw-git/ADO rule (step 14
+    // lint asserts the same; here we prove step 13 embedded it).
+    for (const n of ["create_branch", "stage_spec", "push_spec", "create_spec_pr"]) {
+      check(`${n}: description embeds the never-raw rule`, /never edit files|never .* raw git|Azure DevOps MCP/i.test(byName[n].description));
+    }
   }
 
   // --- stage_resolve_thread ---

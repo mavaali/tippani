@@ -45,6 +45,7 @@ import { fileReviewContext } from "./comment-key.js";
 import { isAllowedHost } from "./host-guard.js";
 import { buildPushChangeSet } from "./push-changeset.js";
 import { adoCall } from "./ado-call.js";
+import { buildCreateBranchRef, resolveBaseBranch, normalizeBranchRef } from "./ado-refs.js";
 import { makeRepoSession, createSessionTokens } from "./repo-session.js";
 import { saveSpecDraft, loadSpecDraft, deleteSpecDraft } from "./spec-draft-store.js";
 import { openSpecReviewPr } from "./pr-open.js";
@@ -5047,6 +5048,44 @@ async function openPr(args = {}) {
     return { ok: false, error: "open PR failed: " + (e?.message || e) };
   }
 }
+
+// Create (or adopt) a branch for remote spec authoring (clickstop 2, step 13).
+// Pure ref-shaping lives in ado-refs.js; here we resolve the base tip and issue
+// the ref update via the adoCall timeout. Idempotent: an existing branch is
+// adopted (created:false), not re-created. Opens an authoring session on success.
+async function mcpCreateBranch({ branch, base } = {}) {
+  if (!_conn) return { ok: false, error: "no ADO connection" };
+  if (!branch) return { ok: false, error: "branch is required" };
+  const branchRef = normalizeBranchRef(branch);
+  const gitApi = await _conn.getGitApi();
+  // Already exists? Adopt it (idempotent), don't fail or clobber.
+  try {
+    const tip = await getBranchTip(_conn, branchRef);
+    if (tip) {
+      openAuthoringSession({ id: branchRef, repo: ADO_REPO, branch });
+      return { ok: true, repo: ADO_REPO, branch, branchRef, created: false, objectId: tip };
+    }
+  } catch { /* not found -> create below */ }
+  // Resolve the base branch + its tip.
+  let available = [];
+  try {
+    const refs = await adoCall(() => gitApi.getRefs(ADO_REPO, ADO_PROJECT, "heads/"), { label: "getRefs" });
+    available = (refs || []).map((r) => String(r.name).replace("refs/heads/", ""));
+  } catch (e) { return { ok: false, error: "failed to list branches: " + (e?.message || e) }; }
+  const baseName = resolveBaseBranch(available, base);
+  if (!baseName) return { ok: false, error: "could not resolve a base branch" + (base ? ` (requested '${base}')` : "") };
+  let baseTip;
+  try { baseTip = await getBranchTip(_conn, normalizeBranchRef(baseName)); }
+  catch (e) { return { ok: false, error: "failed to read base branch tip: " + (e?.message || e) }; }
+  const refUpdate = buildCreateBranchRef({ branch, baseTip });
+  let result;
+  try { result = await adoCall(() => gitApi.updateRefs([refUpdate], ADO_REPO, ADO_PROJECT), { label: "updateRefs" }); }
+  catch (e) { return { ok: false, error: "create branch failed: " + (e?.message || e) }; }
+  const upd = Array.isArray(result) ? result[0] : result;
+  if (upd && upd.success === false) return { ok: false, error: "create branch rejected: " + (upd.updateStatus || "unknown") };
+  openAuthoringSession({ id: branchRef, repo: ADO_REPO, branch });
+  return { ok: true, repo: ADO_REPO, branch, branchRef, base: baseName, created: true, objectId: baseTip };
+}
 // Session token authorises external (non-browser-same-origin) mutations.
 // Generated fresh per process and printed to stdout at startup.
 const _sessionToken = crypto.randomBytes(24).toString("base64url");
@@ -7028,6 +7067,7 @@ if ($path) { [Console]::Out.Write($path) }
     remoteSpecLocks: _remoteSpecLocks,
     pushRemoteSpec,
     openPr,
+    mcpCreateBranch,
     listPersonalComments,
     createPersonalComment,
     editPersonalComment,

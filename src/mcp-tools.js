@@ -4,6 +4,7 @@
 
 import fs from "fs";
 import { z } from "zod";
+import { withHints, NEVER_RAW_RULE } from "./tool-hints.js";
 
 export function loadSessionToken(tokenPath) {
   try {
@@ -78,6 +79,10 @@ export function buildTools(http, session) {
   async function ensuredPost(path, body) {
     if (session && typeof session.ensureBrowsePortal === "function") await session.ensureBrowsePortal();
     return http.post(path, body || {});
+  }
+  async function ensuredPut(path, body) {
+    if (session && typeof session.ensureBrowsePortal === "function") await session.ensureBrowsePortal();
+    return http.put(path, body || {});
   }
   return [
     {
@@ -714,6 +719,78 @@ export function buildTools(http, session) {
         "after making a change the user asked for, to show them the result.",
       inputSchema: {},
       handler: (args) => ensuredPost("/api/v1/spec/refresh", args || {}),
+    },
+    // ---- Remote spec authoring write tools (clickstop 2, step 13) ----
+    {
+      name: "create_branch",
+      description:
+        "Create (or adopt) a branch to author a spec on. Resolves a base branch " +
+        "(main/master/develop/trunk unless you pass one) and returns the new " +
+        "branch and its tip. Idempotent: an existing branch is adopted, not " +
+        "re-created. " + NEVER_RAW_RULE,
+      inputSchema: {
+        branch: z.string().describe("Branch name to create/adopt, e.g. spec/my-feature"),
+        base: z.string().optional().describe("Base branch to fork from (defaults to main/master/develop/trunk)"),
+      },
+      handler: async ({ branch, base }) => {
+        const r = await ensuredPost("/api/v1/spec/create-branch", { branch, base });
+        return withHints("create_branch", r, { repo: r.repo, branch: r.branch, path: null });
+      },
+    },
+    {
+      name: "stage_spec",
+      description:
+        "Stage a whole-file spec markdown draft for (repo, branch, path). The " +
+        "draft is written durably but NOT committed — call push_spec to commit. " +
+        "Collides with a 409 if the user is editing the same file. " + NEVER_RAW_RULE,
+      inputSchema: {
+        repo: z.string().describe("Repository name"),
+        branch: z.string().describe("Branch to author on (from create_branch)"),
+        path: z.string().describe("Spec file path within the repo, e.g. docs/spec.md"),
+        body: z.string().describe("Full markdown body of the spec"),
+        baseObjectId: z.string().optional().describe("Object id the draft is based on (set for an existing file; omit for a new file)"),
+      },
+      handler: async ({ repo, branch, path, body, baseObjectId }) => {
+        const r = await ensuredPut("/api/v1/specs/draft", { repo, branch, path, body, baseObjectId });
+        return withHints("stage_spec", r, { repo, branch, path });
+      },
+    },
+    {
+      name: "push_spec",
+      description:
+        "Commit EVERY staged draft for (repo, branch) as one all-or-nothing " +
+        "commit. Fails with 409 if the branch moved since you staged (re-stage " +
+        "against the new tip). " + NEVER_RAW_RULE,
+      inputSchema: {
+        repo: z.string().describe("Repository name"),
+        branch: z.string().describe("Branch to commit to"),
+        message: z.string().optional().describe("Commit message"),
+        oldObjectId: z.string().optional().describe("Branch tip you staged against, for optimistic concurrency"),
+      },
+      handler: async ({ repo, branch, message, oldObjectId }) => {
+        const r = await ensuredPost("/api/v1/specs/draft/push", { repo, branch, message, oldObjectId });
+        return withHints("push_spec", r, { repo, branch, path: null });
+      },
+    },
+    {
+      name: "create_spec_pr",
+      description:
+        "Open a pull request for the authored branch and find-or-create-and-link " +
+        "a Spec review work item. Title and work-item type are yours to supply — " +
+        "Tippani never infers them. " + NEVER_RAW_RULE,
+      inputSchema: {
+        title: z.string().describe("PR title (never inferred)"),
+        sourceBranch: z.string().describe("Branch to merge from (the authored branch)"),
+        targetBranch: z.string().describe("Branch to merge into, e.g. main"),
+        description: z.string().optional().describe("PR description"),
+        isDraft: z.boolean().optional().describe("Open as a draft PR (default true)"),
+        workItemTitle: z.string().optional().describe("Spec review work item title to find or create"),
+        workItemType: z.string().optional().describe("Work item type (required when workItemTitle is set; never inferred)"),
+      },
+      handler: async (args) => {
+        const r = await ensuredPost("/api/v1/pr/open", args);
+        return withHints("create_spec_pr", r, { repo: null, branch: args.sourceBranch, path: null });
+      },
     },
   ];
 }
