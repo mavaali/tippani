@@ -38,6 +38,7 @@ import { reattachFrontmatter } from "./frontmatter.js";
 import { isExpiredJwt } from "./ado-token-check.js";
 import { buildPrCriteria, summarizePr, mergeRolePrs, prStatusLabel } from "./pr-criteria.js";
 import { navSkipsBarePathClobber, navShouldNavigate, navTarget } from "./nav-guard.js";
+import { createApprovedRoots } from "./approved-roots.js";
 import {
   decodeConfigValue,
   extOf,
@@ -204,33 +205,12 @@ function savePersonalComments(repoId, branch, filePath, comments) {
 // session still trusts a repo the user set up earlier. realpath-based, so a
 // symlinked alias of an approved root still matches.
 const LOCAL_ROOTS_FILE = path.join(CONFIG_DIR, "local-roots.json");
-const _approvedRoots = new Set();
-(function loadApprovedRoots() {
-  try {
-    const arr = JSON.parse(fs.readFileSync(LOCAL_ROOTS_FILE, "utf8"));
-    if (Array.isArray(arr)) for (const r of arr) if (typeof r === "string" && r) _approvedRoots.add(r);
-  } catch { /* none yet */ }
-})();
-function approveLocalRoot(p) {
-  let real;
-  try { real = fs.realpathSync(String(p || "").trim()); } catch { return null; }
-  if (!_approvedRoots.has(real)) {
-    _approvedRoots.add(real);
-    try {
-      fs.mkdirSync(CONFIG_DIR, { recursive: true, mode: 0o700 });
-      fs.writeFileSync(LOCAL_ROOTS_FILE, JSON.stringify([..._approvedRoots], null, 2), { mode: 0o600 });
-    } catch { /* persistence best-effort; the in-memory approval still holds */ }
-  }
-  return real;
-}
-function isApprovedRoot(p) {
-  let real;
-  try { real = fs.realpathSync(String(p || "").trim()); } catch { return false; }
-  for (const root of _approvedRoots) {
-    if (real === root || real.startsWith(root + path.sep)) return true;
-  }
-  return false;
-}
+// Clickstop 2, step 1: the approved-roots gate now lives in an importable,
+// tested module (behavior unchanged). `isContained` is the pure containment
+// check used by the open-a-file validator to distinguish a symlink escape.
+const { approveLocalRoot, isApprovedRoot, isContained } = createApprovedRoots({
+  fs, path, rootsFile: LOCAL_ROOTS_FILE, configDir: CONFIG_DIR,
+});
 
 // --- ADO error helper ---
 function friendlyAdoError(e, context) {
