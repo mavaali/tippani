@@ -41,6 +41,7 @@ import { navSkipsBarePathClobber, navShouldNavigate, navTarget } from "./nav-gua
 import { createApprovedRoots } from "./approved-roots.js";
 import { classifyOpenFilePath } from "./open-file-path.js";
 import { fileReviewContext } from "./comment-key.js";
+import { isAllowedHost } from "./host-guard.js";
 import {
   decodeConfigValue,
   extOf,
@@ -5195,12 +5196,10 @@ async function main() {
   // request's Host is always localhost / 127.0.0.1 / [::1]. A rebind attack
   // reaches us with the attacker's hostname in Host (it resolves to 127.0.0.1
   // in the victim's browser), so reject any other Host outright — this runs on
-  // EVERY request, including the GETs that set review context.
-  const ALLOWED_HOSTS = new Set(["localhost", "127.0.0.1", "[::1]", "::1"]);
+  // EVERY request, including the GETs that set review context. The predicate is
+  // the tested isAllowedHost (src/host-guard.js).
   app.use((req, res, next) => {
-    const host = String(req.headers.host || "");
-    const name = host.replace(/:\d+$/, ""); // strip :port
-    if (!ALLOWED_HOSTS.has(name)) {
+    if (!isAllowedHost(req.headers.host)) {
       return res.status(403).json({ error: "Forbidden: host not allowed" });
     }
     next();
