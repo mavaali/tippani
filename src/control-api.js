@@ -249,26 +249,28 @@ export function registerControlApi(app, deps) {
   });
 
   // ---- Remote (pre-PR) spec authoring (clickstop 2, step 11) ----
-  // A whole-file markdown draft is STAGED durably keyed by (repo,branch,path),
-  // then PUSHED as one commit for the branch. Distinct from the PR-bound
-  // fileIndex draft path below. Registered BEFORE the `/specs/:fileIndex` param
-  // routes so the literal `/specs/draft` path isn't captured as fileIndex="draft".
-  function remoteKey(repo, branch, filePath) { return `${repo}\n${branch}\n${filePath}`; }
+  // A whole-file markdown draft is STAGED durably keyed by (project,repo,branch,
+  // path), then PUSHED as one commit for the branch against the EXPLICIT
+  // (org?,project,repo) coordinates — never a configured default. Distinct from
+  // the PR-bound fileIndex draft path below. Registered BEFORE the
+  // `/specs/:fileIndex` param routes so the literal `/specs/draft` path isn't
+  // captured as fileIndex="draft".
+  function remoteKey(project, repo, branch, filePath) { return `${project}\n${repo}\n${branch}\n${filePath}`; }
 
   app.get("/api/v1/specs/draft", requireAuth(), (req, res) => {
     if (!remoteSpecDrafts) return res.status(501).json({ error: "remote spec drafts not wired" });
-    const { repo, branch, path: filePath } = req.query || {};
-    if (!repo || !branch || !filePath) return res.status(400).json({ error: "repo, branch, path required" });
-    const d = remoteSpecDrafts.get(remoteKey(repo, branch, filePath));
+    const { project, repo, branch, path: filePath } = req.query || {};
+    if (!project || !repo || !branch || !filePath) return res.status(400).json({ error: "project, repo, branch, path required" });
+    const d = remoteSpecDrafts.get(remoteKey(project, repo, branch, filePath));
     res.json({ ok: true, draft: d || null });
   });
 
   app.put("/api/v1/specs/draft", requireAuth({ mutation: true }), (req, res) => {
     if (!remoteSpecDrafts) return res.status(501).json({ error: "remote spec drafts not wired" });
-    const { repo, branch, path: filePath, body, baseObjectId, source } = req.body || {};
-    if (!repo || !branch || !filePath) return res.status(400).json({ error: "repo, branch, path required" });
+    const { org, project, repo, branch, path: filePath, body, baseObjectId, source } = req.body || {};
+    if (!project || !repo || !branch || !filePath) return res.status(400).json({ error: "project, repo, branch, path required" });
     if (typeof body !== "string") return res.status(400).json({ error: "body (string) required" });
-    const key = remoteKey(repo, branch, filePath);
+    const key = remoteKey(project, repo, branch, filePath);
     // Two-writer guard: while the user holds this file open in the editor, an
     // agent stage collides into a 409 (not a silent overwrite). The user's own
     // mirror writes bypass the lock, exactly like the fileIndex draft path.
@@ -278,7 +280,7 @@ export function registerControlApi(app, deps) {
     // The durable store THROWS on a write failure; surface {ok:false} rather
     // than telling the agent a stage succeeded when it didn't.
     try {
-      const d = remoteSpecDrafts.put(key, { repo, branch, path: filePath, body, baseObjectId: baseObjectId || null }, { source: source || "external" });
+      const d = remoteSpecDrafts.put(key, { org: org || null, project, repo, branch, path: filePath, body, baseObjectId: baseObjectId || null }, { source: source || "external" });
       res.json({ ok: true, key, draft: d, version: focus.get().version });
     } catch (e) {
       res.status(500).json({ ok: false, error: "failed to stage draft: " + (e?.message || e) });
@@ -287,30 +289,31 @@ export function registerControlApi(app, deps) {
 
   app.delete("/api/v1/specs/draft", requireAuth({ mutation: true }), (req, res) => {
     if (!remoteSpecDrafts) return res.status(501).json({ error: "remote spec drafts not wired" });
-    const { repo, branch, path: filePath } = req.body || {};
-    if (!repo || !branch || !filePath) return res.status(400).json({ error: "repo, branch, path required" });
-    const had = remoteSpecDrafts.delete(remoteKey(repo, branch, filePath));
+    const { project, repo, branch, path: filePath } = req.body || {};
+    if (!project || !repo || !branch || !filePath) return res.status(400).json({ error: "project, repo, branch, path required" });
+    const had = remoteSpecDrafts.delete(remoteKey(project, repo, branch, filePath));
     res.json({ ok: true, removed: had, version: focus.get().version });
   });
 
   app.post("/api/v1/specs/draft/lock", requireAuth({ mutation: true }), (req, res) => {
     if (!remoteSpecLocks) return res.status(501).json({ error: "remote spec locks not wired" });
-    const { repo, branch, path: filePath } = req.body || {};
-    if (!repo || !branch || !filePath) return res.status(400).json({ error: "repo, branch, path required" });
-    const exp = remoteSpecLocks.touch(remoteKey(repo, branch, filePath));
+    const { project, repo, branch, path: filePath } = req.body || {};
+    if (!project || !repo || !branch || !filePath) return res.status(400).json({ error: "project, repo, branch, path required" });
+    const exp = remoteSpecLocks.touch(remoteKey(project, repo, branch, filePath));
     res.json({ ok: true, expiresAt: exp });
   });
 
-  // Push EVERY staged draft for (repo,branch) as ONE commit (all-or-nothing —
-  // buildPushChangeSet emits a single createPush). The push dep enforces
-  // optimistic concurrency: a stale oldObjectId (someone else moved the branch)
-  // comes back 409, not a lost write.
+  // Push EVERY staged draft for (project,repo,branch) as ONE commit
+  // (all-or-nothing — buildPushChangeSet emits a single createPush) against the
+  // EXPLICIT (org?,project,repo) coordinates. The push dep enforces optimistic
+  // concurrency: a stale oldObjectId (someone else moved the branch) comes back
+  // 409, not a lost write.
   app.post("/api/v1/specs/draft/push", requireAuth({ mutation: true }), async (req, res) => {
     if (typeof pushRemoteSpec !== "function") return res.status(501).json({ error: "remote push not wired" });
-    const { repo, branch, message, oldObjectId } = req.body || {};
-    if (!repo || !branch) return res.status(400).json({ error: "repo, branch required" });
+    const { org, project, repo, branch, message, oldObjectId } = req.body || {};
+    if (!project || !repo || !branch) return res.status(400).json({ error: "project, repo, branch required" });
     try {
-      const r = await pushRemoteSpec({ repo, branch, message, oldObjectId });
+      const r = await pushRemoteSpec({ org, project, repo, branch, message, oldObjectId });
       res.status(r.status || (r.ok ? 200 : 500)).json(r.body ?? r);
     } catch (e) {
       res.status(502).json({ ok: false, error: String(e?.message || e) });
@@ -322,7 +325,8 @@ export function registerControlApi(app, deps) {
   // never infers them; a missing title/type is a 400, not a guess.
   app.post("/api/v1/pr/open", requireAuth({ mutation: true }), async (req, res) => {
     if (typeof openPr !== "function") return res.status(501).json({ error: "open PR not wired" });
-    const { title, sourceBranch, targetBranch, workItemTitle, workItemType } = req.body || {};
+    const { project, repo, title, sourceBranch, targetBranch, workItemTitle, workItemType } = req.body || {};
+    if (!project || !repo) return res.status(400).json({ error: "project, repo required (Tippani never guesses the repo)" });
     if (!title || !sourceBranch || !targetBranch) return res.status(400).json({ error: "title, sourceBranch, targetBranch required" });
     if (workItemTitle && !workItemType) return res.status(400).json({ error: "workItemType required when workItemTitle is set (never inferred)" });
     try {

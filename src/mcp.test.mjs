@@ -47,13 +47,14 @@ const locks = createLockStore({ ttlMs: 60_000 });
 const specDrafts = createDraftStore({ onChange: () => focus.bumpVersion() });
 
 // Clickstop 2 step 13: in-memory remote-draft store backing the write tools.
+// Scoped by (project,repo,branch).
 const _remoteDraftMap = new Map();
 const remoteDraftStore = {
-  put(key, val, meta = {}) { const rec = { repo: val.repo, branch: val.branch, path: val.path, body: val.body, baseObjectId: val.baseObjectId || null, updatedAt: "t", source: meta.source || "external" }; _remoteDraftMap.set(key, rec); return rec; },
+  put(key, val, meta = {}) { const rec = { project: val.project, repo: val.repo, branch: val.branch, path: val.path, body: val.body, baseObjectId: val.baseObjectId || null, updatedAt: "t", source: meta.source || "external" }; _remoteDraftMap.set(key, rec); return rec; },
   get(key) { return _remoteDraftMap.get(key) || null; },
   delete(key) { return _remoteDraftMap.delete(key); },
   list() { return Object.fromEntries(_remoteDraftMap); },
-  forBranch(repo, branch) { return [..._remoteDraftMap.values()].filter((d) => d.repo === repo && d.branch === branch); },
+  forBranch(project, repo, branch) { return [..._remoteDraftMap.values()].filter((d) => d.project === project && d.repo === repo && d.branch === branch); },
 };
 
 // Stub reply/resolve helpers that match the doReply/doResolve contract.
@@ -95,11 +96,11 @@ registerControlApi(app, {
       ? { ok: true, opened: "/open-file-view?path=" + p, realpath: p }
       : { ok: false, reason: "outside-root", error: "outside every approved folder" },
   // Clickstop 2 step 13: remote-authoring write deps (in-memory fakes).
-  mcpCreateBranch: async ({ branch, base }) =>
-    branch ? { ok: true, repo: "MyRepo", branch, branchRef: `refs/heads/${branch}`, base: base || "main", created: true, objectId: "tip1" } : { ok: false, error: "branch is required" },
+  mcpCreateBranch: async ({ org, project, repo, branch, base }) =>
+    (branch && project && repo) ? { ok: true, org: org || "https://dev.azure.com/powerbi", project, repo, branch, branchRef: `refs/heads/${branch}`, base: base || "main", created: true, objectId: "tip1" } : { ok: false, error: "project, repo, branch are required" },
   remoteSpecDrafts: remoteDraftStore,
   remoteSpecLocks: createKeyedLockStore({ ttlMs: 60_000 }),
-  pushRemoteSpec: async ({ repo, branch }) => ({ ok: true, status: 200, body: { ok: true, commitId: "c1", pushedFiles: remoteDraftStore.forBranch(repo, branch).map((d) => d.path) } }),
+  pushRemoteSpec: async ({ project, repo, branch }) => ({ ok: true, status: 200, body: { ok: true, commitId: "c1", pushedFiles: remoteDraftStore.forBranch(project, repo, branch).map((d) => d.path) } }),
   openPr: async (args) => ({ ok: true, pullRequestId: 77, url: "http://pr/77", isDraft: !!args.isDraft, workItemId: args.workItemTitle ? 88 : null, workItemCreated: !!args.workItemTitle, linked: !!args.workItemTitle }),
 });
 
@@ -187,25 +188,31 @@ try {
   }
 
   // --- Remote authoring write tools (clickstop 2, step 13) ---
+  const WPROJ = "Big Data", WREPO = "MyRepo";
   {
-    const r = await byName.create_branch.handler({ branch: "spec/x" });
+    const r = await byName.create_branch.handler({ project: WPROJ, repo: WREPO, branch: "spec/x" });
     check("create_branch: creates + echoes repo/branch", r.ok === true && r.context.repo === "MyRepo" && r.context.branch === "spec/x");
     check("create_branch: next-step points at stage_spec", /stage_spec/.test(r.nextStep));
+    // Missing project/repo -> the dep refuses (never guesses the repo).
+    let refused = false;
+    try { const bad = await byName.create_branch.handler({ branch: "spec/x" }); refused = bad.ok === false; }
+    catch (e) { refused = e.status === 400; }
+    check("create_branch: refuses without project/repo (never guessed)", refused);
   }
   {
-    const r = await byName.stage_spec.handler({ repo: "MyRepo", branch: "spec/x", path: "docs/spec.md", body: "# Spec\n\nhi" });
+    const r = await byName.stage_spec.handler({ project: WPROJ, repo: WREPO, branch: "spec/x", path: "docs/spec.md", body: "# Spec\n\nhi" });
     check("stage_spec: stages + echoes full context", r.ok === true && r.context.repo === "MyRepo" && r.context.branch === "spec/x" && r.context.path === "docs/spec.md");
     check("stage_spec: next-step points at push_spec", /push_spec/.test(r.nextStep));
     // Verify the body reached the store via a second file, then a multi-file push.
-    await byName.stage_spec.handler({ repo: "MyRepo", branch: "spec/x", path: "docs/two.md", body: "second" });
+    await byName.stage_spec.handler({ project: WPROJ, repo: WREPO, branch: "spec/x", path: "docs/two.md", body: "second" });
   }
   {
-    const r = await byName.push_spec.handler({ repo: "MyRepo", branch: "spec/x", message: "Add specs" });
+    const r = await byName.push_spec.handler({ project: WPROJ, repo: WREPO, branch: "spec/x", message: "Add specs" });
     check("push_spec: commits all staged files in one commit", r.ok === true && r.commitId === "c1" && r.pushedFiles.length === 2);
     check("push_spec: next-step points at create_spec_pr", /create_spec_pr/.test(r.nextStep));
   }
   {
-    const r = await byName.create_spec_pr.handler({ title: "Add spec", sourceBranch: "spec/x", targetBranch: "main", isDraft: true, workItemTitle: "Spec review", workItemType: "Task" });
+    const r = await byName.create_spec_pr.handler({ project: WPROJ, repo: WREPO, title: "Add spec", sourceBranch: "spec/x", targetBranch: "main", isDraft: true, workItemTitle: "Spec review", workItemType: "Task" });
     check("create_spec_pr: opens PR + links work item", r.ok === true && r.pullRequestId === 77 && r.workItemId === 88 && r.linked === true);
     check("create_spec_pr: echoes the source branch", r.context.branch === "spec/x");
     check("create_spec_pr: next-step points at review", /review/i.test(r.nextStep));

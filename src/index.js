@@ -46,6 +46,7 @@ import { isAllowedHost } from "./host-guard.js";
 import { buildPushChangeSet } from "./push-changeset.js";
 import { adoCall } from "./ado-call.js";
 import { buildCreateBranchRef, resolveBaseBranch, normalizeBranchRef } from "./ado-refs.js";
+import { resolveWriteTarget, draftKeyOf } from "./ado-target.js";
 import { makeRepoSession, createSessionTokens } from "./repo-session.js";
 import { saveSpecDraft, loadSpecDraft, deleteSpecDraft } from "./spec-draft-store.js";
 import { openSpecReviewPr } from "./pr-open.js";
@@ -617,11 +618,14 @@ function viewedWarning(err) {
 }
 
 // Current tip commit (objectId) of a branch ref like "refs/heads/feature/x".
-async function getBranchTip(conn, branchRef) {
+// Defaults to the current review target (ADO_REPO/ADO_PROJECT) but accepts an
+// explicit repo/project so the authoring write path can target any repo without
+// leaning on the module globals.
+async function getBranchTip(conn, branchRef, repoId = ADO_REPO, project = ADO_PROJECT) {
   const gitApi = await conn.getGitApi();
   const shortBranch = branchRef.replace("refs/heads/", "");
   // Clickstop 2, step 9: bound the ADO call so a wedged network call can't hang.
-  const refs = await adoCall(() => gitApi.getRefs(ADO_REPO, ADO_PROJECT, `heads/${shortBranch}`), { label: "getRefs" });
+  const refs = await adoCall(() => gitApi.getRefs(repoId, project, `heads/${shortBranch}`), { label: "getRefs" });
   const ref = (refs || []).find((r) => r.name === branchRef);
   if (!ref) throw new Error(`Branch ref not found: ${branchRef}`);
   return ref.objectId;
@@ -4948,41 +4952,44 @@ function openAuthoringSession({ id, repo, branch, files = [], path = null, token
 // back to (repo,branch,path) so /state?full=1 and the push can enumerate them.
 const SPEC_DRAFTS_DIR = path.join(CONFIG_DIR, "spec-drafts");
 const _remoteSpecLocks = createKeyedLockStore({ ttlMs: 10_000 });
-const _remoteDraftIndex = new Map(); // key -> {repo,branch,path}
+const _remoteDraftIndex = new Map(); // key -> {project,repo,branch,path}
+// Disk store id: scope by project so a same-named repo in another project can't
+// collide on disk either (the store hashes this id + branch + path).
+function _draftDiskId(project, repo) { return `${project}::${repo}`; }
 const _remoteSpecDrafts = {
-  put(key, { repo, branch, path: filePath, body, baseObjectId }, meta = {}) {
-    const rec = saveSpecDraft(SPEC_DRAFTS_DIR, repo, branch, filePath, {
+  put(key, { project, repo, branch, path: filePath, body, baseObjectId }, meta = {}) {
+    const rec = saveSpecDraft(SPEC_DRAFTS_DIR, _draftDiskId(project, repo), branch, filePath, {
       body, baseObjectId, updatedAt: new Date().toISOString(),
     });
-    _remoteDraftIndex.set(key, { repo, branch, path: filePath });
+    _remoteDraftIndex.set(key, { project, repo, branch, path: filePath });
     return { ...rec, source: meta.source || "external" };
   },
   get(key) {
     const loc = _remoteDraftIndex.get(key);
     if (!loc) return null;
-    try { return loadSpecDraft(SPEC_DRAFTS_DIR, loc.repo, loc.branch, loc.path); }
+    try { return loadSpecDraft(SPEC_DRAFTS_DIR, _draftDiskId(loc.project, loc.repo), loc.branch, loc.path); }
     catch { return null; } // corrupt file already quarantined by the store
   },
   delete(key) {
     const loc = _remoteDraftIndex.get(key);
     if (!loc) return false;
-    deleteSpecDraft(SPEC_DRAFTS_DIR, loc.repo, loc.branch, loc.path);
+    deleteSpecDraft(SPEC_DRAFTS_DIR, _draftDiskId(loc.project, loc.repo), loc.branch, loc.path);
     _remoteDraftIndex.delete(key);
     return true;
   },
   list() {
     const out = {};
     for (const [key, loc] of _remoteDraftIndex) {
-      try { const d = loadSpecDraft(SPEC_DRAFTS_DIR, loc.repo, loc.branch, loc.path); if (d) out[key] = d; }
+      try { const d = loadSpecDraft(SPEC_DRAFTS_DIR, _draftDiskId(loc.project, loc.repo), loc.branch, loc.path); if (d) out[key] = d; }
       catch { /* quarantined; omit */ }
     }
     return out;
   },
-  forBranch(repo, branch) {
+  forBranch(project, repo, branch) {
     const items = [];
     for (const [, loc] of _remoteDraftIndex) {
-      if (loc.repo === repo && loc.branch === branch) {
-        try { const d = loadSpecDraft(SPEC_DRAFTS_DIR, loc.repo, loc.branch, loc.path); if (d) items.push(d); }
+      if (loc.project === project && loc.repo === repo && loc.branch === branch) {
+        try { const d = loadSpecDraft(SPEC_DRAFTS_DIR, _draftDiskId(loc.project, loc.repo), loc.branch, loc.path); if (d) items.push(d); }
         catch { /* quarantined; omit */ }
       }
     }
@@ -4990,15 +4997,50 @@ const _remoteSpecDrafts = {
   },
 };
 
-// Push every staged draft for (repo,branch) as ONE commit (all-or-nothing).
-// Optimistic concurrency: if the branch moved since the caller staged, 409.
-async function pushRemoteSpec({ repo, branch, message, oldObjectId }) {
-  if (!_conn) return { ok: false, status: 503, body: { ok: false, error: "no ADO connection" } };
-  const branchRef = branch.startsWith("refs/heads/") ? branch : `refs/heads/${branch}`;
-  const staged = _remoteSpecDrafts.forBranch(repo, branch);
+// Build an ADO connection for an org. Reuses the live review connection when the
+// org matches (or none is given); otherwise builds one for that org with the
+// same credentials, so a write can target a repo in a different org.
+function buildConnForOrg(org) {
+  if ((!org || org === ADO_ORG) && _conn) return _conn;
+  if (_adoToken) return new azdev.WebApi(org, azdev.getBearerHandler(_adoToken));
+  const pat = loadPat();
+  if (pat) return new azdev.WebApi(org, azdev.getPersonalAccessTokenHandler(pat));
+  return null;
+}
+
+// Resolve explicit write coordinates to a live per-call target. `project`+`repo`
+// are REQUIRED (resolveWriteTarget throws otherwise — a write never guesses the
+// repo); `org` defaults to the configured org. Resolves the repo to its GUID via
+// getRepository so downstream calls are unambiguous. NEVER reads ADO_REPO/
+// ADO_PROJECT — the review globals play no part in an authoring write.
+async function resolveTarget({ org, project, repo } = {}) {
+  const t = resolveWriteTarget({ org, project, repo }, { defaultOrg: ADO_ORG });
+  const conn = buildConnForOrg(t.org);
+  if (!conn) { const e = new Error("no ADO connection for " + t.org); e.noConn = true; throw e; }
+  const gitApi = await conn.getGitApi();
+  const info = await adoCall(() => gitApi.getRepository(t.repo, t.project), { label: "getRepository" });
+  return {
+    conn, org: t.org, project: t.project, repo: t.repo,
+    repoId: info?.id || t.repo,
+    projectId: info?.project?.id || t.project,
+    repoName: info?.name || t.repo,
+  };
+}
+function _writeErrStatus(e) { return e && e.code === "WRITE_TARGET" ? 400 : e && e.noConn ? 503 : 502; }
+
+// Push every staged draft for (project,repo,branch) as ONE commit
+// (all-or-nothing). Writes target the EXPLICIT (org?,project,repo) coordinates,
+// resolved per call — never the review globals. Optimistic concurrency: if the
+// branch moved since the caller staged, 409.
+async function pushRemoteSpec({ org, project, repo, branch, message, oldObjectId } = {}) {
+  let target;
+  try { target = await resolveTarget({ org, project, repo }); }
+  catch (e) { return { ok: false, status: _writeErrStatus(e), body: { ok: false, error: e.message } }; }
+  const branchRef = normalizeBranchRef(branch);
+  const staged = _remoteSpecDrafts.forBranch(target.project, target.repo, branch);
   if (staged.length === 0) return { ok: false, status: 400, body: { ok: false, error: "no staged drafts for this branch" } };
   let currentTip;
-  try { currentTip = await getBranchTip(_conn, branchRef); }
+  try { currentTip = await getBranchTip(target.conn, branchRef, target.repoId, target.project); }
   catch (e) { return { ok: false, status: 502, body: { ok: false, error: "failed to read branch tip: " + (e?.message || e) } }; }
   if (oldObjectId && oldObjectId !== currentTip) {
     return { ok: false, status: 409, body: { ok: false, error: "branch moved; re-stage against the new tip", currentTip } };
@@ -5010,82 +5052,83 @@ async function pushRemoteSpec({ repo, branch, message, oldObjectId }) {
   const push = buildPushChangeSet({ adds, edits, message: message || "Update spec", branchRef, oldObjectId: currentTip });
   let result;
   try {
-    const gitApi = await _conn.getGitApi();
-    result = await adoCall(() => gitApi.createPush(push, ADO_REPO, ADO_PROJECT), { label: "createPush" });
+    const gitApi = await target.conn.getGitApi();
+    result = await adoCall(() => gitApi.createPush(push, target.repoId, target.project), { label: "createPush" });
   } catch (e) {
     return { ok: false, status: 502, body: { ok: false, error: "push failed: " + (e?.message || e) } };
   }
   const commitId = result?.commits?.[0]?.commitId || result?.refUpdates?.[0]?.newObjectId || null;
-  for (const d of staged) _remoteSpecDrafts.delete(`${repo}\n${branch}\n${d.path}`);
-  return { ok: true, status: 200, body: { ok: true, commitId, pushedFiles: staged.map((d) => d.path) } };
+  for (const d of staged) _remoteSpecDrafts.delete(draftKeyOf({ project: target.project, repo: target.repo, branch, path: d.path }));
+  return { ok: true, status: 200, body: { ok: true, repo: target.repo, project: target.project, commitId, pushedFiles: staged.map((d) => d.path) } };
 }
 
 // Open a PR for the authored branch and find-or-create-and-link a Spec review
-// work item (clickstop 2, step 12). Pure request shapes live in pr-open.js; here
+// work item (clickstop 2, step 12). Targets the EXPLICIT (org?,project,repo)
+// coordinates, resolved per call. Pure request shapes live in pr-open.js; here
 // we inject the real ADO calls, each bounded by the adoCall timeout. Title/type
 // come from the caller — never inferred.
 async function openPr(args = {}) {
-  if (!_conn) return { ok: false, error: "no ADO connection" };
-  const gitApi = await _conn.getGitApi();
-  const witApi = await _conn.getWorkItemTrackingApi();
-  let repoInfo;
-  try { repoInfo = await adoCall(() => gitApi.getRepository(ADO_REPO, ADO_PROJECT), { label: "getRepository" }); }
-  catch (e) { return { ok: false, error: "failed to resolve repository: " + (e?.message || e) }; }
-  const projectId = repoInfo?.project?.id || ADO_PROJECT;
-  const repositoryId = repoInfo?.id || ADO_REPO;
+  let target;
+  try { target = await resolveTarget({ org: args.org, project: args.project, repo: args.repo }); }
+  catch (e) { return { ok: false, error: e.message }; }
+  const gitApi = await target.conn.getGitApi();
+  const witApi = await target.conn.getWorkItemTrackingApi();
   try {
     return await openSpecReviewPr({
       call: (fn) => adoCall(fn, { label: "pr-open" }),
-      createPr: (req) => gitApi.createPullRequest(req, ADO_REPO, ADO_PROJECT),
+      createPr: (req) => gitApi.createPullRequest(req, target.repoId, target.project),
       findWorkItems: async (wiql) => {
-        const q = await witApi.queryByWiql({ query: wiql }, { project: ADO_PROJECT });
+        const q = await witApi.queryByWiql({ query: wiql }, { project: target.project });
         return (q.workItems || []).map((w) => ({ id: w.id }));
       },
-      createWorkItem: async (patch, type) => witApi.createWorkItem(null, patch, ADO_PROJECT, type),
+      createWorkItem: async (patch, type) => witApi.createWorkItem(null, patch, target.project, type),
       linkWorkItem: async (id, patch) => witApi.updateWorkItem(null, patch, id),
-    }, { ...args, projectId, repositoryId });
+    }, { ...args, projectId: target.projectId, repositoryId: target.repoId });
   } catch (e) {
     return { ok: false, error: "open PR failed: " + (e?.message || e) };
   }
 }
 
 // Create (or adopt) a branch for remote spec authoring (clickstop 2, step 13).
-// Pure ref-shaping lives in ado-refs.js; here we resolve the base tip and issue
-// the ref update via the adoCall timeout. Idempotent: an existing branch is
-// adopted (created:false), not re-created. Opens an authoring session on success.
-async function mcpCreateBranch({ branch, base } = {}) {
-  if (!_conn) return { ok: false, error: "no ADO connection" };
+// Targets the EXPLICIT (org?,project,repo) coordinates, resolved per call — never
+// the review globals. Pure ref-shaping lives in ado-refs.js. Idempotent: an
+// existing branch is adopted (created:false), not re-created.
+async function mcpCreateBranch({ org, project, repo, branch, base } = {}) {
   if (!branch) return { ok: false, error: "branch is required" };
+  let target;
+  try { target = await resolveTarget({ org, project, repo }); }
+  catch (e) { return { ok: false, error: e.message }; }
   const branchRef = normalizeBranchRef(branch);
-  const gitApi = await _conn.getGitApi();
+  const gitApi = await target.conn.getGitApi();
   // Already exists? Adopt it (idempotent), don't fail or clobber.
   try {
-    const tip = await getBranchTip(_conn, branchRef);
+    const tip = await getBranchTip(target.conn, branchRef, target.repoId, target.project);
     if (tip) {
-      openAuthoringSession({ id: branchRef, repo: ADO_REPO, branch });
-      return { ok: true, repo: ADO_REPO, branch, branchRef, created: false, objectId: tip };
+      openAuthoringSession({ id: branchRef, repo: target.repo, branch });
+      return { ok: true, org: target.org, project: target.project, repo: target.repo, branch, branchRef, created: false, objectId: tip };
     }
   } catch { /* not found -> create below */ }
   // Resolve the base branch + its tip.
   let available = [];
   try {
-    const refs = await adoCall(() => gitApi.getRefs(ADO_REPO, ADO_PROJECT, "heads/"), { label: "getRefs" });
+    const refs = await adoCall(() => gitApi.getRefs(target.repoId, target.project, "heads/"), { label: "getRefs" });
     available = (refs || []).map((r) => String(r.name).replace("refs/heads/", ""));
   } catch (e) { return { ok: false, error: "failed to list branches: " + (e?.message || e) }; }
   const baseName = resolveBaseBranch(available, base);
   if (!baseName) return { ok: false, error: "could not resolve a base branch" + (base ? ` (requested '${base}')` : "") };
   let baseTip;
-  try { baseTip = await getBranchTip(_conn, normalizeBranchRef(baseName)); }
+  try { baseTip = await getBranchTip(target.conn, normalizeBranchRef(baseName), target.repoId, target.project); }
   catch (e) { return { ok: false, error: "failed to read base branch tip: " + (e?.message || e) }; }
   const refUpdate = buildCreateBranchRef({ branch, baseTip });
   let result;
-  try { result = await adoCall(() => gitApi.updateRefs([refUpdate], ADO_REPO, ADO_PROJECT), { label: "updateRefs" }); }
+  try { result = await adoCall(() => gitApi.updateRefs([refUpdate], target.repoId, target.project), { label: "updateRefs" }); }
   catch (e) { return { ok: false, error: "create branch failed: " + (e?.message || e) }; }
   const upd = Array.isArray(result) ? result[0] : result;
   if (upd && upd.success === false) return { ok: false, error: "create branch rejected: " + (upd.updateStatus || "unknown") };
-  openAuthoringSession({ id: branchRef, repo: ADO_REPO, branch });
-  return { ok: true, repo: ADO_REPO, branch, branchRef, base: baseName, created: true, objectId: baseTip };
+  openAuthoringSession({ id: branchRef, repo: target.repo, branch });
+  return { ok: true, org: target.org, project: target.project, repo: target.repo, branch, branchRef, base: baseName, created: true, objectId: baseTip };
 }
+
 // Session token authorises external (non-browser-same-origin) mutations.
 // Generated fresh per process and printed to stdout at startup.
 const _sessionToken = crypto.randomBytes(24).toString("base64url");

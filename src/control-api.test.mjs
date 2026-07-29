@@ -56,30 +56,32 @@ const specDrafts = createDraftStore({ onChange: () => focus.bumpVersion() });
 const specLocks = createLockStore({ ttlMs: 60_000 });
 
 // Clickstop 2 step 11: fake durable remote-draft store (in-memory) + push dep.
+// Scoped by (project,repo,branch) so a same-named repo in another project can't collide.
 const remoteDraftMap = new Map();
 const remoteSpecDrafts = {
   put(key, val, meta = {}) {
     if (val.path === "/fail/write.md") throw new Error("disk full"); // forced write failure
-    const rec = { repo: val.repo, branch: val.branch, path: val.path, body: val.body, baseObjectId: val.baseObjectId || null, updatedAt: "t", source: meta.source || "external" };
+    const rec = { project: val.project, repo: val.repo, branch: val.branch, path: val.path, body: val.body, baseObjectId: val.baseObjectId || null, updatedAt: "t", source: meta.source || "external" };
     remoteDraftMap.set(key, rec);
     return rec;
   },
   get(key) { return remoteDraftMap.get(key) || null; },
   delete(key) { return remoteDraftMap.delete(key); },
   list() { return Object.fromEntries(remoteDraftMap); },
-  forBranch(repo, branch) { return [...remoteDraftMap.values()].filter((d) => d.repo === repo && d.branch === branch); },
+  forBranch(project, repo, branch) { return [...remoteDraftMap.values()].filter((d) => d.project === project && d.repo === repo && d.branch === branch); },
 };
 const remoteSpecLocks = createKeyedLockStore({ ttlMs: 60_000 });
-const pushRemoteSpec = async ({ repo, branch, oldObjectId }) => {
+const pushRemoteSpec = async ({ project, repo, branch, oldObjectId }) => {
+  if (!project || !repo) return { ok: false, status: 400, body: { ok: false, error: "project, repo required" } };
   if (oldObjectId === "stale") return { ok: false, status: 409, body: { ok: false, error: "branch moved; re-stage" } };
-  const staged = remoteSpecDrafts.forBranch(repo, branch);
+  const staged = remoteSpecDrafts.forBranch(project, repo, branch);
   if (staged.length === 0) return { ok: false, status: 400, body: { ok: false, error: "nothing staged" } };
   const files = staged.map((d) => d.path);
-  for (const d of staged) remoteSpecDrafts.delete(`${repo}\n${branch}\n${d.path}`);
+  for (const d of staged) remoteSpecDrafts.delete(`${project}\n${repo}\n${branch}\n${d.path}`);
   return { ok: true, status: 200, body: { ok: true, commitId: "c1", pushedFiles: files } };
 };
 // Clickstop 2 step 12: fake open-PR dep. Echoes the request so the route
-// contract (never infers title/type) is observable.
+// contract (never infers title/type; explicit project/repo) is observable.
 let lastOpenPrArgs = null;
 const openPr = async (args) => {
   lastOpenPrArgs = args;
@@ -487,7 +489,7 @@ try {
   }
 
   // --- Remote (pre-PR) spec authoring (clickstop 2, step 11) ---
-  const RREPO = "MyRepo", RBRANCH = "spec/x";
+  const RPROJ = "Big Data", RREPO = "MyRepo", RBRANCH = "spec/x";
   {
     const r = await fetch(BASE + "/api/v1/specs/draft", { method: "PUT" });
     check("remote-draft: missing X-Tippani-Client -> 403", r.status === 403);
@@ -495,35 +497,37 @@ try {
   {
     const r = await fetch(BASE + "/api/v1/specs/draft", {
       method: "PUT", headers: { "X-Tippani-Client": "test", "Content-Type": "application/json" },
-      body: JSON.stringify({ repo: RREPO, branch: RBRANCH, path: "docs/spec.md", body: "x" }),
+      body: JSON.stringify({ project: RPROJ, repo: RREPO, branch: RBRANCH, path: "docs/spec.md", body: "x" }),
     });
     check("remote-draft: mutation without bearer -> 401", r.status === 401);
   }
   {
-    const r = await call("/api/v1/specs/draft", { method: "PUT", headers: authHeaders, body: { repo: RREPO, branch: RBRANCH } });
-    check("remote-draft: missing path -> 400", r.status === 400);
-    const r2 = await call("/api/v1/specs/draft", { method: "PUT", headers: authHeaders, body: { repo: RREPO, branch: RBRANCH, path: "docs/spec.md" } });
+    const r = await call("/api/v1/specs/draft", { method: "PUT", headers: authHeaders, body: { repo: RREPO, branch: RBRANCH, path: "docs/spec.md", body: "x" } });
+    check("remote-draft: missing project -> 400 (never guessed)", r.status === 400);
+    const r0 = await call("/api/v1/specs/draft", { method: "PUT", headers: authHeaders, body: { project: RPROJ, branch: RBRANCH } });
+    check("remote-draft: missing repo/path -> 400", r0.status === 400);
+    const r2 = await call("/api/v1/specs/draft", { method: "PUT", headers: authHeaders, body: { project: RPROJ, repo: RREPO, branch: RBRANCH, path: "docs/spec.md" } });
     check("remote-draft: non-string body -> 400", r2.status === 400);
   }
   {
     // Stage sets the draft; GET round-trips it.
-    const r = await call("/api/v1/specs/draft", { method: "PUT", headers: authHeaders, body: { repo: RREPO, branch: RBRANCH, path: "docs/spec.md", body: "# Spec\n\nhi", baseObjectId: "base1" } });
+    const r = await call("/api/v1/specs/draft", { method: "PUT", headers: authHeaders, body: { project: RPROJ, repo: RREPO, branch: RBRANCH, path: "docs/spec.md", body: "# Spec\n\nhi", baseObjectId: "base1" } });
     check("remote-draft: stage -> ok", r.status === 200 && r.body.ok === true && r.body.draft.body === "# Spec\n\nhi");
-    const g = await call(`/api/v1/specs/draft?repo=${RREPO}&branch=${RBRANCH}&path=docs/spec.md`, { headers: authHeaders });
+    const g = await call(`/api/v1/specs/draft?project=${encodeURIComponent(RPROJ)}&repo=${RREPO}&branch=${RBRANCH}&path=docs/spec.md`, { headers: authHeaders });
     check("remote-draft: GET round-trips the staged body", g.status === 200 && g.body.draft && g.body.draft.body === "# Spec\n\nhi");
   }
   {
     // Two-writer collision: while the user holds the file, an agent stage 409s;
     // the user's own mirror write bypasses the lock.
-    await call("/api/v1/specs/draft/lock", { method: "POST", headers: authHeaders, body: { repo: RREPO, branch: RBRANCH, path: "docs/lock.md" } });
-    const agent = await call("/api/v1/specs/draft", { method: "PUT", headers: authHeaders, body: { repo: RREPO, branch: RBRANCH, path: "docs/lock.md", body: "agent" } });
+    await call("/api/v1/specs/draft/lock", { method: "POST", headers: authHeaders, body: { project: RPROJ, repo: RREPO, branch: RBRANCH, path: "docs/lock.md" } });
+    const agent = await call("/api/v1/specs/draft", { method: "PUT", headers: authHeaders, body: { project: RPROJ, repo: RREPO, branch: RBRANCH, path: "docs/lock.md", body: "agent" } });
     check("remote-draft: agent-vs-user collision -> 409 (not a silent overwrite)", agent.status === 409);
-    const mirror = await call("/api/v1/specs/draft", { method: "PUT", headers: authHeaders, body: { repo: RREPO, branch: RBRANCH, path: "docs/lock.md", body: "user", source: "user-mirror" } });
+    const mirror = await call("/api/v1/specs/draft", { method: "PUT", headers: authHeaders, body: { project: RPROJ, repo: RREPO, branch: RBRANCH, path: "docs/lock.md", body: "user", source: "user-mirror" } });
     check("remote-draft: user-mirror bypasses the lock", mirror.status === 200);
   }
   {
     // A forced store write failure returns {ok:false} (no false success).
-    const r = await call("/api/v1/specs/draft", { method: "PUT", headers: authHeaders, body: { repo: RREPO, branch: RBRANCH, path: "/fail/write.md", body: "x" } });
+    const r = await call("/api/v1/specs/draft", { method: "PUT", headers: authHeaders, body: { project: RPROJ, repo: RREPO, branch: RBRANCH, path: "/fail/write.md", body: "x" } });
     check("remote-draft: write failure -> {ok:false}", r.status === 500 && r.body.ok === false);
   }
   {
@@ -536,16 +540,18 @@ try {
   {
     // Multi-file push is one call (all-or-nothing): stage a second file on the
     // same branch, push -> both land in a single push.
-    await call("/api/v1/specs/draft", { method: "PUT", headers: authHeaders, body: { repo: RREPO, branch: RBRANCH, path: "docs/two.md", body: "second" } });
+    await call("/api/v1/specs/draft", { method: "PUT", headers: authHeaders, body: { project: RPROJ, repo: RREPO, branch: RBRANCH, path: "docs/two.md", body: "second" } });
     const staged = (await call("/api/v1/state?full=1", { headers: authHeaders })).body.remoteSpecDrafts;
     check("remote-draft: two files staged on the branch", Object.keys(staged).length >= 2);
-    const push = await call("/api/v1/specs/draft/push", { method: "POST", headers: authHeaders, body: { repo: RREPO, branch: RBRANCH, message: "Add specs" } });
+    const noProj = await call("/api/v1/specs/draft/push", { method: "POST", headers: authHeaders, body: { repo: RREPO, branch: RBRANCH } });
+    check("remote-draft: push without project -> 400 (never guessed)", noProj.status === 400);
+    const push = await call("/api/v1/specs/draft/push", { method: "POST", headers: authHeaders, body: { project: RPROJ, repo: RREPO, branch: RBRANCH, message: "Add specs" } });
     check("remote-draft: push -> ok, all files in one commit", push.status === 200 && push.body.ok === true && push.body.pushedFiles.length >= 2 && !!push.body.commitId);
   }
   {
     // Stale oldObjectId -> 409 (someone moved the branch), not a lost write.
-    await call("/api/v1/specs/draft", { method: "PUT", headers: authHeaders, body: { repo: RREPO, branch: RBRANCH, path: "docs/stale.md", body: "z" } });
-    const push = await call("/api/v1/specs/draft/push", { method: "POST", headers: authHeaders, body: { repo: RREPO, branch: RBRANCH, oldObjectId: "stale" } });
+    await call("/api/v1/specs/draft", { method: "PUT", headers: authHeaders, body: { project: RPROJ, repo: RREPO, branch: RBRANCH, path: "docs/stale.md", body: "z" } });
+    const push = await call("/api/v1/specs/draft/push", { method: "POST", headers: authHeaders, body: { project: RPROJ, repo: RREPO, branch: RBRANCH, oldObjectId: "stale" } });
     check("remote-draft: stale oldObjectId -> 409", push.status === 409 && push.body.ok === false);
   }
 
@@ -562,21 +568,23 @@ try {
     check("pr-open: mutation without bearer -> 401", r.status === 401);
   }
   {
-    const r = await call("/api/v1/pr/open", { method: "POST", headers: authHeaders, body: { sourceBranch: "a", targetBranch: "b" } });
+    const r = await call("/api/v1/pr/open", { method: "POST", headers: authHeaders, body: { project: "Big Data", repo: "MyRepo", sourceBranch: "a", targetBranch: "b" } });
     check("pr-open: missing title -> 400", r.status === 400);
+    const rp = await call("/api/v1/pr/open", { method: "POST", headers: authHeaders, body: { title: "t", sourceBranch: "a", targetBranch: "b" } });
+    check("pr-open: missing project/repo -> 400 (never guessed)", rp.status === 400);
   }
   {
     // A work item requires an explicit type — the route never infers it.
-    const r = await call("/api/v1/pr/open", { method: "POST", headers: authHeaders, body: { title: "t", sourceBranch: "a", targetBranch: "b", workItemTitle: "Spec review" } });
+    const r = await call("/api/v1/pr/open", { method: "POST", headers: authHeaders, body: { project: "Big Data", repo: "MyRepo", title: "t", sourceBranch: "a", targetBranch: "b", workItemTitle: "Spec review" } });
     check("pr-open: workItemTitle without type -> 400 (never inferred)", r.status === 400);
   }
   {
-    const r = await call("/api/v1/pr/open", { method: "POST", headers: authHeaders, body: { title: "Add spec", sourceBranch: "spec/x", targetBranch: "main", isDraft: true, workItemTitle: "Spec review", workItemType: "Task" } });
+    const r = await call("/api/v1/pr/open", { method: "POST", headers: authHeaders, body: { project: "Big Data", repo: "MyRepo", title: "Add spec", sourceBranch: "spec/x", targetBranch: "main", isDraft: true, workItemTitle: "Spec review", workItemType: "Task" } });
     check("pr-open: valid -> PR opened + work item linked", r.status === 200 && r.body.ok === true && r.body.pullRequestId === 77 && r.body.workItemId === 88 && r.body.linked === true);
-    check("pr-open: forwarded the caller's title/type (not inferred)", lastOpenPrArgs.title === "Add spec" && lastOpenPrArgs.workItemType === "Task");
+    check("pr-open: forwarded the caller's title/type + repo (not inferred)", lastOpenPrArgs.title === "Add spec" && lastOpenPrArgs.workItemType === "Task" && lastOpenPrArgs.repo === "MyRepo");
   }
   {
-    const r = await call("/api/v1/pr/open", { method: "POST", headers: authHeaders, body: { title: "boom", sourceBranch: "a", targetBranch: "b" } });
+    const r = await call("/api/v1/pr/open", { method: "POST", headers: authHeaders, body: { project: "Big Data", repo: "MyRepo", title: "boom", sourceBranch: "a", targetBranch: "b" } });
     check("pr-open: ADO failure -> 502 + ok:false", r.status === 502 && r.body.ok === false);
   }
 

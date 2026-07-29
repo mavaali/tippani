@@ -724,61 +724,72 @@ export function buildTools(http, session) {
     {
       name: "create_branch",
       description:
-        "Create (or adopt) a branch to author a spec on. Resolves a base branch " +
+        "Create (or adopt) a branch to author a spec on, in an EXPLICIT project + " +
+        "repo (Tippani never guesses the repo). Resolves a base branch " +
         "(main/master/develop/trunk unless you pass one) and returns the new " +
         "branch and its tip. Idempotent: an existing branch is adopted, not " +
         "re-created. " + NEVER_RAW_RULE,
       inputSchema: {
+        project: z.string().describe("ADO project name (required — the write target)"),
+        repo: z.string().describe("ADO repository name (required — the write target)"),
         branch: z.string().describe("Branch name to create/adopt, e.g. spec/my-feature"),
         base: z.string().optional().describe("Base branch to fork from (defaults to main/master/develop/trunk)"),
+        org: z.string().optional().describe("ADO org URL (defaults to the configured org)"),
       },
-      handler: async ({ branch, base }) => {
-        const r = await ensuredPost("/api/v1/spec/create-branch", { branch, base });
+      handler: async ({ org, project, repo, branch, base }) => {
+        const r = await ensuredPost("/api/v1/spec/create-branch", { org, project, repo, branch, base });
         return withHints("create_branch", r, { repo: r.repo, branch: r.branch, path: null });
       },
     },
     {
       name: "stage_spec",
       description:
-        "Stage a whole-file spec markdown draft for (repo, branch, path). The " +
-        "draft is written durably but NOT committed — call push_spec to commit. " +
+        "Stage a whole-file spec markdown draft for (project, repo, branch, path). " +
+        "The draft is written durably but NOT committed — call push_spec to commit. " +
         "Collides with a 409 if the user is editing the same file. " + NEVER_RAW_RULE,
       inputSchema: {
-        repo: z.string().describe("Repository name"),
+        project: z.string().describe("ADO project name (required — the write target)"),
+        repo: z.string().describe("ADO repository name (required — the write target)"),
         branch: z.string().describe("Branch to author on (from create_branch)"),
         path: z.string().describe("Spec file path within the repo, e.g. docs/spec.md"),
         body: z.string().describe("Full markdown body of the spec"),
         baseObjectId: z.string().optional().describe("Object id the draft is based on (set for an existing file; omit for a new file)"),
+        org: z.string().optional().describe("ADO org URL (defaults to the configured org)"),
       },
-      handler: async ({ repo, branch, path, body, baseObjectId }) => {
-        const r = await ensuredPut("/api/v1/specs/draft", { repo, branch, path, body, baseObjectId });
+      handler: async ({ org, project, repo, branch, path, body, baseObjectId }) => {
+        const r = await ensuredPut("/api/v1/specs/draft", { org, project, repo, branch, path, body, baseObjectId });
         return withHints("stage_spec", r, { repo, branch, path });
       },
     },
     {
       name: "push_spec",
       description:
-        "Commit EVERY staged draft for (repo, branch) as one all-or-nothing " +
-        "commit. Fails with 409 if the branch moved since you staged (re-stage " +
-        "against the new tip). " + NEVER_RAW_RULE,
+        "Commit EVERY staged draft for (project, repo, branch) as one " +
+        "all-or-nothing commit. Fails with 409 if the branch moved since you " +
+        "staged (re-stage against the new tip). " + NEVER_RAW_RULE,
       inputSchema: {
-        repo: z.string().describe("Repository name"),
+        project: z.string().describe("ADO project name (required — the write target)"),
+        repo: z.string().describe("ADO repository name (required — the write target)"),
         branch: z.string().describe("Branch to commit to"),
         message: z.string().optional().describe("Commit message"),
         oldObjectId: z.string().optional().describe("Branch tip you staged against, for optimistic concurrency"),
+        org: z.string().optional().describe("ADO org URL (defaults to the configured org)"),
       },
-      handler: async ({ repo, branch, message, oldObjectId }) => {
-        const r = await ensuredPost("/api/v1/specs/draft/push", { repo, branch, message, oldObjectId });
+      handler: async ({ org, project, repo, branch, message, oldObjectId }) => {
+        const r = await ensuredPost("/api/v1/specs/draft/push", { org, project, repo, branch, message, oldObjectId });
         return withHints("push_spec", r, { repo, branch, path: null });
       },
     },
     {
       name: "create_spec_pr",
       description:
-        "Open a pull request for the authored branch and find-or-create-and-link " +
-        "a Spec review work item. Title and work-item type are yours to supply — " +
-        "Tippani never infers them. " + NEVER_RAW_RULE,
+        "Open a pull request for the authored branch (in an EXPLICIT project + " +
+        "repo — Tippani never guesses the repo) and find-or-create-and-link a Spec " +
+        "review work item. Title and work-item type are yours to supply — Tippani " +
+        "never infers them. " + NEVER_RAW_RULE,
       inputSchema: {
+        project: z.string().describe("ADO project name (required — the write target)"),
+        repo: z.string().describe("ADO repository name (required — the write target)"),
         title: z.string().describe("PR title (never inferred)"),
         sourceBranch: z.string().describe("Branch to merge from (the authored branch)"),
         targetBranch: z.string().describe("Branch to merge into, e.g. main"),
@@ -786,6 +797,7 @@ export function buildTools(http, session) {
         isDraft: z.boolean().optional().describe("Open as a draft PR (default true)"),
         workItemTitle: z.string().optional().describe("Spec review work item title to find or create"),
         workItemType: z.string().optional().describe("Work item type (required when workItemTitle is set; never inferred)"),
+        org: z.string().optional().describe("ADO org URL (defaults to the configured org)"),
       },
       handler: async (args) => {
         const r = await ensuredPost("/api/v1/pr/open", args);
