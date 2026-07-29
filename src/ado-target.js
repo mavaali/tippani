@@ -8,9 +8,10 @@
 // explicitly. This module validates + normalizes those coordinates; index.js
 // resolves them to a live {conn, repoId, projectId} via getRepository.
 //
-// The rule: `project` and `repo` are REQUIRED for a write (a missing one is an
-// error, not a guess). `org` defaults to the configured ADO org. There is NO
-// fallback to the configured default repo for a write.
+// The rule: `org`, `project`, AND `repo` are ALL REQUIRED for a write (a missing
+// one is an error, not a guess). A write NEVER inherits a configured default for
+// any coordinate — the saved config org/project/repo apply ONLY to PR review
+// (open a PR by id, list PRs), never to an authoring write.
 
 export class WriteTargetError extends Error {
   constructor(message) { super(message); this.name = "WriteTargetError"; this.code = "WRITE_TARGET"; }
@@ -23,15 +24,15 @@ function normalizeOrg(org) {
 }
 
 /** Validate + normalize explicit write coordinates. Throws WriteTargetError when
- *  project or repo is missing (never falls back to a configured default repo).
- *  `org` defaults to defaultOrg (the configured ADO org) when omitted. */
-export function resolveWriteTarget({ org, project, repo } = {}, { defaultOrg } = {}) {
+ *  ANY of org / project / repo is missing — a write never inherits a configured
+ *  default for any coordinate (defaults are for PR review only). */
+export function resolveWriteTarget({ org, project, repo } = {}) {
+  const org2 = normalizeOrg(org);
   const project2 = typeof project === "string" ? project.trim() : "";
   const repo2 = typeof repo === "string" ? repo.trim() : "";
-  if (!project2) throw new WriteTargetError("project is required for a write (Tippani never guesses the repo)");
-  if (!repo2) throw new WriteTargetError("repo is required for a write (Tippani never guesses the repo)");
-  const org2 = normalizeOrg(org) || normalizeOrg(defaultOrg);
-  if (!org2) throw new WriteTargetError("no ADO org configured and none provided");
+  if (!org2) throw new WriteTargetError("org is required for a write (defaults apply only to PR review, never to a write)");
+  if (!project2) throw new WriteTargetError("project is required for a write (Tippani never guesses the target)");
+  if (!repo2) throw new WriteTargetError("repo is required for a write (Tippani never guesses the target)");
   return { org: org2, project: project2, repo: repo2 };
 }
 

@@ -47,9 +47,11 @@ import { buildPushChangeSet } from "./push-changeset.js";
 import { adoCall } from "./ado-call.js";
 import { buildCreateBranchRef, resolveBaseBranch, normalizeBranchRef } from "./ado-refs.js";
 import { resolveWriteTarget, draftKeyOf } from "./ado-target.js";
+import { selectAdoAuthSource } from "./ado-auth-source.js";
 import { makeRepoSession, createSessionTokens } from "./repo-session.js";
 import { saveSpecDraft, loadSpecDraft, deleteSpecDraft } from "./spec-draft-store.js";
 import { openSpecReviewPr } from "./pr-open.js";
+import { specSearchUnavailableMessage } from "./spec-search-error.js";
 import {
   decodeConfigValue,
   extOf,
@@ -4910,6 +4912,14 @@ let _conn, _pr, _prId, _branch, _changedFiles, _otherChangedFiles = [], _cache, 
 let _browseMode = false;
 let _adoToken = null;
 
+// True when the embedding host injected an ADO token at spawn (--ado-token /
+// TIPPANI_ADO_TOKEN). In host-token mode tippani NEVER switches to another
+// identity (saved PAT / az CLI / Git Credential Manager) — a provided token that
+// later expires must be REFRESHED by the host (POST /api/v1/ado-token), never
+// silently swapped for whatever a CLI is signed into. Standalone mode (no host
+// token) keeps the tokenless CLI/PAT fallback chain.
+let HOST_TOKEN_MODE = false;
+
 // Swap the live ADO bearer token at runtime. Coforce is the token authority and
 // pushes a freshly-minted token here (POST /api/v1/ado-token) before the old one
 // expires, so a long-lived portal never makes ADO calls with a stale token.
@@ -4999,22 +5009,28 @@ const _remoteSpecDrafts = {
 
 // Build an ADO connection for an org. Reuses the live review connection when the
 // org matches (or none is given); otherwise builds one for that org with the
-// same credentials, so a write can target a repo in a different org.
+// same credentials, so a write can target a repo in a different org. Honors the
+// host-token invariant: in host-token mode it uses the live bearer or nothing —
+// it never falls back to a PAT/CLI identity (selectAdoAuthSource enforces this).
 function buildConnForOrg(org) {
   if ((!org || org === ADO_ORG) && _conn) return _conn;
-  if (_adoToken) return new azdev.WebApi(org, azdev.getBearerHandler(_adoToken));
-  const pat = loadPat();
-  if (pat) return new azdev.WebApi(org, azdev.getPersonalAccessTokenHandler(pat));
-  return null;
+  // Only consult a saved PAT in standalone mode; in host-token mode a missing
+  // live token must fail, not switch identity.
+  const pat = HOST_TOKEN_MODE ? null : loadPat();
+  const sel = selectAdoAuthSource({ hostTokenMode: HOST_TOKEN_MODE, token: _adoToken, pat });
+  if (sel.source === "token") return new azdev.WebApi(org, azdev.getBearerHandler(sel.token));
+  if (sel.source === "pat") return new azdev.WebApi(org, azdev.getPersonalAccessTokenHandler(sel.pat));
+  return null; // "none" (host token gone — never switch) or "cli" (no minting here)
 }
 
-// Resolve explicit write coordinates to a live per-call target. `project`+`repo`
-// are REQUIRED (resolveWriteTarget throws otherwise — a write never guesses the
-// repo); `org` defaults to the configured org. Resolves the repo to its GUID via
-// getRepository so downstream calls are unambiguous. NEVER reads ADO_REPO/
-// ADO_PROJECT — the review globals play no part in an authoring write.
+// Resolve explicit write coordinates to a live per-call target. `org`, `project`,
+// AND `repo` are ALL REQUIRED (resolveWriteTarget throws otherwise — a write
+// never guesses any coordinate); NONE default to the configured org/project/repo,
+// which apply only to PR review. Resolves the repo to its GUID via getRepository
+// so downstream calls are unambiguous. NEVER reads ADO_ORG/ADO_REPO/ADO_PROJECT —
+// the review globals play no part in an authoring write.
 async function resolveTarget({ org, project, repo } = {}) {
-  const t = resolveWriteTarget({ org, project, repo }, { defaultOrg: ADO_ORG });
+  const t = resolveWriteTarget({ org, project, repo });
   const conn = buildConnForOrg(t.org);
   if (!conn) { const e = new Error("no ADO connection for " + t.org); e.noConn = true; throw e; }
   const gitApi = await conn.getGitApi();
@@ -5206,6 +5222,14 @@ async function main() {
   if (Number.isFinite(portVal) && portVal > 0) PORT = portVal;
   const headless = args.includes("--headless") || process.env.TIPPANI_HEADLESS === "1";
   const adoToken = (args.find(a => a.startsWith("--ado-token="))?.split("=").slice(1).join("=")) || process.env.TIPPANI_ADO_TOKEN || null;
+
+  // Host-token mode: the embedding host injected a token. Latch it so the auth
+  // path never switches to a PAT/CLI identity later (a stale token gets refreshed
+  // via POST /api/v1/ado-token, not swapped). Seed _adoToken from it so a write
+  // to a NON-default org can build a connection off the provided token — startup
+  // otherwise only binds the default-org _conn.
+  HOST_TOKEN_MODE = !!(adoToken && adoToken.trim());
+  if (HOST_TOKEN_MODE) _adoToken = adoToken;
 
   // Browse mode (item 6): a PR-less portal that only lists pull requests
   // (/prs + /api/v1/prs), so list_prs works before any PR is opened. Reads
@@ -6043,8 +6067,18 @@ async function main() {
       const resp = await _conn.rest.create(url, body);
       result = resp && resp.result;
     } catch (e) {
-      console.error("Spec search failed:", friendlyAdoError(e, "Spec search"));
-      return { specs: [], project: proj, error: "Spec search failed. Check the server console." };
+      // search_specs relies on ADO Code Search (almsearch.dev.azure.com), a
+      // per-org extension. A brand-new org without it provisioned fails here
+      // even though Git-based reads (open_branch, open_branch_file) work fine.
+      // Surface the true cause + the Code Search hint instead of a generic
+      // "check the server console" so the caller (and the model) can act.
+      const detail = friendlyAdoError(e, "Spec search");
+      console.error("Spec search failed:", detail);
+      return {
+        specs: [],
+        project: proj,
+        error: specSearchUnavailableMessage(detail, ADO_ORG),
+      };
     }
     const hits = (result && result.results) || [];
     const seen = new Set();

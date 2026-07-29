@@ -8,28 +8,29 @@ function threw(name, fn, code) { let e = null; try { fn(); } catch (x) { e = x; 
 
 const ORG = "https://dev.azure.com/powerbi";
 
-// Happy path: explicit project + repo; org defaults to the configured org.
-eq("resolves with default org",
-  resolveWriteTarget({ project: "Big Data", repo: "sandbox" }, { defaultOrg: ORG }),
+// Happy path: ALL three coordinates explicit; org is normalized (https prefix).
+eq("resolves with all coords explicit",
+  resolveWriteTarget({ org: ORG, project: "Big Data", repo: "sandbox" }),
   { org: ORG, project: "Big Data", repo: "sandbox" });
 
-// org override is honored + normalized (https + trailing slash stripped).
-eq("org override normalized",
-  resolveWriteTarget({ org: "dev.azure.com/other/", project: "P", repo: "R" }, { defaultOrg: ORG }),
+// org is honored + normalized (https + trailing slash stripped).
+eq("org normalized",
+  resolveWriteTarget({ org: "dev.azure.com/other/", project: "P", repo: "R" }),
   { org: "https://dev.azure.com/other", project: "P", repo: "R" });
 
-// A WRITE never guesses the repo/project.
-threw("missing project throws WriteTargetError", () => resolveWriteTarget({ repo: "R" }, { defaultOrg: ORG }), "WRITE_TARGET");
-threw("missing repo throws WriteTargetError", () => resolveWriteTarget({ project: "P" }, { defaultOrg: ORG }), "WRITE_TARGET");
-threw("blank project throws", () => resolveWriteTarget({ project: "   ", repo: "R" }, { defaultOrg: ORG }));
-threw("no org anywhere throws", () => resolveWriteTarget({ project: "P", repo: "R" }, {}));
-ok("error is a WriteTargetError instance", (() => { try { resolveWriteTarget({}, { defaultOrg: ORG }); } catch (e) { return e instanceof WriteTargetError; } })());
+// A WRITE never guesses ANY coordinate — org, project, and repo are all required.
+threw("missing org throws WriteTargetError", () => resolveWriteTarget({ project: "P", repo: "R" }), "WRITE_TARGET");
+threw("missing project throws WriteTargetError", () => resolveWriteTarget({ org: ORG, repo: "R" }), "WRITE_TARGET");
+threw("missing repo throws WriteTargetError", () => resolveWriteTarget({ org: ORG, project: "P" }), "WRITE_TARGET");
+threw("blank org throws", () => resolveWriteTarget({ org: "   ", project: "P", repo: "R" }));
+threw("blank project throws", () => resolveWriteTarget({ org: ORG, project: "   ", repo: "R" }));
+ok("error is a WriteTargetError instance", (() => { try { resolveWriteTarget({}); } catch (e) { return e instanceof WriteTargetError; } })());
 
-// No silent fallback: passing only defaultOrg + nothing else must NOT invent a repo.
-threw("empty coords never fall back to a default repo", () => resolveWriteTarget({}, { defaultOrg: ORG }));
+// No silent fallback: an empty coordinate set must NOT invent an org/project/repo.
+threw("empty coords never fall back to any default", () => resolveWriteTarget({}));
 
-// trims whitespace on project/repo
-eq("trims project/repo", resolveWriteTarget({ project: " P ", repo: " R " }, { defaultOrg: ORG }), { org: ORG, project: "P", repo: "R" });
+// trims whitespace on all coordinates
+eq("trims coords", resolveWriteTarget({ org: " " + ORG + " ", project: " P ", repo: " R " }), { org: ORG, project: "P", repo: "R" });
 
 // draftKeyOf is project+repo+branch+path scoped and stable.
 eq("draft key composes project/repo/branch/path", draftKeyOf({ project: "P", repo: "R", branch: "b", path: "docs/x.md" }), "P\nR\nb\ndocs/x.md");

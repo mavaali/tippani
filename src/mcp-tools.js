@@ -734,7 +734,7 @@ export function buildTools(http, session) {
         repo: z.string().describe("ADO repository name (required — the write target)"),
         branch: z.string().describe("Branch name to create/adopt, e.g. spec/my-feature"),
         base: z.string().optional().describe("Base branch to fork from (defaults to main/master/develop/trunk)"),
-        org: z.string().optional().describe("ADO org URL (defaults to the configured org)"),
+        org: z.string().describe("ADO org URL (required — the write target; config defaults are for PR review only, never a write)"),
       },
       handler: async ({ org, project, repo, branch, base }) => {
         const r = await ensuredPost("/api/v1/spec/create-branch", { org, project, repo, branch, base });
@@ -754,7 +754,7 @@ export function buildTools(http, session) {
         path: z.string().describe("Spec file path within the repo, e.g. docs/spec.md"),
         body: z.string().describe("Full markdown body of the spec"),
         baseObjectId: z.string().optional().describe("Object id the draft is based on (set for an existing file; omit for a new file)"),
-        org: z.string().optional().describe("ADO org URL (defaults to the configured org)"),
+        org: z.string().describe("ADO org URL (required — the write target; config defaults are for PR review only, never a write)"),
       },
       handler: async ({ org, project, repo, branch, path, body, baseObjectId }) => {
         const r = await ensuredPut("/api/v1/specs/draft", { org, project, repo, branch, path, body, baseObjectId });
@@ -773,7 +773,7 @@ export function buildTools(http, session) {
         branch: z.string().describe("Branch to commit to"),
         message: z.string().optional().describe("Commit message"),
         oldObjectId: z.string().optional().describe("Branch tip you staged against, for optimistic concurrency"),
-        org: z.string().optional().describe("ADO org URL (defaults to the configured org)"),
+        org: z.string().describe("ADO org URL (required — the write target; config defaults are for PR review only, never a write)"),
       },
       handler: async ({ org, project, repo, branch, message, oldObjectId }) => {
         const r = await ensuredPost("/api/v1/specs/draft/push", { org, project, repo, branch, message, oldObjectId });
@@ -797,7 +797,7 @@ export function buildTools(http, session) {
         isDraft: z.boolean().optional().describe("Open as a draft PR (default true)"),
         workItemTitle: z.string().optional().describe("Spec review work item title to find or create"),
         workItemType: z.string().optional().describe("Work item type (required when workItemTitle is set; never inferred)"),
-        org: z.string().optional().describe("ADO org URL (defaults to the configured org)"),
+        org: z.string().describe("ADO org URL (required — the write target; config defaults are for PR review only, never a write)"),
       },
       handler: async (args) => {
         const r = await ensuredPost("/api/v1/pr/open", args);
