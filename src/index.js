@@ -54,6 +54,7 @@ import { saveSpecDraft, loadSpecDraft, deleteSpecDraft } from "./spec-draft-stor
 import { openSpecReviewPr } from "./pr-open.js";
 import { specSearchUnavailableMessage } from "./spec-search-error.js";
 import { prContentVersion, toVersionDescriptor, adoErrorInContent } from "./pr-version.js";
+import { renderCrumbBar, renderBrand } from "./breadcrumb.js";
 import {
   decodeConfigValue,
   extOf,
@@ -105,6 +106,9 @@ function getConfig() {
 
 // Resolved at startup
 let ADO_ORG, ADO_PROJECT, ADO_REPO;
+// Human-readable name for ADO_PROJECT (which applyRepoContextFromPR may re-point
+// to a project GUID). Resolved by listAdoProjects so the picker never shows a GUID.
+let _adoProjectDisplayName = null;
 // The current LOCAL repo path (Branches "Local" mode). Settable via the
 // --local-repo CLI arg, TIPPANI_LOCAL_REPO env, or POST /api/v1/local-repo (MCP).
 // Injected into the Discovery page so the Repo box shows the full path.
@@ -335,16 +339,24 @@ async function listOrgPullRequests(conn, criteria, top = 50) {
 // Returns a sorted, deduped array of project names with the configured project
 // guaranteed present. Best-effort: on any failure, falls back to just the
 // configured project so the UI still renders.
+const _isGuid = (s) => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(String(s || ""));
+
 async function listAdoProjects(conn) {
   try {
     const coreApi = await conn.getCoreApi();
     const projects = await coreApi.getProjects();
     const names = (projects || []).map((p) => p && p.name).filter(Boolean);
-    if (ADO_PROJECT && !names.includes(ADO_PROJECT)) names.push(ADO_PROJECT);
-    return [...new Set(names)].sort((a, b) => a.localeCompare(b));
+    // ADO_PROJECT may have been re-pointed to a project GUID by
+    // applyRepoContextFromPR. Resolve it back to a human name so the picker
+    // preselects the right project and NEVER lists a raw GUID.
+    _adoProjectDisplayName = _isGuid(ADO_PROJECT)
+      ? ((projects || []).find((p) => p && String(p.id || "").toLowerCase() === String(ADO_PROJECT).toLowerCase())?.name || null)
+      : (ADO_PROJECT || null);
+    if (_adoProjectDisplayName && !names.includes(_adoProjectDisplayName)) names.push(_adoProjectDisplayName);
+    return [...new Set(names.filter((n) => !_isGuid(n)))].sort((a, b) => a.localeCompare(b));
   } catch (e) {
     console.error("listAdoProjects failed:", e.message);
-    return ADO_PROJECT ? [ADO_PROJECT] : [];
+    return (ADO_PROJECT && !_isGuid(ADO_PROJECT)) ? [ADO_PROJECT] : [];
   }
 }
 
@@ -967,7 +979,7 @@ function buildPickerPage(pr, changedFiles, threads = []) {
   const prTitle = escHtml(pr.title || "Pull Request");
   const author = escHtml(pr.createdBy?.displayName || "Unknown");
   const prId = pr.pullRequestId;
-  const descExcerpt = escHtml(stripMarkdown((pr.description || "").slice(0, 300)).slice(0, 200));
+  const descFull = escHtml(stripMarkdown(pr.description || "").trim());
   const openThreadCount = (threads || []).filter(
     (t) => (t.comments?.length || 0) > 0 && !(t.status === 2 || t.status === 4)).length;
 
@@ -1010,11 +1022,13 @@ body { font-family: "Segoe UI", Aptos, Calibri, -apple-system, BlinkMacSystemFon
 
 .container { width: 100%; max-width: 720px; }
 
-.pr-card { background: var(--cp-surface); border: 1px solid var(--cp-border); border-radius: 16px; padding: 24px; margin-bottom: 24px; box-shadow: var(--cp-shadow); }
-.pr-card h1 { font-size: 20px; font-weight: 700; margin-bottom: 6px; }
-.pr-meta { font-size: 13px; color: var(--cp-text-muted); display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.pr-card { padding: 0; margin-bottom: 24px; text-align: center; }
+.pr-card h1 { font-size: 19px; font-weight: 700; margin-bottom: 6px; text-align: center; }
+.pr-meta { font-size: 13px; color: var(--cp-text-muted); display: flex; align-items: center; justify-content: center; gap: 8px; flex-wrap: wrap; }
 .pr-meta .pr-badge { display: inline-block; padding: 2px 10px; border-radius: 99px; font-size: 11px; font-weight: 600; background: var(--cp-accent-soft); color: var(--cp-accent); }
-.pr-desc { margin-top: 12px; font-size: 13px; color: var(--cp-text-soft); line-height: 1.5; }
+.pr-desc { margin-top: 6px; font-size: 13px; color: var(--cp-text-muted); line-height: 1.5; text-align: center; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.pr-desc.expanded { -webkit-line-clamp: unset; overflow: visible; }
+.pr-desc-toggle { margin-top: 4px; background: none; border: none; color: var(--cp-accent); cursor: pointer; font-size: 12px; font-weight: 600; }
 
 .section-label { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; color: var(--cp-text-muted); margin-bottom: 12px; }
 
@@ -1036,10 +1050,7 @@ body { font-family: "Segoe UI", Aptos, Calibri, -apple-system, BlinkMacSystemFon
 <\/script>
 </head>
 <body>
-  <div class="brand-bar">
-    <div class="logo">FS</div>
-    <span class="brand-text">Tippani</span><span class="brand-text-sub"> · read · annotate · edit</span>
-  </div>
+  ${renderCrumbBar([{ label: "Home", href: "/discovery" }, { label: `PR #${prId}` }], { padTop: 48, padX: 24, right: renderBrand("read · annotate · edit") })}
   <div class="container">
     <div class="pr-card">
       <h1>${prTitle}</h1>
@@ -1048,7 +1059,10 @@ body { font-family: "Segoe UI", Aptos, Calibri, -apple-system, BlinkMacSystemFon
         <span>by ${author}</span>
         <span>· ${changedFiles.length} file${changedFiles.length !== 1 ? "s" : ""} changed</span>
       </div>
-      ${descExcerpt ? `<div class="pr-desc">${descExcerpt}</div>` : ""}
+      ${descFull ? `<div class="pr-desc-wrap">
+        <div class="pr-desc" id="prDesc">${descFull}</div>
+        <button type="button" class="pr-desc-toggle" id="prDescToggle" hidden>Show more</button>
+      </div>` : ""}
     </div>
     <div class="section-label">Feedback</div>
     <div class="file-list" style="margin-bottom: 24px;">
@@ -1066,6 +1080,19 @@ body { font-family: "Segoe UI", Aptos, Calibri, -apple-system, BlinkMacSystemFon
       ${fileCardsHtml}
     </div>
   </div>
+  <script>
+    (function () {
+      var d = document.getElementById('prDesc'), b = document.getElementById('prDescToggle');
+      if (!d || !b) return;
+      if (d.scrollHeight - d.clientHeight > 2) {
+        b.hidden = false;
+        b.addEventListener('click', function () {
+          var ex = d.classList.toggle('expanded');
+          b.textContent = ex ? 'Show less' : 'Show more';
+        });
+      }
+    })();
+  <\/script>
 ${NAV_WATCHER}
 </body>
 </html>`;
@@ -1168,10 +1195,10 @@ body { font-family: "Segoe UI", Aptos, Calibri, -apple-system, BlinkMacSystemFon
 .brand-text { font-size: 15px; font-weight: 600; }
 .brand-text-sub { font-size: 13px; font-weight: 400; color: var(--cp-text-muted); }
 .container { width: 100%; max-width: 760px; }
-.fb-head { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 6px; }
+.fb-head { display: flex; align-items: baseline; justify-content: center; margin-bottom: 6px; }
 .fb-head h1 { font-size: 19px; font-weight: 700; }
 .back { font-size: 13px; color: var(--cp-accent); text-decoration: none; }
-.fb-sub { font-size: 13px; color: var(--cp-text-muted); margin-bottom: 20px; }
+.fb-sub { font-size: 13px; color: var(--cp-text-muted); margin-bottom: 20px; text-align: center; }
 .fb-list { display: flex; flex-direction: column; gap: 8px; }
 .fb-filters { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-bottom: 14px; }
 .fb-chip-group { display: inline-flex; gap: 4px; flex-wrap: wrap; }
@@ -1244,14 +1271,10 @@ body { font-family: "Segoe UI", Aptos, Calibri, -apple-system, BlinkMacSystemFon
 <\/script>
 </head>
 <body>
-  <div class="brand-bar">
-    <div class="logo">FS</div>
-    <span class="brand-text">Tippani</span><span class="brand-text-sub"> · feedback</span>
-  </div>
+  ${renderCrumbBar([{ label: "Home", href: "/discovery" }, { label: `PR #${prId}`, href: "/" }, { label: "Feedback" }], { padTop: 48, padX: 24, right: renderBrand("feedback") })}
   <div class="container">
     <div class="fb-head">
       <h1>Feedback — ${prTitle}</h1>
-      <a class="back" href="/">← PR overview</a>
     </div>
     <div class="fb-sub">PR #${prId} · ${openCount} open thread${openCount !== 1 ? "s" : ""}${needCount ? ` · ${needCount} need${needCount !== 1 ? "" : "s"} your reply` : ""}</div>
     ${viewedWarning(viewedError)}
@@ -1290,8 +1313,8 @@ body { font-family: "Segoe UI", Aptos, Calibri, -apple-system, sans-serif; backg
 .container { width: 100%; max-width: 820px; }
 .brand-bar { display: flex; align-items: center; gap: 10px; margin-bottom: 20px; }
 .logo { width: 32px; height: 32px; border-radius: 8px; background: var(--cp-accent); display: flex; align-items: center; justify-content: center; color: var(--cp-accent-fg); font-weight: 700; font-size: 12px; }
-h1 { font-size: 19px; font-weight: 700; margin-bottom: 4px; }
-.sub { font-size: 13px; color: var(--cp-text-muted); margin-bottom: 16px; }
+h1 { font-size: 19px; font-weight: 700; margin-bottom: 4px; text-align: center; }
+.sub { font-size: 13px; color: var(--cp-text-muted); margin-bottom: 16px; text-align: center; }
 .filters { display: flex; gap: 8px; margin-bottom: 16px; flex-wrap: wrap; }
 .filters input { font-family: inherit; font-size: 13px; padding: 6px 10px; border: 1px solid var(--cp-border); border-radius: 8px; background: var(--cp-surface); color: var(--cp-text); flex: 1; min-width: 200px; }
 .pr-list { display: flex; flex-direction: column; gap: 8px; }
@@ -1317,8 +1340,8 @@ h1 { font-size: 19px; font-weight: 700; margin-bottom: 4px; }
     });
   }
 <\/script></head><body>
+  ${renderCrumbBar([{ label: "Home", href: "/discovery" }, { label: "Pull requests" }], { padTop: 40, padX: 24, right: renderBrand("pull requests") })}
   <div class="container">
-    <div class="brand-bar"><div class="logo">FS</div><span style="font-weight:600">Tippani</span><span style="font-size:13px;color:var(--cp-text-muted)"> \u00b7 pull requests</span></div>
     <h1>Pull requests</h1>
     <div class="sub">${list.length} PR${list.length !== 1 ? "s" : ""}</div>
     <div class="filters"><input id="prSearch" type="search" placeholder="Filter by title or author\u2026" oninput="applyPrFilter()"></div>
@@ -1360,9 +1383,9 @@ body { font-family: "Segoe UI", Aptos, Calibri, -apple-system, sans-serif; backg
 .container { width: 100%; max-width: 820px; }
 .brand-bar { display: flex; align-items: center; gap: 10px; margin-bottom: 20px; }
 .logo { width: 32px; height: 32px; border-radius: 8px; background: var(--cp-accent); display: flex; align-items: center; justify-content: center; color: var(--cp-accent-fg); font-weight: 700; font-size: 12px; }
-h1 { font-size: 19px; font-weight: 700; margin-bottom: 4px; }
-.sub { font-size: 13px; color: var(--cp-text-muted); margin-bottom: 16px; }
-.tabs { display: flex; gap: 2px; border-bottom: 1px solid var(--cp-border); margin: 14px 0 18px; }
+h1 { font-size: 19px; font-weight: 700; margin-bottom: 4px; text-align: center; }
+.sub { font-size: 13px; color: var(--cp-text-muted); margin-bottom: 16px; text-align: center; }
+.tabs { display: flex; justify-content: center; gap: 2px; border-bottom: 1px solid var(--cp-border); margin: 14px 0 18px; }
 .tab { padding: 8px 16px; font-family: inherit; font-size: 13px; font-weight: 600; color: var(--cp-text-muted); background: none; border: none; border-bottom: 2px solid transparent; cursor: pointer; }
 .tab:hover { color: var(--cp-text); }
 .tab.active { color: var(--cp-accent); border-bottom-color: var(--cp-accent); }
@@ -1555,6 +1578,7 @@ table.wi-results { width: 100%; table-layout: fixed; border-collapse: collapse; 
     document.querySelectorAll('.tab').forEach(function (t) { t.classList.toggle('active', t.dataset.tab === name); });
     document.querySelectorAll('.pane').forEach(function (p) { p.classList.toggle('active', p.dataset.pane === name); });
     document.body.dataset.pane = name;
+    try { localStorage.setItem('tippani.discoveryTab', name); } catch (e) {}
     try { var u = new URL(location.href); u.searchParams.set('tab', name); history.replaceState(null, '', u); } catch (e) {}
   }
   function esc(s) { return String(s == null ? '' : s).replace(/[&<>"]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; }); }
@@ -2001,6 +2025,7 @@ table.wi-results { width: 100%; table-layout: fixed; border-collapse: collapse; 
     document.querySelectorAll('.tab').forEach(function (t) { t.addEventListener('click', function () { activateTab(t.dataset.tab); }); });
     var params = new URLSearchParams(location.search);
     var t = params.get('tab');
+    if (!t) { try { t = localStorage.getItem('tippani.discoveryTab'); } catch (e) {} }
     activateTab(t === 'workitems' || t === 'specs' || t === 'branches' || t === 'openfile' ? t : 'queue');
     // Review queue slicers (client-side faceted filter, same engine as Specs).
     mountFacets(
@@ -2109,8 +2134,8 @@ table.wi-results { width: 100%; table-layout: fixed; border-collapse: collapse; 
     }
   });
 <\/script></head><body>
+  ${renderCrumbBar([{ label: "Home" }], { padTop: 40, padX: 24, right: renderBrand("discovery") })}
   <div class="container">
-    <div class="brand-bar"><div class="logo">FS</div><span style="font-weight:600">Tippani</span><span style="font-size:13px;color:var(--cp-text-muted)"> \u00b7 discovery</span></div>
     <h1>Discovery</h1>
     <div class="sub">Find what to work on \u2014 a finished spec to read, a review to pick up, or a work item to open in ADO.</div>
     <div class="tabs">
@@ -2134,9 +2159,9 @@ table.wi-results { width: 100%; table-layout: fixed; border-collapse: collapse; 
         <span class="wi-note">The query runs against the selected Azure DevOps project.</span>
       </div>
       <textarea id="wiQuery" class="wi-query" spellcheck="false">${escHtml(sampleWiql)}</textarea>
+      <div class="wi-note" style="margin-top:8px">Enter a WIQL <code>SELECT</code> against <code>workitems</code>. Results open the item in Azure DevOps (\u2197).</div>
       <div class="wi-actions"><span id="wiStatus" class="wi-status"></span><button id="wiSearchBtn" class="wi-search" type="button">Search</button></div>
       <div id="wiResults"></div>
-      <div class="wi-note" style="margin-top:12px">Enter a WIQL <code>SELECT</code> against <code>workitems</code>. Results open the item in Azure DevOps (\u2197).</div>
     </div>
 
     <div class="pane" data-pane="specs">
@@ -2235,10 +2260,10 @@ body { font-family: "Segoe UI", Aptos, Calibri, -apple-system, BlinkMacSystemFon
 .brand-text { font-size: 15px; font-weight: 600; }
 .brand-text-sub { font-size: 13px; font-weight: 400; color: var(--cp-text-muted); }
 .container { width: 100%; max-width: 720px; }
-.th-head { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 4px; }
+.th-head { display: flex; align-items: baseline; justify-content: center; margin-bottom: 4px; }
 .th-head h1 { font-size: 18px; font-weight: 700; }
 .back { font-size: 13px; color: var(--cp-accent); text-decoration: none; }
-.th-sub { font-size: 13px; color: var(--cp-text-muted); margin-bottom: 18px; }
+.th-sub { font-size: 13px; color: var(--cp-text-muted); margin-bottom: 18px; text-align: center; }
 .tc { background: var(--cp-surface); border: 1px solid var(--cp-border); border-radius: 12px; padding: 14px 18px; margin-bottom: 8px; }
 .tc-head { display: flex; align-items: baseline; gap: 10px; margin-bottom: 6px; }
 .tc-who { font-size: 13px; font-weight: 600; }
@@ -2260,14 +2285,10 @@ textarea:focus { outline: 2px solid var(--cp-accent); outline-offset: 1px; }
 <\/script>
 </head>
 <body>
-  <div class="brand-bar">
-    <div class="logo">FS</div>
-    <span class="brand-text">Tippani</span><span class="brand-text-sub"> \u00b7 thread</span>
-  </div>
+  ${renderCrumbBar([{ label: "Home", href: "/discovery" }, { label: `PR #${prId}`, href: "/" }, { label: "Feedback", href: "/feedback" }, { label: "Thread" }], { padTop: 48, padX: 24, right: renderBrand("thread") })}
   <div class="container">
     <div class="th-head">
       <h1>${escHtml(anchor)}</h1>
-      <a class="back" href="/feedback">\u2190 Feedback</a>
     </div>
     <div class="th-sub">PR #${prId} \u00b7 thread ${tid}${resolved ? " \u00b7 resolved" : ""}${isViewed ? " \u00b7 viewed" : ""}</div>
     ${viewedWarning(viewedError)}
@@ -2419,6 +2440,9 @@ body { font-family: "Segoe UI", Aptos, Calibri, -apple-system, sans-serif; backg
 .ro-mode-local { background: rgba(47,143,78,0.16); color: #2f8f4e; }
 [data-theme="dark"] .ro-mode-local { background: rgba(90,190,120,0.18); color: #6ecb8b; }
 .bp-wrap { max-width: 820px; margin: 0 auto; padding: 24px 20px 60px; }
+.bp-head { text-align: center; padding: 0 20px 10px; }
+.bp-head h1 { font-size: 19px; font-weight: 700; line-height: 1.3; word-break: break-all; }
+.bp-sub { font-size: 13px; color: var(--cp-text-muted); margin-top: 3px; }
 .bp-toolbar { display: flex; align-items: center; gap: 14px; margin-bottom: 14px; }
 .bp-count { font-size: 13px; font-weight: 600; color: var(--cp-text-muted); }
 .bp-check { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--cp-text); cursor: pointer; margin-left: auto; }
@@ -2436,11 +2460,13 @@ body { font-family: "Segoe UI", Aptos, Calibri, -apple-system, sans-serif; backg
   if (window.matchMedia('(prefers-color-scheme: dark)').matches) document.documentElement.dataset.theme = 'dark';
 <\/script></head>
 <body>
-<div class="ro-topbar">
-  <a class="ro-back" href="${escHtml(back)}">\u2190 Branches</a>
-  <div class="ro-topbar-title">${escHtml(title)}</div>
-  ${modeBadge}
+${renderCrumbBar([{ label: "Home", href: "/discovery" }, { label: "Branch" }], { right: modeBadge })}
+
+<div class="bp-head">
+  <h1>${escHtml(ref || title)}</h1>
+  <div class="bp-sub">${escHtml(repoName || "")}${project ? " \u00b7 " + escHtml(project) : ""}</div>
 </div>
+
 <div class="bp-wrap">
   <div class="bp-toolbar">
     <span class="bp-count" id="bpCount">${initialCount} file${initialCount === 1 ? "" : "s"}</span>
@@ -2521,14 +2547,14 @@ body { font-family: "Segoe UI", Aptos, Calibri, -apple-system, sans-serif; backg
 .ro-pane.collapsed { width: 38px; }
 .ro-margin { position: relative; flex: 0 0 340px; width: 340px; border-left: 1px solid var(--cp-border); transition: flex-basis 0.18s ease; }
 .ro-margin.collapsed { flex-basis: 38px; }
-.ro-margin-head { position: sticky; top: 48px; z-index: 6; display: flex; align-items: center; gap: 8px; padding: 12px 14px; background: var(--cp-bg); border-bottom: 1px solid var(--cp-border); }
+.ro-margin-head { position: sticky; top: 0; z-index: 6; display: flex; align-items: center; gap: 8px; padding: 12px 14px; background: var(--cp-bg); border-bottom: 1px solid var(--cp-border); }
 .ro-margin-title { flex: 1 1 auto; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.3px; color: var(--cp-text-muted); }
 .ro-margin.collapsed .ro-margin-head, .ro-margin.collapsed .ro-margin-body { display: none; }
 .ro-margin-body { position: relative; }
 .ro-margin .ro-rail { display: none; }
 .ro-margin.collapsed .ro-rail { display: flex; position: sticky; top: 48px; width: 38px; height: calc(100vh - 48px); flex-direction: column; align-items: center; gap: 10px; padding-top: 12px; background: none; border: none; cursor: pointer; color: var(--cp-text-muted); font-size: 14px; }
 .ro-margin.collapsed .ro-rail:hover { color: var(--cp-text); }
-.ro-pane-full { position: sticky; top: 48px; max-height: calc(100vh - 48px); display: flex; flex-direction: column; }
+.ro-pane-full { position: sticky; top: 0; max-height: 100vh; display: flex; flex-direction: column; }
 .ro-pane.collapsed .ro-pane-full { display: none; }
 .ro-pane-head { display: flex; align-items: center; gap: 8px; padding: 12px 14px; border-bottom: 1px solid var(--cp-border); }
 .ro-pane-title { flex: 1 1 auto; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.3px; color: var(--cp-text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -2584,10 +2610,14 @@ body { font-family: "Segoe UI", Aptos, Calibri, -apple-system, sans-serif; backg
 .rh-body pre code { background: none; padding: 0; }
 .rh-body ul, .rh-body ol { margin: 4px 0; padding-left: 18px; }
 .rh-body img { max-width: 100%; }
-.ro-center { flex: 1 1 auto; min-width: 0; padding: 26px 28px; }
+.ro-center { flex: 1 1 auto; min-width: 0; padding: 12px 28px 28px; }
 .ro-center-inner { max-width: 860px; margin: 0 auto; }
 .ro-crumb { font-size: 12px; color: var(--cp-text-muted); margin-bottom: 16px; word-break: break-all; }
 .ro-doc { background: var(--cp-surface); border: 1px solid var(--cp-border); border-radius: 12px; padding: 28px 34px; line-height: 1.6; font-size: 15px; }
+.ro-doc > :first-child { margin-top: 0; }
+.ro-head { text-align: center; padding: 0 20px 10px; flex-shrink: 0; }
+.ro-head h1 { font-size: 19px; font-weight: 700; line-height: 1.3; }
+.ro-sub { font-size: 13px; color: var(--cp-text-muted); margin-top: 3px; word-break: break-all; }
 .ro-doc h1, .ro-doc h2, .ro-doc h3, .ro-doc h4 { line-height: 1.3; margin: 22px 0 10px; }
 .ro-doc h1 { font-size: 26px; } .ro-doc h2 { font-size: 21px; } .ro-doc h3 { font-size: 17px; }
 .ro-doc h1:first-child, .ro-doc h2:first-child { margin-top: 0; }
@@ -2637,12 +2667,13 @@ body.show-markers .rh-marker { display: inline-flex; }
 <script>
   if (window.matchMedia('(prefers-color-scheme: dark)').matches) document.documentElement.dataset.theme = 'dark';
 <\/script></head><body>
-  <div class="ro-topbar">
-    <a class="ro-back" href="${escHtml(back)}">\u2190 ${escHtml(backText)}</a>
-    <span class="ro-topbar-title">${escHtml(title)}</span>
-    ${refreshBtn}
-    ${modeTag}
+  ${renderCrumbBar([{ label: "Home", href: "/discovery" }, { label: backText, href: back }, { label: title }], { right: `${modeTag}${refreshBtn}` })}
+
+  <div class="ro-head">
+    <h1>${escHtml(title)}</h1>
+    <div class="ro-sub">${escHtml(specPath)}</div>
   </div>
+
   <div class="ro-shell">
     <aside class="ro-pane ro-toc" id="roToc">
       <div class="ro-pane-full">
@@ -2653,7 +2684,6 @@ body.show-markers .rh-marker { display: inline-flex; }
     </aside>
     <main class="ro-center">
       <div class="ro-center-inner">
-        <div class="ro-crumb">${crumb}</div>
         <div class="ro-doc">${bodyHtml}</div>
       </div>
     </main>
@@ -3206,6 +3236,27 @@ function buildSpecPage(specHtml, toc, metadata, pr, threads, specPath, sourceMap
     })
     .join("\n");
 
+  // Header actions (view toggle + edit/pane buttons) now live in the top
+  // breadcrumb row's right slot; the old second header row is gone.
+  const headerActions = `
+    <div class="view-toggle" id="viewToggle" role="group" aria-label="View">
+      <button class="view-btn active" data-view="current" onclick="tippani.setView('current')" title="Version currently committed in the PR">Current</button>
+      <button class="view-btn" data-view="diff" onclick="tippani.setView('diff')" title="Proposed changes overlaid" disabled>Diff</button>
+      <button class="view-btn" data-view="proposed" onclick="tippani.setView('proposed')" title="Proposed version (clean)" disabled>Proposed</button>
+    </div>
+    <span class="dirty-dot" id="dirtyDot" style="display:none" title="Unsaved changes">●</span>
+    ${canEdit ? `<div class="edit-pane-controls" id="editPaneControls" aria-label="Edit layout controls">
+      <button class="pane-toggle" id="toggleTocPane" onclick="tippani.togglePane('left')" title="Minimize contents pane" aria-label="Minimize contents pane" aria-pressed="false">T</button>
+      <button class="pane-toggle" id="toggleCommentsPane" onclick="tippani.togglePane('right')" title="Minimize comments pane" aria-label="Minimize comments pane" aria-pressed="false">C</button>
+      <button class="pane-toggle" id="focusEditPane" onclick="tippani.toggleFocusEdit()" title="Focus editor" aria-label="Focus editor" aria-pressed="false">F</button>
+    </div>` : ""}
+    ${canEdit ? `<button class="edit-toggle save-btn" id="saveBtn" onclick="tippani.save()" style="display:none" disabled>Save</button>` : ""}
+    ${canEdit ? `<button class="edit-toggle" id="findBtn" onclick="tippani.search()" style="display:none" title="Find & Replace (Ctrl+F / Ctrl+H)">Find</button>` : ""}
+    ${canEdit ? `<button class="edit-toggle" id="editToggle" onclick="tippani.toggle()" title="Toggle edit mode (${"⌘"}/Ctrl+E)">Edit</button>` : ""}
+    <span id="proposalSource" class="proposal-source" style="display:none"></span>
+    <button class="edit-toggle" id="discardProposalBtn" onclick="tippani.discardProposal()" style="display:none" title="Discard the staged proposed edit for this file">Discard proposal</button>
+  `;
+
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -3228,7 +3279,7 @@ button:focus-visible { outline: 2px solid var(--cp-accent); outline-offset: 2px;
 .header { height: 52px; display: flex; align-items: center; justify-content: space-between; padding: 0 20px; background: var(--cp-surface); border-bottom: 1px solid var(--cp-border); flex-shrink: 0; z-index: 50; }
 .header-left { display: flex; align-items: center; gap: 10px; min-width: 0; }
 .header-right { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
-.edit-toggle { font-family: inherit; font-size: 12px; font-weight: 600; padding: 6px 14px; border-radius: 6px; border: 1px solid var(--cp-border); background: var(--cp-bg); color: var(--cp-text); cursor: pointer; transition: background 0.12s, border-color 0.12s; }
+.edit-toggle { font-family: inherit; font-size: 12px; font-weight: 600; padding: 4px 10px; border-radius: 6px; border: 1px solid var(--cp-border); background: var(--cp-bg); color: var(--cp-text); cursor: pointer; transition: background 0.12s, border-color 0.12s; }
 .edit-toggle:hover { background: var(--cp-surface-soft); border-color: var(--cp-border-strong); }
 .edit-pane-controls { display: none; align-items: center; gap: 4px; padding-right: 2px; border-right: 1px solid var(--cp-border); margin-right: 2px; }
 .edit-pane-controls.visible { display: flex; }
@@ -3265,6 +3316,9 @@ button:focus-visible { outline: 2px solid var(--cp-accent); outline-offset: 2px;
 .pr-meta { font-size: 11px; color: var(--cp-text-muted); margin-top: 1px; display: flex; align-items: center; gap: 4px; }
 .comment-count-active { color: var(--cp-accent); font-weight: 600; }
 .comment-count-resolved { color: var(--cp-success); font-weight: 500; }
+.spec-head { flex-shrink: 0; text-align: center; padding: 0 20px 10px; }
+.spec-head h1 { font-size: 19px; font-weight: 700; line-height: 1.3; }
+.spec-head .pr-meta { justify-content: center; font-size: 13px; margin-top: 3px; }
 .comment-count-badge { font-size: 10px; font-weight: 600; padding: 1px 7px; border-radius: 99px; background: var(--cp-accent-soft); color: var(--cp-accent); margin-left: 4px; }
 
 /* Inline comment bubble on spec content */
@@ -3296,6 +3350,7 @@ body.col-resizing * { cursor: col-resize !important; user-select: none !importan
 .layout.edit-mode.left-collapsed #resizeLeft { display: none; }
 .sidebar-section-label { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; color: var(--cp-text-muted); margin-bottom: 8px; margin-top: 16px; }
 .sidebar-section-label:first-child { margin-top: 0; }
+.sidebar-section-label:first-child { margin-top: 0; }
 
 .toc-item { display: block; font-size: 13px; padding: 4px 8px; border-left: 2px solid transparent; color: var(--cp-text-muted); text-decoration: none; transition: all 0.12s; border-radius: 0 4px 4px 0; }
 .toc-item:hover { color: var(--cp-text); background: var(--cp-accent-soft); text-decoration: none; }
@@ -3306,8 +3361,9 @@ body.col-resizing * { cursor: col-resize !important; user-select: none !importan
 .file-nav-active { background: var(--cp-highlight); color: var(--cp-accent); font-weight: 600; }
 
 /* Main content */
-.main-content { flex: 1; min-width: 0; overflow-y: auto; padding: 32px 40px; background: var(--cp-bg); scroll-padding-top: 56px; }
-.spec { background: var(--cp-surface); border: 1px solid var(--cp-border); border-radius: 16px; padding: 40px; box-shadow: 0 1px 4px rgba(0,0,0,0.04); max-width: 820px; margin: 0 auto; }
+.main-content { flex: 1; min-width: 0; overflow-y: auto; padding: 0 40px 40px; background: var(--cp-bg); scroll-padding-top: 56px; }
+.spec { background: var(--cp-surface); border: 1px solid var(--cp-border); border-radius: 16px; padding: 20px 40px 40px; box-shadow: 0 1px 4px rgba(0,0,0,0.04); max-width: 820px; margin: 0 auto; }
+.spec > :first-child { margin-top: 0; }
 .spec h1 { font-size: 28px; font-weight: 700; margin: 1.5rem 0 0.75rem; padding-bottom: 0.5rem; border-bottom: 1px solid var(--cp-border); color: var(--cp-text); }
 .spec h1 a, .spec h2 a, .spec h3 a, .spec h4 a { color: inherit; text-decoration: none; }
 .spec h1 a:hover, .spec h2 a:hover, .spec h3 a:hover { text-decoration: none; opacity: 0.8; }
@@ -3398,7 +3454,7 @@ details[open] .resolved-summary::before { content: '▾ '; }
 .mermaid-error-note { font-size: 12px; color: var(--cp-text-muted); margin-bottom: 6px; }
 /* Item 3: Current / Diff / Proposed view toggle. */
 .view-toggle { display: inline-flex; border: 1px solid var(--cp-border); border-radius: 7px; overflow: hidden; margin-right: 6px; }
-.view-btn { font-family: inherit; font-size: 12px; padding: 4px 10px; border: none; background: var(--cp-surface); color: var(--cp-text-muted); cursor: pointer; border-right: 1px solid var(--cp-border); }
+.view-btn { font-family: inherit; font-size: 12px; padding: 4px 8px; border: none; background: var(--cp-surface); color: var(--cp-text-muted); cursor: pointer; border-right: 1px solid var(--cp-border); }
 .view-btn:last-child { border-right: none; }
 .view-btn:hover { background: var(--cp-accent-soft); color: var(--cp-text); }
 .view-btn.active { background: var(--cp-accent); color: var(--cp-accent-fg); font-weight: 600; }
@@ -3496,40 +3552,14 @@ details[open] .resolved-summary::before { content: '▾ '; }
 <\/script>
 </head>
 <body style="display:flex;flex-direction:column;">
+${renderCrumbBar([{ label: "Home", href: "/discovery" }, { label: `PR #${prId}`, href: "/" }, { label: (changedFiles[currentFileIndex]?.path || specPath || "").split("/").pop() || "File" }], { right: headerActions })}
 
-<div class="header">
-  <div class="header-left">
-    <a href="/" style="text-decoration:none;display:flex;align-items:center;gap:10px;">
-      <div class="logo">FS</div>
-      <span class="brand">Tippani</span><span class="brand-sub"> · read · annotate · edit</span>
-    </a>
-    <span class="hdr-sep">|</span>
-    <div class="pr-info">
-      <h1>${prTitle}</h1>
-      <div class="pr-meta">PR #${prId} by ${author}
-        <span class="hdr-sep">·</span>
-        <span class="comment-count-active">${activeThreads.length} active</span>
-        ${resolvedThreads.length > 0 ? `<span class="comment-count-resolved">· ${resolvedThreads.length} resolved</span>` : ""}
-      </div>
-    </div>
-  </div>
-  <div class="header-right">
-    <div class="view-toggle" id="viewToggle" role="group" aria-label="View">
-      <button class="view-btn active" data-view="current" onclick="tippani.setView('current')" title="Version currently committed in the PR">Current</button>
-      <button class="view-btn" data-view="diff" onclick="tippani.setView('diff')" title="Proposed changes overlaid" disabled>Diff</button>
-      <button class="view-btn" data-view="proposed" onclick="tippani.setView('proposed')" title="Proposed version (clean)" disabled>Proposed</button>
-    </div>
-    <span class="dirty-dot" id="dirtyDot" style="display:none" title="Unsaved changes">●</span>
-    ${canEdit ? `<div class="edit-pane-controls" id="editPaneControls" aria-label="Edit layout controls">
-      <button class="pane-toggle" id="toggleTocPane" onclick="tippani.togglePane('left')" title="Minimize contents pane" aria-label="Minimize contents pane" aria-pressed="false">T</button>
-      <button class="pane-toggle" id="toggleCommentsPane" onclick="tippani.togglePane('right')" title="Minimize comments pane" aria-label="Minimize comments pane" aria-pressed="false">C</button>
-      <button class="pane-toggle" id="focusEditPane" onclick="tippani.toggleFocusEdit()" title="Focus editor" aria-label="Focus editor" aria-pressed="false">F</button>
-    </div>` : ""}
-    ${canEdit ? `<button class="edit-toggle save-btn" id="saveBtn" onclick="tippani.save()" style="display:none" disabled>Save</button>` : ""}
-    ${canEdit ? `<button class="edit-toggle" id="findBtn" onclick="tippani.search()" style="display:none" title="Find & Replace (Ctrl+F / Ctrl+H)">Find</button>` : ""}
-    ${canEdit ? `<button class="edit-toggle" id="editToggle" onclick="tippani.toggle()" title="Toggle edit mode (${"⌘"}/Ctrl+E)">Edit</button>` : ""}
-    <span id="proposalSource" class="proposal-source" style="display:none"></span>
-    <button class="edit-toggle" id="discardProposalBtn" onclick="tippani.discardProposal()" style="display:none" title="Discard the staged proposed edit for this file">Discard proposal</button>
+<div class="spec-head">
+  <h1>${prTitle}</h1>
+  <div class="pr-meta">PR #${prId} by ${author}
+    <span class="hdr-sep">·</span>
+    <span class="comment-count-active">${activeThreads.length} active</span>
+    ${resolvedThreads.length > 0 ? `<span class="comment-count-resolved">· ${resolvedThreads.length} resolved</span>` : ""}
   </div>
 </div>
 
@@ -5614,14 +5644,11 @@ async function main() {
       try {
         const d = await doListPrs({ role: "queue" });
         const projects = _conn ? await listAdoProjects(_conn) : [ADO_PROJECT];
-        return res.type("html").send(buildHomePage(d.prs || [], ADO_PROJECT, projects));
+        return res.type("html").send(buildHomePage(d.prs || [], _adoProjectDisplayName || ADO_PROJECT, projects));
       } catch (e) {
         console.error("Home (review queue) error:", e.message);
         return res.status(500).send("Error loading the Discovery home.");
       }
-    }
-    if (_changedFiles.length === 1) {
-      return res.redirect("/file/0");
     }
     res.type("html").send(buildPickerPage(_pr, _changedFiles, _cache?.threads || []));
   });
@@ -5636,8 +5663,12 @@ async function main() {
     if (_isOffline || !_conn) return res.status(503).send("Cannot open a PR while offline.");
     try {
       await bindPr(prId);
+      _browseMode = false;
       _canEdit = await computeCanEdit(_conn, _pr, _isOffline);
-      return res.redirect("/file/0");
+      // Always land on the PR overview (feedback card + changed md files), never
+      // straight into a file — even for single-file PRs (which `/` would bounce
+      // to /file/0). The Review Queue tiles point here.
+      return res.type("html").send(buildPickerPage(_pr, _changedFiles, _cache?.threads || []));
     } catch (e) {
       console.error(`/open/${prId} failed:`, e.message);
       return res.status(502).send("Could not open PR #" + prId + ". Check the server console.");
@@ -5704,18 +5735,13 @@ async function main() {
   // (PR-bound or browse) so the MCP tools can navigate here.
   app.get("/discovery", async (_req, res) => {
     try {
-      // In browse mode (no PR bound) this IS the Discovery home: the role-scoped
-      // review queue with clickable /open cards. The MCP tools navigate here,
-      // and the single-tab nav steering may pull other tabs here too, so it must
-      // be the same clickable home as "/". Once a PR is bound, keep the classic
-      // PR-list page (buildPrListPage) for backward compatibility.
-      if (_browseMode) {
-        const d = await doListPrs({ role: "queue" });
-        const projects = _conn ? await listAdoProjects(_conn) : [ADO_PROJECT];
-        return res.type("html").send(buildHomePage(d.prs || [], ADO_PROJECT, projects));
-      }
-      const d = await doListPrs({});
-      res.type("html").send(buildPrListPage(d.prs || [], ADO_PROJECT));
+      // Discovery is the launchpad Home for every page: pick a finished spec to
+      // read, a review to pick up, a work item, or a branch. It renders the same
+      // whether or not a PR is bound, so the "Home" breadcrumb always lands on
+      // the same clickable launchpad (never the legacy PR-list).
+      const d = await doListPrs({ role: "queue" });
+      const projects = _conn ? await listAdoProjects(_conn) : [ADO_PROJECT];
+      res.type("html").send(buildHomePage(d.prs || [], _adoProjectDisplayName || ADO_PROJECT, projects));
     }
     catch (e) { res.status(500).send("Error loading Discovery. Check the server console."); console.error("Discovery page error:", e.message); }
   });
