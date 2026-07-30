@@ -46,6 +46,27 @@ export function renderCrumbs(trail) {
 // otherwise center + indent the bar. Pass that padding as `{ padTop, padX }` and
 // the bar cancels it with `align-self:stretch` + negative margins so it spans the
 // full page with no margins. Bodies with no padding pass nothing (defaults 0).
+// A tiny self-contained poller embedded once per page (guarded) that fills the
+// top-row center with "You have n staged changes · Push to remote" from
+// /api/v1/staged. Push posts to /api/v1/branches/push then reloads.
+const STAGED_HINT_SCRIPT = `<script>(function(){
+  if (window.__tpStagedInit) return; window.__tpStagedInit = 1;
+  function el(){ return document.getElementById('tpStaged'); }
+  async function refresh(){
+    var e = el(); if (!e) return;
+    try {
+      var r = await fetch('/api/v1/staged'); if (!r.ok) { e.innerHTML=''; return; }
+      var d = await r.json(); var n = (d && d.count) || 0;
+      if (n > 0) {
+        e.innerHTML = 'You have <strong style="color:var(--cp-text,#e6edf3)">'+n+'</strong> staged change'+(n===1?'':'s')+' \u00b7 <a href="#" id="tpPush" style="color:var(--cp-accent,#316dca);text-decoration:none;font-weight:600">Push to remote</a>';
+        var p = document.getElementById('tpPush'); if (p) p.addEventListener('click', push);
+      } else { e.innerHTML=''; }
+    } catch (x) {}
+  }
+  async function push(ev){ ev.preventDefault(); var e=el(); if(e) e.textContent='Pushing\u2026'; try { await fetch('/api/v1/branches/push',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'}); } catch(x){} location.reload(); }
+  window.__tpStagedRefresh = refresh; refresh();
+})();<\/script>`;
+
 export function renderCrumbBar(trail, opts = {}) {
   const inner = renderCrumbs(trail);
   if (!inner) return "";
@@ -57,16 +78,22 @@ export function renderCrumbBar(trail, opts = {}) {
       opts.right +
       "</div>"
     : "";
+  const center =
+    '<div class="tp-topbar-center" id="tpStaged" style="position:absolute;left:50%;' +
+    "top:50%;transform:translate(-50%,-50%);display:flex;align-items:center;gap:6px;" +
+    'font-size:12px;color:var(--cp-text-muted,#8b949e);white-space:nowrap"></div>';
   return (
     '<div class="tp-topbar" ' +
-    'style="box-sizing:border-box;align-self:stretch;display:flex;align-items:center;' +
+    'style="position:relative;box-sizing:border-box;align-self:stretch;display:flex;align-items:center;' +
     "justify-content:flex-start;height:34px;padding:0 16px;" +
     `margin:${-padTop}px ${-padX}px 18px;` +
     "background:var(--cp-bg-elevated,#22272e);" +
     'border-bottom:1px solid var(--cp-border,#30363d);flex-shrink:0">' +
     inner +
+    center +
     right +
-    "</div>"
+    "</div>" +
+    STAGED_HINT_SCRIPT
   );
 }
 

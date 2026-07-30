@@ -56,6 +56,7 @@ export function registerControlApi(app, deps) {
     mcpNavPersonalComment, mcpJumpPersonalComment, mcpSetPcResolvedVisibility, // MCP personal-comment ops
     mcpRefreshSpec, mcpOpenBranch, mcpOpenBranchFile, mcpOpenFile, // MCP: refresh + open review surface
     mcpCreateBranch, // MCP: create/adopt a branch for remote authoring (clickstop 2)
+    stageBranch, listStagedBranches, pushStagedBranches, unstageBranch, stageFile, unstageFile, updateStagedFileContent, // clickstop 2: staged (pre-push) branches
   } = deps;
 
   const ALLOWED_ORIGINS = new Set([
@@ -753,6 +754,35 @@ export function registerControlApi(app, deps) {
   app.post("/api/v1/spec/open-branch-file", requireAuth({ mutation: true }), mcpAc(mcpOpenBranchFile, "open branch file"));
   app.post("/api/v1/spec/open-file", requireAuth({ mutation: true }), mcpAc(mcpOpenFile, "open file"));
   app.post("/api/v1/spec/create-branch", requireAuth({ mutation: true }), mcpAc(mcpCreateBranch, "create branch"));
+
+  // Clickstop 2: staged branches — held in memory, created in ADO only on push.
+  app.post("/api/v1/branches/stage", requireAuth({ mutation: true }), (req, res) => {
+    if (typeof stageBranch !== "function") return res.status(501).json({ error: "staging not wired" });
+    res.json(stageBranch(req.body || {}));
+  });
+  app.get("/api/v1/staged", requireAuth(), (_req, res) => {
+    res.json(typeof listStagedBranches === "function" ? listStagedBranches() : { ok: true, count: 0, branches: [] });
+  });
+  app.post("/api/v1/branches/push", requireAuth({ mutation: true }), async (_req, res) => {
+    if (typeof pushStagedBranches !== "function") return res.status(501).json({ error: "push not wired" });
+    try { res.json(await pushStagedBranches()); } catch (e) { res.status(502).json({ error: String(e?.message || e) }); }
+  });
+  app.post("/api/v1/branches/unstage", requireAuth({ mutation: true }), (req, res) => {
+    if (typeof unstageBranch !== "function") return res.status(501).json({ error: "unstage not wired" });
+    res.json(unstageBranch(req.body || {}));
+  });
+  app.post("/api/v1/files/stage", requireAuth({ mutation: true }), (req, res) => {
+    if (typeof stageFile !== "function") return res.status(501).json({ error: "file staging not wired" });
+    res.json(stageFile(req.body || {}));
+  });
+  app.post("/api/v1/files/unstage", requireAuth({ mutation: true }), (req, res) => {
+    if (typeof unstageFile !== "function") return res.status(501).json({ error: "file unstage not wired" });
+    res.json(unstageFile(req.body || {}));
+  });
+  app.post("/api/v1/files/content", requireAuth({ mutation: true }), (req, res) => {
+    if (typeof updateStagedFileContent !== "function") return res.status(501).json({ error: "file content not wired" });
+    res.json(updateStagedFileContent(req.body || {}));
+  });
 
   app.post("/api/v1/personal-comments/:id/resolve", requireAuth({ mutation: true }), async (req, res) => {
     if (typeof resolvePersonalComment !== "function") return res.status(501).json({ error: "personal comments not wired" });

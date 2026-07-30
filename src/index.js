@@ -1431,6 +1431,22 @@ table.wi-results { width: 100%; table-layout: fixed; border-collapse: collapse; 
 .br-mode-btn { font-family: inherit; font-size: 13px; font-weight: 600; padding: 6px 18px; border: none; background: none; color: var(--cp-text-muted); border-radius: 6px; cursor: pointer; }
 .br-mode-btn.active { background: var(--cp-accent); color: var(--cp-accent-fg); }
 .br-local-input { flex: 1; min-width: 0; font-family: inherit; font-size: 13px; padding: 8px 12px; border: none; border-radius: 8px; background: transparent; color: var(--cp-text); outline: none; }
+.br-create-input { font-family: inherit; font-size: 13px; padding: 6px 10px; border: 1px solid var(--cp-border); border-radius: 8px; background: var(--cp-surface); color: var(--cp-text); flex: 1 1 140px; min-width: 120px; outline: none; }
+.br-create-row { flex-wrap: wrap; gap: 12px; align-items: flex-end; }
+.br-new-row { display: flex; justify-content: flex-end; margin-top: 4px; }
+.br-new-btn { font-family: inherit; font-size: 13px; font-weight: 600; color: var(--cp-accent); background: none; border: 1px dashed var(--cp-border); border-radius: 8px; padding: 6px 12px; cursor: pointer; }
+.br-new-btn:hover { border-color: var(--cp-accent); }
+.br-cancel-btn { font-family: inherit; font-size: 13px; color: var(--cp-text-muted); background: none; border: none; cursor: pointer; }
+.br-field { display: flex; flex-direction: column; gap: 4px; flex: 1 1 160px; min-width: 130px; }
+.br-field > label { font-size: 11px; font-weight: 600; color: var(--cp-text-muted); text-transform: uppercase; letter-spacing: 0.04em; }
+.br-field > select, .br-field > input { width: 100%; box-sizing: border-box; height: 32px; flex: none; }
+.br-create-row .wi-search { height: 32px; padding: 0 16px; }
+.br-create-panel { margin-top: 10px; }
+.br-staged-card { opacity: 0.72; border-style: dashed; display: flex; align-items: center; gap: 8px; }
+.br-staged-link { flex: 1 1 auto; min-width: 0; text-decoration: none; color: inherit; }
+.br-staged-del { flex: 0 0 auto; background: none; border: none; cursor: pointer; font-size: 18px; line-height: 1; padding: 4px 8px; border-radius: 6px; opacity: 0.8; }
+.br-staged-del:hover { opacity: 1; background: var(--cp-border); }
+.br-staged-badge { font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.03em; color: var(--cp-text-muted); background: var(--cp-border); padding: 1px 8px; border-radius: 99px; margin-left: 8px; }
 .br-ws-field { flex: 1; display: flex; align-items: center; border: 1px solid var(--cp-border); border-radius: 8px; background: var(--cp-surface); }
 .br-ws-field:focus-within { border-color: var(--cp-accent); }
 .br-ws-clear { flex: 0 0 auto; border: none; background: none; color: var(--cp-text-muted); font-size: 16px; line-height: 1; cursor: pointer; padding: 0 10px; }
@@ -1840,8 +1856,100 @@ table.wi-results { width: 100%; table-layout: fixed; border-collapse: collapse; 
       var items = d.branches || [];
       status.textContent = items.length + ' branch' + (items.length === 1 ? '' : 'es');
       renderBranchCards(items, 'remote');
+      populateCreateRepos();
       saveBranchCache('remote');
+      refreshStaged();
     } catch (e) { status.textContent = 'Failed: ' + e.message; }
+  }
+  // Clickstop 2: create/adopt a remote branch to author on. Repo options come
+  // from the loaded branch list; the new branch opens its (empty) branch page.
+  function brScanCards() {
+    var repos = [], seenR = {}, byRepo = {};
+    document.querySelectorAll('#brResults a.pr-card').forEach(function (a) {
+      try {
+        var u = new URL(a.getAttribute('href'), location.origin);
+        var id = u.searchParams.get('repo'), nm = u.searchParams.get('repoName'), pj = u.searchParams.get('project'), ref = u.searchParams.get('ref');
+        if (!id) return;
+        if (!seenR[id]) { seenR[id] = 1; repos.push({ id: id, name: nm || '', project: pj || '' }); byRepo[id] = []; }
+        if (ref && byRepo[id].indexOf(ref) === -1) byRepo[id].push(ref);
+      } catch (e) {}
+    });
+    return { repos: repos, byRepo: byRepo };
+  }
+  function populateBaseBranches() {
+    var repoSel = document.getElementById('brCreateRepo');
+    var baseSel = document.getElementById('brCreateBase');
+    if (!repoSel || !baseSel) return;
+    var branches = brScanCards().byRepo[repoSel.value] || [];
+    var opts = '<option value="main">main</option>';
+    branches.forEach(function (b) { if (b !== 'main') opts += '<option value="' + esc(b) + '">' + esc(b) + '</option>'; });
+    baseSel.innerHTML = opts;
+  }
+  function populateCreateRepos() {
+    var sel = document.getElementById('brCreateRepo');
+    if (!sel) return;
+    var repos = brScanCards().repos;
+    if (!repos.length) return;
+    sel.innerHTML = repos.map(function (r) {
+      return '<option value="' + esc(r.id) + '" data-name="' + esc(r.name) + '" data-project="' + esc(r.project) + '">' + esc(r.name) + '</option>';
+    }).join('');
+    populateBaseBranches();
+  }
+  async function stageBranch() {
+    var sel = document.getElementById('brCreateRepo');
+    var opt = sel && sel.options[sel.selectedIndex];
+    var repoId = sel ? sel.value : '';
+    var repoName = opt ? (opt.getAttribute('data-name') || '') : '';
+    var project = (opt && opt.getAttribute('data-project')) || (document.getElementById('brProject') || {}).value || '';
+    var name = (document.getElementById('brCreateName').value || '').trim();
+    var base = (document.getElementById('brCreateBase').value || '').trim();
+    var status = document.getElementById('brCreateStatus');
+    if (!repoId) { status.textContent = 'Pick a repo (load branches first).'; return; }
+    if (!name) { status.textContent = 'Enter a branch name.'; return; }
+    status.textContent = 'Staging\u2026';
+    try {
+      var r = await fetch('/api/v1/branches/stage', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ project: project, repo: repoId, repoName: repoName, branch: name, base: base || undefined }) });
+      var d = await r.json();
+      if (!d || !d.ok) { status.textContent = (d && d.error) || 'Stage failed.'; return; }
+      document.getElementById('brCreateName').value = '';
+      status.textContent = '';
+      var panel = document.getElementById('brCreatePanel'); if (panel) panel.hidden = true;
+      refreshStaged();
+    } catch (e) { status.textContent = 'Failed: ' + e.message; }
+  }
+  // Render staged (pre-push) branch cards atop the remote list — lighter, with a
+  // "staged only" badge — and refresh the top-row staged hint.
+  async function refreshStaged() {
+    var out = document.getElementById('brResults');
+    try {
+      var r = await fetch('/api/v1/staged');
+      if (r.ok) {
+        var d = await r.json();
+        if (out) {
+          out.querySelectorAll('.br-staged-card').forEach(function (c) { c.remove(); });
+          if (d.branches && d.branches.length) {
+            var list = out.querySelector('.pr-list');
+            if (!list) { out.innerHTML = '<div class="pr-list"></div>'; list = out.querySelector('.pr-list'); }
+            var html = d.branches.map(function (s) {
+              var href = '/branch?project=' + encodeURIComponent(s.project || '') + '&repo=' + encodeURIComponent(s.repo) + '&repoName=' + encodeURIComponent(s.repoName || '') + '&ref=' + encodeURIComponent(s.branch) + '&staged=1';
+              return '<div class="pr-card br-staged-card">' +
+                '<a class="br-staged-link" href="' + esc(href) + '"><div class="pr-top"><span class="pr-id">' + esc(s.repoName || '') + '</span><span class="br-staged-badge">staged only</span></div><div class="pr-title">' + esc(s.branch) + '</div></a>' +
+                '<button class="br-staged-del" data-repo="' + esc(s.repo) + '" data-branch="' + esc(s.branch) + '" title="Delete staged branch" aria-label="Delete staged branch">\uD83D\uDDD1</button>' +
+              '</div>';
+            }).join('');
+            list.insertAdjacentHTML('afterbegin', html);
+            list.querySelectorAll('.br-staged-del').forEach(function (b) {
+              b.addEventListener('click', function (ev) { ev.preventDefault(); ev.stopPropagation(); unstageBranch(b.getAttribute('data-repo'), b.getAttribute('data-branch')); });
+            });
+          }
+        }
+      }
+    } catch (e) {}
+    if (window.__tpStagedRefresh) window.__tpStagedRefresh();
+  }
+  async function unstageBranch(repo, branch) {
+    try { await fetch('/api/v1/branches/unstage', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ repo: repo, branch: branch }) }); } catch (e) {}
+    refreshStaged();
   }
   var brLocalPathValue = '';
   // Per-mode result cache so switching Remote/Local — and navigating to a branch
@@ -1874,6 +1982,7 @@ table.wi-results { width: 100%; table-layout: fixed; border-collapse: collapse; 
     if (!c) return false;
     document.getElementById('brResults').innerHTML = c.results;
     document.getElementById('brStatus').textContent = c.status;
+    if (mode === 'remote') { populateCreateRepos(); refreshStaged(); }
     return true;
   }
   function setLocalNote(picked) {
@@ -1885,6 +1994,7 @@ table.wi-results { width: 100%; table-layout: fixed; border-collapse: collapse; 
     var hasPath = !!(input && (input.value || '').trim());
     var show = (brMode === 'remote') || (brMode === 'local' && hasPath);
     var a = document.getElementById('brActions'); if (a) a.style.display = show ? '' : 'none';
+    var nw = document.getElementById('brNewWrap'); if (nw) nw.style.display = (brMode === 'remote') ? '' : 'none';
   }
   function clearWorkspace() {
     brLocalPathValue = '';
@@ -2077,6 +2187,9 @@ table.wi-results { width: 100%; table-layout: fixed; border-collapse: collapse; 
       });
     });
     var brRefresh = document.getElementById('brRefreshBtn'); if (brRefresh) brRefresh.addEventListener('click', runActiveBranches);
+    var brCreate = document.getElementById('brCreateBtn'); if (brCreate) brCreate.addEventListener('click', stageBranch);
+    var brNew = document.getElementById('brNewBtn'); if (brNew) brNew.addEventListener('click', function () { var p = document.getElementById('brCreatePanel'); if (!p) return; p.hidden = !p.hidden; if (!p.hidden) { populateCreateRepos(); var n = document.getElementById('brCreateName'); if (n) n.focus(); } });
+    var brCreateRepoSel = document.getElementById('brCreateRepo'); if (brCreateRepoSel) brCreateRepoSel.addEventListener('change', populateBaseBranches);
     var brBrowse = document.getElementById('brBrowseBtn'); if (brBrowse) brBrowse.addEventListener('click', pickWorkspace);
     var ofBtn = document.getElementById('ofOpenBtn'); if (ofBtn) ofBtn.addEventListener('click', runAddFile);
     var ofBrowse = document.getElementById('ofBrowseBtn'); if (ofBrowse) ofBrowse.addEventListener('click', pickMdFile);
@@ -2202,6 +2315,29 @@ table.wi-results { width: 100%; table-layout: fixed; border-collapse: collapse; 
         <div id="brLocalNote" class="wi-note">Type a local repo path or Browse to one; its branches are listed.</div>
       </div>
       <div class="wi-actions" id="brActions"><span id="brStatus" class="wi-status"></span><button id="brRefreshBtn" class="wi-search" type="button">Refresh</button></div>
+      <div id="brNewWrap">
+        <div class="br-new-row">
+          <button id="brNewBtn" class="br-new-btn" type="button">\u002b New branch</button>
+        </div>
+        <div class="br-create-panel" id="brCreatePanel" hidden>
+          <div class="wi-row br-create-row">
+            <div class="br-field">
+              <label>Repo</label>
+              <select id="brCreateRepo" class="wi-project"><option value="">Load branches first\u2026</option></select>
+            </div>
+            <div class="br-field">
+              <label>Branch name</label>
+              <input id="brCreateName" class="br-create-input" type="text" spellcheck="false" placeholder="dev/kayu/myspec">
+            </div>
+            <div class="br-field">
+              <label>Parent branch</label>
+              <select id="brCreateBase" class="wi-project"><option value="main">main</option></select>
+            </div>
+            <button id="brCreateBtn" class="wi-search" type="button">Stage</button>
+          </div>
+          <div id="brCreateStatus" class="wi-note"></div>
+        </div>
+      </div>
       <div id="brResults"></div>
     </div>
 
@@ -2401,10 +2537,12 @@ function buildHistoryCardsHtml(history, specPath) {
 // Comments feature lands). READMEs are hidden by default with a checkbox to
 // reveal them, matching the Specs "Included" README facet. Row shaping is pure
 // (branch-files.js).
-function buildBranchPage({ repoName, project, ref, rows, backHref, adoUrl, error, mode }) {
+function buildBranchPage({ repoName, project, ref, rows, backHref, adoUrl, error, mode, staged }) {
   const title = (repoName ? repoName + " \u00b7 " : "") + (ref || "");
   const back = backHref || "/discovery?tab=branches";
-  const modeBadge = mode ? `<span class="ro-mode ro-mode-${mode}">${mode === "local" ? "Local" : "Remote"}</span>` : "";
+  const modeBadge = staged
+    ? `<span class="ro-mode" style="background:var(--cp-border);color:var(--cp-text-muted)">Staged</span>`
+    : (mode ? `<span class="ro-mode ro-mode-${mode}">${mode === "local" ? "Local" : "Remote"}</span>` : "");
   const initialCount = visibleFileCount(rows, false);
   const readmeTotal = (rows || []).filter((r) => r.isReadme).length;
   const listHtml = (rows || []).length
@@ -2421,7 +2559,7 @@ function buildBranchPage({ repoName, project, ref, rows, backHref, adoUrl, error
     : "";
   const emptyHtml = error
     ? `<div class="bp-empty">${escHtml(error)}</div>`
-    : (rows || []).length ? "" : `<div class="bp-empty">No markdown files in this branch.</div>`;
+    : (rows || []).length ? "" : `<div class="bp-empty">${staged ? "No files yet \u2014 this branch is staged. Add a spec, then Push to remote to create it in ADO." : "No markdown files in this branch."}</div>`;
   const readmeToggle = readmeTotal
     ? `<label class="bp-check"><input type="checkbox" id="bpShowReadme"> Show Readme.md</label>`
     : "";
@@ -2455,6 +2593,23 @@ body { font-family: "Segoe UI", Aptos, Calibri, -apple-system, sans-serif; backg
 .pr-title { font-size: 14px; font-weight: 600; }
 .bp-readme .pr-title::after { content: " \u00b7 readme"; font-weight: 400; font-size: 11px; color: var(--cp-text-muted); }
 .bp-empty { font-size: 13px; color: var(--cp-text-muted); padding: 20px 0; }
+.bp-newfile-row { display: flex; justify-content: flex-end; margin-bottom: 8px; }
+.br-new-btn { font-family: inherit; font-size: 13px; font-weight: 600; color: var(--cp-accent); background: none; border: 1px dashed var(--cp-border); border-radius: 8px; padding: 6px 12px; cursor: pointer; }
+.br-new-btn:hover { border-color: var(--cp-accent); }
+.bp-newfile-panel { margin-bottom: 14px; }
+.bp-newfile-form { display: flex; align-items: flex-end; gap: 12px; flex-wrap: wrap; }
+.br-field { display: flex; flex-direction: column; gap: 4px; flex: 1 1 220px; min-width: 160px; }
+.br-field > label { font-size: 11px; font-weight: 600; color: var(--cp-text-muted); text-transform: uppercase; letter-spacing: 0.04em; }
+.br-field > input { width: 100%; box-sizing: border-box; height: 32px; font-family: inherit; font-size: 13px; padding: 6px 10px; border: 1px solid var(--cp-border); border-radius: 8px; background: var(--cp-surface); color: var(--cp-text); outline: none; }
+.wi-search { font-family: inherit; font-size: 13px; font-weight: 700; color: var(--cp-accent-fg); background: var(--cp-accent); border: none; border-radius: 8px; height: 32px; padding: 0 16px; cursor: pointer; }
+.wi-note { font-size: 12px; color: var(--cp-text-muted); margin-top: 6px; }
+.br-staged-badge { font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.03em; color: var(--cp-text-muted); background: var(--cp-border); padding: 1px 8px; border-radius: 99px; margin-left: 8px; }
+.bp-staged-file { display: flex; align-items: center; gap: 8px; opacity: 0.72; border-style: dashed; }
+.bp-staged-file .pr-title { flex: 1 1 auto; min-width: 0; }
+.bp-staged-link { flex: 1 1 auto; min-width: 0; font-size: 14px; font-weight: 600; color: inherit; text-decoration: none; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bp-staged-link:hover { color: var(--cp-accent); text-decoration: underline; }
+.br-staged-del { flex: 0 0 auto; background: none; border: none; cursor: pointer; font-size: 18px; line-height: 1; padding: 4px 8px; border-radius: 6px; opacity: 0.8; }
+.br-staged-del:hover { opacity: 1; background: var(--cp-border); }
 </style>
 <script>
   if (window.matchMedia('(prefers-color-scheme: dark)').matches) document.documentElement.dataset.theme = 'dark';
@@ -2468,41 +2623,158 @@ ${renderCrumbBar([{ label: "Home", href: "/discovery" }, { label: "Branch" }], {
 </div>
 
 <div class="bp-wrap">
+  <div class="bp-newfile-row">
+    <button id="bpNewFileBtn" class="br-new-btn" type="button">\u002b New md file</button>
+  </div>
+  <div class="bp-newfile-panel" id="bpNewFilePanel" hidden>
+    <div class="bp-newfile-form">
+      <div class="br-field"><label>Spec title</label><input id="bpNewFileTitle" class="br-create-input" type="text" spellcheck="false" placeholder="My New Spec"></div>
+      <button id="bpNewFileStage" class="wi-search" type="button">Stage</button>
+    </div>
+    <div id="bpNewFileStatus" class="wi-note"></div>
+  </div>
   <div class="bp-toolbar">
     <span class="bp-count" id="bpCount">${initialCount} file${initialCount === 1 ? "" : "s"}</span>
     ${readmeToggle}
   </div>
-  ${listHtml}
-  ${emptyHtml}
+  <div id="bpFiles">${listHtml}${emptyHtml}</div>
 </div>
 <script>
 (function () {
+  var params = new URLSearchParams(location.search);
+  var BP = { project: params.get('project')||'', repo: params.get('repo')||'', repoName: params.get('repoName')||'', branch: (params.get('ref')||'').replace('refs/heads/','') };
+  function esch(s){ return String(s==null?'':s).replace(/[&<>"]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];}); }
   var KEY = 'tippani.brShowReadme';
   var box = document.getElementById('bpShowReadme');
-  var count = document.getElementById('bpCount');
-  function apply(show) {
-    var files = document.querySelectorAll('.bp-file');
-    var n = 0;
-    files.forEach(function (el) {
-      var isReadme = el.classList.contains('bp-readme');
-      var hidden = isReadme && !show;
-      el.hidden = hidden;
-      if (!hidden) n++;
-    });
-    if (count) count.textContent = n + (n === 1 ? ' file' : ' files');
+  var countEl = document.getElementById('bpCount');
+  var host = document.getElementById('bpFiles');
+  function updateCount(){
+    var show = box ? box.checked : true;
+    var pushed = 0;
+    document.querySelectorAll('.bp-file').forEach(function(el){ var isReadme = el.classList.contains('bp-readme'); var hidden = isReadme && !show; el.hidden = hidden; if(!hidden) pushed++; });
+    var st = document.querySelectorAll('.bp-staged-file').length;
+    var tot = pushed + st;
+    if (countEl) countEl.textContent = tot + (tot === 1 ? ' file' : ' files');
   }
   if (box) {
-    var saved = false;
-    try { saved = localStorage.getItem(KEY) === '1'; } catch (e) {}
+    var saved = false; try { saved = localStorage.getItem(KEY) === '1'; } catch (e) {}
     box.checked = saved;
-    apply(saved);
-    box.addEventListener('change', function () {
-      try { localStorage.setItem(KEY, box.checked ? '1' : '0'); } catch (e) {}
-      apply(box.checked);
-    });
+    box.addEventListener('change', function () { try { localStorage.setItem(KEY, box.checked ? '1' : '0'); } catch (e) {} updateCount(); });
   }
+  var newBtn = document.getElementById('bpNewFileBtn'), panel = document.getElementById('bpNewFilePanel'),
+      titleInput = document.getElementById('bpNewFileTitle'), stageBtn = document.getElementById('bpNewFileStage'),
+      statusEl = document.getElementById('bpNewFileStatus');
+  if (newBtn && panel) newBtn.addEventListener('click', function(){ panel.hidden = !panel.hidden; if(!panel.hidden && titleInput) titleInput.focus(); });
+  async function stageNewFile(){
+    var title = (titleInput.value||'').trim();
+    if (!title) { statusEl.textContent = 'Enter a title.'; return; }
+    if (!BP.repo || !BP.branch) { statusEl.textContent = 'Missing branch context.'; return; }
+    statusEl.textContent = 'Staging\u2026';
+    try {
+      var r = await fetch('/api/v1/files/stage',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ project: BP.project, repo: BP.repo, repoName: BP.repoName, branch: BP.branch, title: title })});
+      var d = await r.json();
+      if (!d || !d.ok) { statusEl.textContent = (d && d.error) || 'Stage failed.'; return; }
+      titleInput.value=''; statusEl.textContent=''; if(panel) panel.hidden = true;
+      renderStagedFiles();
+    } catch(e){ statusEl.textContent = 'Failed: '+e.message; }
+  }
+  if (stageBtn) stageBtn.addEventListener('click', stageNewFile);
+  async function unstageFile(path){
+    try { await fetch('/api/v1/files/unstage',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ repo: BP.repo, branch: BP.branch, path: path })}); } catch(e){}
+    renderStagedFiles();
+  }
+  async function renderStagedFiles(){
+    if(!host) return;
+    var mine = [];
+    try { var r = await fetch('/api/v1/staged'); if(r.ok){ var d = await r.json(); mine = (d.files||[]).filter(function(f){ return f.repo===BP.repo && f.branch===BP.branch; }); } } catch(e){}
+    host.querySelectorAll('.bp-staged-file').forEach(function(c){ c.remove(); });
+    var list = host.querySelector('.pr-list');
+    var empty = host.querySelector('.bp-empty');
+    if (mine.length) {
+      if (empty) empty.style.display = 'none';
+      if (!list) { host.insertAdjacentHTML('afterbegin','<div class="pr-list"></div>'); list = host.querySelector('.pr-list'); }
+      var html = mine.map(function(f){
+        var href = '/staged-file?project='+encodeURIComponent(BP.project)+'&repo='+encodeURIComponent(BP.repo)+'&repoName='+encodeURIComponent(BP.repoName)+'&branch='+encodeURIComponent(BP.branch)+'&path='+encodeURIComponent(f.path);
+        return '<div class="pr-card bp-staged-file"><a class="bp-staged-link" href="'+href+'">'+esch(f.title||f.path)+'<span class="br-staged-badge">staged only</span></a>'+
+          '<button class="br-staged-del bp-staged-del" data-path="'+esch(f.path)+'" title="Delete staged file" aria-label="Delete staged file">\uD83D\uDDD1</button></div>';
+      }).join('');
+      list.insertAdjacentHTML('afterbegin', html);
+      list.querySelectorAll('.bp-staged-del').forEach(function(b){ b.addEventListener('click', function(ev){ ev.preventDefault(); ev.stopPropagation(); unstageFile(b.getAttribute('data-path')); }); });
+    } else if (empty) { empty.style.display = ''; }
+    updateCount();
+    if (window.__tpStagedRefresh) window.__tpStagedRefresh();
+  }
+  updateCount();
+  renderStagedFiles();
 })();
 </script>
+${NAV_WATCHER}
+</body></html>`;
+}
+
+function buildStagedFilePage({ file, backHref }) {
+  const title = file.title || file.path;
+  const content = file.content || "";
+  const modeBadge = `<span class="ro-mode" style="background:var(--cp-border);color:var(--cp-text-muted)">Staged</span>`;
+  const metaJson = JSON.stringify({ repo: file.repo, branch: file.branch, path: file.path });
+  return `<!DOCTYPE html>
+<html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>${escHtml(title)} \u2014 Tippani</title>
+<style>
+${cssVariables()}
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: "Segoe UI", Aptos, Calibri, -apple-system, sans-serif; background: var(--cp-bg); color: var(--cp-text); }
+.ro-mode { flex: 0 0 auto; font-size: 11px; font-weight: 700; padding: 4px 12px; border-radius: 99px; text-transform: uppercase; letter-spacing: 0.4px; white-space: nowrap; background: var(--cp-accent-soft); color: var(--cp-accent); }
+.sf-wrap { max-width: 900px; margin: 0 auto; padding: 20px 20px 60px; }
+.sf-head { text-align: center; padding: 0 20px 14px; }
+.sf-head h1 { font-size: 19px; font-weight: 700; line-height: 1.3; word-break: break-all; }
+.sf-sub { font-size: 13px; color: var(--cp-text-muted); margin-top: 3px; word-break: break-all; }
+.sf-toolbar { display: flex; align-items: center; gap: 12px; margin-bottom: 10px; }
+.sf-status { font-size: 12px; color: var(--cp-text-muted); }
+.sf-save { margin-left: auto; font-family: inherit; font-size: 13px; font-weight: 700; color: var(--cp-accent-fg); background: var(--cp-accent); border: none; border-radius: 8px; height: 32px; padding: 0 18px; cursor: pointer; }
+.sf-save:disabled { opacity: 0.6; cursor: default; }
+.sf-editor { width: 100%; min-height: 60vh; box-sizing: border-box; font-family: Consolas, "Courier New", monospace; font-size: 14px; line-height: 1.6; padding: 16px 18px; border: 1px solid var(--cp-border); border-radius: 12px; background: var(--cp-surface); color: var(--cp-text); resize: vertical; outline: none; }
+.sf-editor:focus { border-color: var(--cp-accent); }
+</style>
+<script>
+  if (window.matchMedia('(prefers-color-scheme: dark)').matches) document.documentElement.dataset.theme = 'dark';
+<\/script></head>
+<body>
+${renderCrumbBar([{ label: "Home", href: "/discovery" }, { label: "Branch", href: backHref }, { label: title }], { right: modeBadge })}
+<div class="sf-wrap">
+  <div class="sf-head">
+    <h1>${escHtml(title)}</h1>
+    <div class="sf-sub">${escHtml(file.repoName || "")}${file.branch ? " \u00b7 " + escHtml(file.branch) : ""} \u00b7 ${escHtml(file.path)}</div>
+  </div>
+  <div class="sf-toolbar">
+    <span class="sf-status" id="sfStatus">Staged only \u2014 not yet pushed to remote.</span>
+    <button class="sf-save" id="sfSave" type="button">Save</button>
+  </div>
+  <textarea class="sf-editor" id="sfEditor" spellcheck="true" placeholder="Write your spec in Markdown\u2026">${escHtml(content)}</textarea>
+</div>
+<script>
+(function () {
+  var meta = ${metaJson};
+  var editor = document.getElementById('sfEditor');
+  var saveBtn = document.getElementById('sfSave');
+  var statusEl = document.getElementById('sfStatus');
+  var saved = editor.value;
+  async function save(){
+    if (editor.value === saved) { statusEl.textContent = 'No changes.'; return; }
+    saveBtn.disabled = true; statusEl.textContent = 'Saving\u2026';
+    try {
+      var r = await fetch('/api/v1/files/content', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ repo: meta.repo, branch: meta.branch, path: meta.path, content: editor.value }) });
+      var d = await r.json();
+      if (d && d.ok) { saved = editor.value; statusEl.textContent = 'Saved.'; }
+      else statusEl.textContent = (d && d.error) || 'Save failed.';
+    } catch (e) { statusEl.textContent = 'Save failed: ' + e.message; }
+    saveBtn.disabled = false;
+  }
+  saveBtn.addEventListener('click', save);
+  editor.addEventListener('input', function(){ if (editor.value !== saved) statusEl.textContent = 'Unsaved changes.'; });
+  document.addEventListener('keydown', function(e){ if ((e.ctrlKey || e.metaKey) && (e.key === 's' || e.key === 'S')) { e.preventDefault(); save(); } });
+})();
+<\/script>
 ${NAV_WATCHER}
 </body></html>`;
 }
@@ -5329,6 +5601,62 @@ async function mcpCreateBranch({ org, project, repo, branch, base } = {}) {
   return { ok: true, org: target.org, project: target.project, repo: target.repo, branch, branchRef, base: baseName, created: true, objectId: baseTip };
 }
 
+// Clickstop 2: staged branches live only in memory until pushed. Staging records
+// the intent (name + base) without touching ADO; pushing creates them all via
+// mcpCreateBranch and clears the staged set.
+let _stagedBranches = [];
+function stageBranch({ project, repo, repoName, branch, base } = {}) {
+  const name = String(branch || "").trim();
+  if (!name) return { ok: false, error: "branch name is required" };
+  if (!repo) return { ok: false, error: "repo is required" };
+  if (_stagedBranches.some((s) => s.repo === repo && s.branch === name)) return { ok: false, error: "that branch is already staged" };
+  _stagedBranches.push({ project: project || ADO_PROJECT, repo, repoName: repoName || "", branch: name, base: String(base || "").trim() });
+  return { ok: true, count: _stagedBranches.length, branches: _stagedBranches };
+}
+let _stagedFiles = [];
+function stagedTotal() { return _stagedBranches.length + _stagedFiles.length; }
+function listStagedBranches() {
+  return { ok: true, count: stagedTotal(), branches: _stagedBranches, files: _stagedFiles };
+}
+function stageFile({ project, repo, repoName, branch, title, path } = {}) {
+  const t = String(title || "").trim();
+  const filePath = String(path || "").trim() || (t ? t + ".md" : "");
+  if (!filePath) return { ok: false, error: "title is required" };
+  if (!repo || !branch) return { ok: false, error: "repo and branch are required" };
+  if (_stagedFiles.some((f) => f.repo === repo && f.branch === branch && f.path === filePath)) return { ok: false, error: "that file is already staged" };
+  _stagedFiles.push({ project: project || ADO_PROJECT, repo, repoName: repoName || "", branch, title: t || filePath, path: filePath, content: "" });
+  return { ok: true, count: stagedTotal(), files: _stagedFiles.filter((f) => f.repo === repo && f.branch === branch) };
+}
+function unstageFile({ repo, branch, path } = {}) {
+  const before = _stagedFiles.length;
+  _stagedFiles = _stagedFiles.filter((f) => !(f.repo === repo && f.branch === branch && f.path === path));
+  return { ok: true, removed: before - _stagedFiles.length, count: stagedTotal() };
+}
+function updateStagedFileContent({ repo, branch, path, content } = {}) {
+  const f = _stagedFiles.find((x) => x.repo === repo && x.branch === branch && x.path === path);
+  if (!f) return { ok: false, error: "staged file not found" };
+  f.content = String(content == null ? "" : content);
+  return { ok: true };
+}
+async function pushStagedBranches() {
+  const results = [];
+  const remaining = [];
+  for (const s of _stagedBranches) {
+    let r;
+    try { r = await mcpCreateBranch({ project: s.project, repo: s.repo, branch: s.branch, base: s.base || undefined }); }
+    catch (e) { r = { ok: false, error: e?.message || String(e) }; }
+    if (r && r.ok) results.push({ branch: s.branch, ok: true, created: r.created });
+    else { remaining.push(s); results.push({ branch: s.branch, ok: false, error: (r && r.error) || "failed" }); }
+  }
+  _stagedBranches = remaining;
+  return { ok: remaining.length === 0, count: _stagedBranches.length, results };
+}
+function unstageBranch({ repo, branch } = {}) {
+  const before = _stagedBranches.length;
+  _stagedBranches = _stagedBranches.filter((s) => !(s.repo === repo && s.branch === branch));
+  return { ok: true, removed: before - _stagedBranches.length, count: _stagedBranches.length, branches: _stagedBranches };
+}
+
 // Session token authorises external (non-browser-same-origin) mutations.
 // Generated fresh per process and printed to stdout at startup.
 const _sessionToken = crypto.randomBytes(24).toString("base64url");
@@ -5879,6 +6207,19 @@ async function main() {
     }
   });
 
+  // Clickstop 2 (staged authoring): open a staged (not-yet-pushed) .md file in a
+  // lightweight Markdown editor. Content lives in the in-memory staged store until
+  // the branch is pushed to ADO. No ADO round-trip.
+  app.get("/staged-file", (req, res) => {
+    const repo = String(req.query.repo || "").trim();
+    const branch = String(req.query.branch || "").trim().replace(/^refs\/heads\//, "");
+    const filePath = String(req.query.path || "").trim();
+    const file = _stagedFiles.find((f) => f.repo === repo && f.branch === branch && f.path === filePath);
+    if (!file) return res.redirect("/discovery?tab=branches");
+    const backHref = "/branch?project=" + encodeURIComponent(file.project || "") + "&repo=" + encodeURIComponent(file.repo) + "&repoName=" + encodeURIComponent(file.repoName || "") + "&ref=" + encodeURIComponent(file.branch) + "&staged=1";
+    res.type("html").send(buildStagedFilePage({ file, backHref }));
+  });
+
   // Fully-local branch page: list a local branch's changed markdown files (vs.
   // its base), read from the clone with real git. No ADO. `path` is the clone's
   // absolute path (from the native picker), `ref` the branch. Display-only for
@@ -5918,6 +6259,11 @@ async function main() {
     const editMode = isValidRepoId(String(req.query.repo || "").trim()) ? "remote" : "local";
     const orgBase = ADO_ORG.replace(/\/+$/, "");
     const adoUrlFor = (name) => name ? `${orgBase}/${encodeURIComponent(project)}/_git/${encodeURIComponent(name)}?version=GB${encodeURIComponent(ref)}` : "";
+    // A staged (not-yet-pushed) branch has no ADO ref — open the empty file view.
+    if (req.query.staged === "1" || _stagedBranches.some((s) => s.branch === ref && (s.repo === repoParam || s.repoName === repoParam))) {
+      const displayName = String(req.query.repoName || repoParam);
+      return res.type("html").send(buildBranchPage({ repoName: displayName, project, ref, rows: [], backHref, adoUrl: "", error: null, mode: editMode, staged: true }));
+    }
     try {
       const result = await listBranchFiles({ project, repo: repoParam, ref });
       if (!result.ok) {
@@ -7472,6 +7818,13 @@ if ($path) { [Console]::Out.Write($path) }
     pushRemoteSpec,
     openPr,
     mcpCreateBranch,
+    stageBranch,
+    listStagedBranches,
+    pushStagedBranches,
+    unstageBranch,
+    stageFile,
+    unstageFile,
+    updateStagedFileContent,
     listPersonalComments,
     createPersonalComment,
     editPersonalComment,
