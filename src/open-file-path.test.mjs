@@ -1,8 +1,7 @@
 // Tests for the open-a-.md-file path validator (clickstop 2, step 1). Pure: every
 // rejection class is classified, and only an existing readable .md inside an
 // approved root is accepted. Injected fake fs — no real files touched.
-import { classifyOpenFilePath } from "./open-file-path.js";
-
+import { classifyOpenFilePath, classifyAddFile } from "./open-file-path.js";
 let pass = 0, fail = 0;
 function ok(name, cond) { if (cond) pass++; else { fail++; console.error("  FAIL: " + name); } }
 function eq(name, a, b) { ok(name + ` (got ${JSON.stringify(a)})`, JSON.stringify(a) === JSON.stringify(b)); }
@@ -67,6 +66,24 @@ eq("symlink inside root ok",
 ok("rejections have an error string",
   ["", "/r/a.txt", "/r/nope.md", "/other/a.md"].every(
     (p) => typeof classify(p, { "/r/a.txt": {} }).error === "string"));
+
+// --- classifyAddFile: same checks MINUS containment (Add IS the approval) -----
+function classifyAdd(input, tree, links) {
+  return classifyAddFile(input, { fs: fakeFs(tree, links), path: P });
+}
+// A readable .md OUTSIDE every approved root is ACCEPTED (adding approves it).
+eq("add accepts .md outside any root",
+  classifyAdd("/anywhere/a.md", { "/anywhere/a.md": {} }),
+  { ok: true, realpath: "/anywhere/a.md" });
+eq("add still rejects non-.md", classifyAdd("/x/a.txt", { "/x/a.txt": {} }).reason, "not-md");
+eq("add still rejects missing", classifyAdd("/x/nope.md", {}).reason, "missing");
+eq("add still rejects directory", classifyAdd("/x/dir.md", { "/x/dir.md": { dir: true } }).reason, "directory");
+eq("add still rejects unreadable", classifyAdd("/x/locked.md", { "/x/locked.md": { readable: false } }).reason, "unreadable");
+eq("add rejects empty", classifyAdd("   ", {}).reason, "empty");
+// add resolves symlinks to the real target it will store/approve
+eq("add resolves symlink to real target",
+  classifyAdd("/x/link.md", { "/real/a.md": {} }, { "/x/link.md": "/real/a.md" }),
+  { ok: true, realpath: "/real/a.md" });
 
 console.log(`open-file-path: ${pass} passed, ${fail} failed`);
 if (fail > 0) process.exit(1);

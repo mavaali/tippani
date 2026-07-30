@@ -48,3 +48,42 @@ export function classifyOpenFilePath(input, { fs = fsDefault, path = pathDefault
 
   return { ok: true, realpath: real };
 }
+
+// Validate a path being ADDED to the Custom list (clickstop 2). Same checks as
+// classifyOpenFilePath MINUS the approved-root containment: adding a file IS the
+// user's deliberate approval of its folder, so "outside every root" is expected,
+// not an error. Still rejects a non-`.md`, missing, directory, non-regular, or
+// unreadable path. Returns { ok:true, realpath } for the caller to persist +
+// approve, or a classified rejection the box renders inline.
+//
+// Rejection reasons: "empty" | "not-md" | "missing" | "directory" | "not-file" |
+// "unreadable".
+export function classifyAddFile(input, { fs = fsDefault, path = pathDefault } = {}) {
+  const reject = (reason, error) => ({ ok: false, reason, error });
+
+  const raw = String(input || "").trim();
+  if (!raw) return reject("empty", "Enter a path to a .md file.");
+
+  const abs = path.resolve(raw);
+  if (!/\.md$/i.test(abs)) return reject("not-md", "Only .md files can be added here.");
+
+  // Resolve symlinks so the stored path (and its approved folder) is the REAL one.
+  let real;
+  try {
+    real = fs.realpathSync(abs);
+  } catch (e) {
+    if (e && (e.code === "EACCES" || e.code === "EPERM"))
+      return reject("unreadable", "That file can't be read.");
+    return reject("missing", "No file at that path.");
+  }
+
+  let st;
+  try { st = fs.statSync(real); } catch { return reject("missing", "No file at that path."); }
+  if (st.isDirectory()) return reject("directory", "That's a folder, not a .md file.");
+  if (!st.isFile()) return reject("not-file", "That path is not a regular file.");
+
+  try { fs.accessSync(real, (fs.constants && fs.constants.R_OK) || 4); }
+  catch { return reject("unreadable", "That file can't be read."); }
+
+  return { ok: true, realpath: real };
+}

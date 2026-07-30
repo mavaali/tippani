@@ -11,7 +11,7 @@ export function registerControlApi(app, deps) {
   const {
     port,
     sessionToken,
-    setAdoToken,        // (token) => bool — swap the live ADO bearer (Coforce token push, optional)
+    setAdoToken,        // (token) => bool — swap the live ADO bearer (host token push, optional)
     focus,
     drafts,
     locks,
@@ -27,6 +27,7 @@ export function registerControlApi(app, deps) {
     specLocks,          // lock store keyed by fileIndex (optional)
     commitSpec,         // async (fileIndex, content, message) => {ok, status, body}
     specDiff,           // async (fileIndex) => {hunks, source?, updatedAt?} (optional)
+    specPreview,        // async (fileIndex, {original, proposed}) => {html, hunks, source} (optional) — live-buffer preview
     renderDraft,        // async (fileIndex, {draft}) => {html} (optional) — item 3 Current view
     listPrs,            // async (query) => {prs, ...} (optional) — item 6 list PRs
     searchWorkItems,    // async ({project, wiql}) => {workItems, ...} (optional) — Discovery WIQL search
@@ -36,7 +37,11 @@ export function registerControlApi(app, deps) {
     openLocalRepo,      // async ({path}) => {ok, path, branch} (optional) — Discovery local-repo tile
     listLocalBranches,  // async ({path}) => {ok, path, branches} (optional) — Discovery Branches tab (Local)
     pickLocalFolder,    // async () => {ok, path, branch} | {canceled} (optional) — native folder dialog
+    pickLocalMdFile,    // async () => {ok, path} | {canceled} (optional) — native .md file dialog (Custom list Browse)
     resolveOpenFile,    // ({path}) => {ok, realpath} | {ok:false, reason, error} (optional) — clickstop 2 Open file
+    customFilesList,    // () => [{path, dir, name, addedAt, openHref}] (optional) — Custom-list tab tiles
+    customFileAdd,      // ({path}) => {ok, files} | {ok:false, reason, error} (optional) — add a .md, approve its folder
+    customFileRemove,   // ({path}) => {ok, files} (optional) — remove a .md, revoke its folder if it was the last
     remoteSpecDrafts,   // durable staged-draft store keyed by (repo,branch,path) (optional) — clickstop 2 remote authoring
     remoteSpecLocks,    // lock store keyed by (repo,branch,path) (optional) — two-writer 409 guard
     pushRemoteSpec,     // async ({repo,branch,message,oldObjectId}) => {ok,status,body} (optional) — one-commit push of all staged files
@@ -231,7 +236,7 @@ export function registerControlApi(app, deps) {
     catch (e) { res.status(400).json({ error: String(e?.message || e) }); }
   });
 
-  // POST /api/v1/ado-token { token } — Coforce pushes a freshly-minted ADO
+  // POST /api/v1/ado-token { token } — the host pushes a freshly-minted ADO
   // bearer here before the old one expires, so a long-lived portal never makes
   // ADO calls with a stale token. Swaps the connection in place. The token is
   // never echoed back.
@@ -377,6 +382,22 @@ export function registerControlApi(app, deps) {
     if (idx === null) return res.json({ hunks: [] });
     try {
       res.json(await specDiff(idx));
+    } catch (e) {
+      res.status(500).json({ error: String(e?.message || e) });
+    }
+  });
+
+  // Stateless preview of the user's live (uncommitted) editor buffer: render it
+  // clean (Proposed) + diff it against the client-supplied committed baseline
+  // (Diff). No draft-store side effects — keeps personal edits separate from the
+  // agent's staged proposal. requireAuth() (same-origin browser passes).
+  app.post("/api/v1/specs/:fileIndex/preview", requireAuth(), async (req, res) => {
+    if (typeof specPreview !== "function") return res.status(501).json({ error: "spec preview not wired" });
+    const idx = validSpecIndex(req.params.fileIndex);
+    if (idx === null) return res.status(404).json({ error: "file index out of range" });
+    try {
+      const { original, proposed } = req.body || {};
+      res.json(await specPreview(idx, { original, proposed }));
     } catch (e) {
       res.status(500).json({ error: String(e?.message || e) });
     }
@@ -583,6 +604,18 @@ export function registerControlApi(app, deps) {
     }
   });
 
+  // Custom-list Browse: pop a native OS .md file dialog and return the chosen
+  // absolute path (the browser file picker hides the real path the store needs).
+  // Validation happens on Add; this only returns the path. same-origin or bearer.
+  app.post("/api/v1/pick-md-file", requireAuth({ mutation: true }), async (_req, res) => {
+    if (typeof pickLocalMdFile !== "function") return res.status(501).json({ error: "file picker not wired" });
+    try {
+      res.json(await pickLocalMdFile());
+    } catch (e) {
+      res.status(502).json({ ok: false, error: String(e?.message || e) });
+    }
+  });
+
   // Clickstop 2 (Open file tab): resolve a caller-typed path to a one-off .md.
   // Returns the classification { ok, realpath } or { ok:false, reason, error } so
   // the box renders a clickable card or an inline error. resolveOpenFile enforces
@@ -595,6 +628,41 @@ export function registerControlApi(app, deps) {
       res.json(await resolveOpenFile({ path: filePath }));
     } catch (e) {
       res.status(502).json({ error: String(e?.message || e) });
+    }
+  });
+
+  // Clickstop 2 (Custom-list tab): a durable, user-curated list of one-off .md
+  // files. GET returns the current tiles; POST adds a file (validating it's a
+  // readable .md, then approving its folder); DELETE removes one (revoking its
+  // folder if it was the last file there). All three sit behind requireAuth +
+  // the Host allow-list; mutations also require the same-origin/bearer check.
+  app.get("/api/v1/custom-files", requireAuth(), (_req, res) => {
+    if (typeof customFilesList !== "function") return res.status(501).json({ error: "custom files not wired" });
+    try {
+      res.json({ ok: true, files: customFilesList() });
+    } catch (e) {
+      res.status(502).json({ ok: false, error: String(e?.message || e) });
+    }
+  });
+
+  app.post("/api/v1/custom-files", requireAuth({ mutation: true }), (req, res) => {
+    if (typeof customFileAdd !== "function") return res.status(501).json({ error: "custom files not wired" });
+    try {
+      const { path: filePath } = req.body || {};
+      const result = customFileAdd({ path: filePath });
+      res.status(result && result.ok ? 200 : 400).json(result);
+    } catch (e) {
+      res.status(502).json({ ok: false, error: String(e?.message || e) });
+    }
+  });
+
+  app.delete("/api/v1/custom-files", requireAuth({ mutation: true }), (req, res) => {
+    if (typeof customFileRemove !== "function") return res.status(501).json({ error: "custom files not wired" });
+    try {
+      const { path: filePath } = req.body || {};
+      res.json(customFileRemove({ path: filePath }));
+    } catch (e) {
+      res.status(502).json({ ok: false, error: String(e?.message || e) });
     }
   });
 

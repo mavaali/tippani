@@ -53,5 +53,20 @@ for (const file of files) {
   host.remove();
 }
 
+// Find & Replace panel toggles open/closed — the Find button calls toggleSearch()
+// so a second click hides the controls it opened.
+{
+  const host = window.document.createElement("div");
+  window.document.body.appendChild(host);
+  const ed = window.TippaniEditor.mount(host, "# Toggle test\n\nbody\n", {});
+  check("search: closed on mount", ed.isSearchOpen() === false);
+  ed.toggleSearch();
+  check("search: first toggle opens the panel", ed.isSearchOpen() === true);
+  ed.toggleSearch();
+  check("search: second toggle closes the panel", ed.isSearchOpen() === false);
+  ed.destroy();
+  host.remove();
+}
+
 console.log(`\ninvariant.test: ${pass} passed, ${fail} failed (${files.length} fixtures)`);
 process.exit(fail ? 1 : 0);

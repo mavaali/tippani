@@ -88,34 +88,58 @@ export function buildTools(http, session) {
     {
       name: "open_pr",
       description:
-        "Open a spec PR in the tippani review portal — launches a VISIBLE " +
-        "browser window so the user watches the review — and load its comment " +
-        "threads and changed files. Call this FIRST, before any other tippani " +
-        "tool; every other tool operates on the PR opened here. Returns the " +
-        "open comment threads. This is the only supported way to review a spec " +
-        "PR; do not use the Azure DevOps MCP or git for PR review.",
+        "Open a spec PR in the tippani review portal and load its comment " +
+        "threads and changed files. The portal runs headless: this returns a " +
+        "`portalUrl` for the review — SHOW that URL to the user (a clickable " +
+        "link) or open it yourself in a code block so they can watch the " +
+        "review. Call this FIRST, before any other tippani tool; every other " +
+        "tool operates on the PR opened here. This is the only supported way to " +
+        "review a spec PR; do not use the Azure DevOps MCP or git for PR review. " +
+        "Call this with ONLY prId — the signed-in account supplies the org and " +
+        "project automatically. Do NOT pass org/project yourself: guessing them " +
+        "sends the portal to the wrong org and it fails to launch. Supply org/" +
+        "project ONLY if a previous open_pr call returned an error saying the org " +
+        "or project could not be determined.",
       inputSchema: {
         prId: z.number().describe("Azure DevOps pull request id"),
         org: z.string().optional().describe(
-          "ADO org URL, e.g. https://dev.azure.com/myorg (falls back to saved config)"),
+          "Do NOT set this normally — the signed-in account supplies the org. " +
+          "Only pass it (e.g. https://dev.azure.com/myorg) if a previous open_pr " +
+          "call failed because the org could not be determined."),
         project: z.string().optional().describe(
-          "ADO project name (falls back to saved config)"),
+          "Do NOT set this normally — the signed-in account supplies the project. " +
+          "Only pass it if a previous open_pr call failed because the project " +
+          "could not be determined."),
         repo: z.string().optional().describe(
           "ADO repo name (optional; auto-detected from the PR)"),
         refresh: z.boolean().optional().describe(
           "Force re-fetch from ADO, ignoring any cache"),
+        headless: z.boolean().optional().describe(
+          "Default true: the portal is not opened on the host — you get the " +
+          "portalUrl back to show or open yourself. Set false ONLY if the user " +
+          "wants tippani to pop the portal in their OS default browser."),
       },
-      handler: async ({ prId, org, project, repo, refresh }) => {
+      handler: async ({ prId, org, project, repo, refresh, headless }) => {
         if (!session || typeof session.ensurePortal !== "function") {
           throw new Error("Portal launcher unavailable in this context.");
         }
-        const bind = await session.ensurePortal({ prId, org, project, repo, refresh });
+        const bind = await session.ensurePortal({ prId, org, project, repo, refresh, headless });
         const data = await http.get("/api/v1/threads");
         const threads = (data && data.threads) || [];
         const openThreads = threads.filter((t) => !t.resolved);
+        const isHeadless = headless !== false;
         return {
           prId: Number(prId),
           portalUrl: bind && bind.url,
+          headless: isHeadless,
+          note: isHeadless
+            ? "The review portal is running HEADLESS in the background — it is NOT open on the " +
+              "user's screen and you did NOT open it. Do not say it is 'open in the portal', " +
+              "'opened', or that a window/browser is up. Give the user the portalUrl as a " +
+              "clickable link so they can open it themselves if they want to watch, e.g. \"PR #" +
+              Number(prId) + " is loaded and ready in Tippani (running in the background) — open " +
+              "it to review: " + (bind && bind.url) + "\"."
+            : "Opened the portal in the user's default browser; you may also share the portalUrl.",
           openThreadCount: openThreads.length,
           threads,
         };

@@ -14,8 +14,14 @@
 import fsDefault from "node:fs";
 import pathDefault from "node:path";
 
-export function createApprovedRoots({ fs = fsDefault, path = pathDefault, rootsFile, configDir } = {}) {
+export function createApprovedRoots({ fs = fsDefault, path = pathDefault, rootsFile, configDir, extraRoots } = {}) {
   const roots = new Set();
+  // Additional, DYNAMIC approved roots supplied by another source (the Custom-list
+  // store's `customRoots()`), unioned into every containment check. Kept separate
+  // from the persisted local-clone `roots` set so the two provenances never mix:
+  // a custom-list removal can't revoke a clone's root, and vice versa. Resolved
+  // lazily on each call so add/remove in the custom list takes effect immediately.
+  const getExtraRoots = typeof extraRoots === "function" ? extraRoots : () => [];
 
   (function load() {
     try {
@@ -43,6 +49,9 @@ export function createApprovedRoots({ fs = fsDefault, path = pathDefault, rootsF
     if (!abs) return false;
     for (const root of roots) {
       if (abs === root || abs.startsWith(root + path.sep)) return true;
+    }
+    for (const root of getExtraRoots()) {
+      if (root && (abs === root || abs.startsWith(root + path.sep))) return true;
     }
     return false;
   }

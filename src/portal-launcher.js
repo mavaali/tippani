@@ -7,8 +7,10 @@
 // (and own) its own portal on demand: the `open_pr` tool calls `ensurePortal`,
 // which spawns the portal as a child process, waits for it to write a fresh
 // session token and answer an authenticated request, then hands the shim a
-// live token. The portal is launched *visible* (not headless) so the user
-// watches the review in a browser while the agent drives it via tool calls.
+// live token. The portal runs headless and `open_pr` returns its URL; the
+// client (LLM or user) decides how to surface it, so tippani stays
+// host-agnostic and never launches a browser on the host by default. A caller
+// can opt into a native default-browser open with `open_pr { headless: false }`.
 //
 // Auth: the ADO REST/git token is passed to the portal via the
 // TIPPANI_ADO_TOKEN env var (the embedding host injects it). It is never placed
@@ -36,51 +38,14 @@ function defaultIsPortFree(port) {
   });
 }
 
-// Open a URL. If TIPPANI_OPEN_CMD is set (the embedding host's opener — e.g.
-// route to the VS Code integrated "Simple Browser" instead of an external
-// browser), run it. The host template is tokenized and the URL is substituted
-// as a DISCRETE argv element (or appended), then spawned WITHOUT a shell — so a
-// URL carrying shell metacharacters (;, $(), backticks, &&) can never inject a
-// command. The template is host-supplied (trusted); the URL is not. Falls back
-// to the OS default browser (`open`). Item 7.
-export function openInBrowser(url, { openCmd = process.env.TIPPANI_OPEN_CMD, spawnFn = defaultSpawn, openFn = openDefault } = {}) {
-  if (openCmd && String(openCmd).trim()) {
-    const argv = buildOpenArgv(openCmd, url);
-    const child = spawnFn(argv[0], argv.slice(1), { stdio: "ignore", detached: true });
-    if (child && typeof child.unref === "function") child.unref();
-    return Promise.resolve({ via: "cmd", argv });
-  }
+// Open a URL in the OS default browser. tippani is host-agnostic and never runs
+// a host-supplied opener command: the client (LLM/user) decides how to surface
+// the portal URL. This native open is used only when a caller explicitly opts in
+// via `open_pr { headless: false }`. The URL is always tippani's own localhost
+// portal — never a caller-supplied URL — so there is no arbitrary-command or
+// arbitrary-URL surface to lock down.
+export function openInBrowser(url, { openFn = openDefault } = {}) {
   return Promise.resolve(openFn(url)).then(() => ({ via: "open" }));
-}
-
-// Tokenize a host opener template (quote-aware) and substitute `{url}` with the
-// URL as its OWN argv element (or append it when there's no placeholder). Because
-// the URL becomes a discrete argv element passed to a shell-less spawn, shell
-// metacharacters in it are inert — no command injection.
-export function buildOpenArgv(template, url) {
-  const tokens = tokenizeCommand(String(template));
-  let used = false;
-  const argv = tokens.map((t) => {
-    if (t.includes("{url}")) { used = true; return t.replace(/\{url\}/g, url); }
-    return t;
-  });
-  if (!used) argv.push(url);
-  return argv.length ? argv : [url];
-}
-
-// Minimal quote-aware tokenizer for the trusted host template. Splits on
-// unquoted whitespace; single/double quotes group a token and are stripped.
-function tokenizeCommand(s) {
-  const out = [];
-  let cur = "", quote = null, started = false;
-  for (const c of s) {
-    if (quote) { if (c === quote) quote = null; else cur += c; continue; }
-    if (c === '"' || c === "'") { quote = c; started = true; continue; }
-    if (c === " " || c === "\t" || c === "\n" || c === "\r") { if (started) { out.push(cur); cur = ""; started = false; } continue; }
-    cur += c; started = true;
-  }
-  if (started) out.push(cur);
-  return out;
 }
 
 /**
@@ -160,7 +125,7 @@ export function createPortalSession({
     return null;
   }
 
-  async function ensurePortal({ prId, org, project, repo, refresh } = {}) {
+  async function ensurePortal({ prId, org, project, repo, refresh, headless = true } = {}) {
     const id = Number(prId);
     if (!id) throw new Error("open_pr requires a numeric prId.");
 
@@ -182,10 +147,11 @@ export function createPortalSession({
       }
     }
 
-    // Bring the review portal up in the browser for the user on every NEW
-    // binding (launch or adopt). Adopting reuses another panel's portal
-    // process, which won't re-open a browser on its own — so the shim does it.
-    await maybeOpenBrowser();
+    // Headless by default: tippani returns the URL and lets the client (LLM or
+    // user) open it — no browser is popped on the host. Only when the caller
+    // opts in with `open_pr { headless: false }` does tippani open the portal in
+    // the OS default browser itself.
+    if (!headless) await maybeOpenBrowser();
     return result;
   }
 
@@ -201,9 +167,9 @@ export function createPortalSession({
   // portal (PR-bound OR browse — both serve /prs + /api/v1/prs), or an existing
   // browse portal (prId 0) in the registry, else launches a PR-less browse
   // portal (reads org/project from ~/.tippani/config.json).
-  async function ensureBrowsePortal() {
+  async function ensureBrowsePortal({ headless = true } = {}) {
     if (active && (await healthyAt(active.url, active.token))) {
-      await maybeOpenBrowser();
+      if (!headless) await maybeOpenBrowser();
       return { reused: true, url: active.url };
     }
     for (const inst of listInstancesFn()) {
@@ -211,12 +177,12 @@ export function createPortalSession({
       const url = inst.url || `http://localhost:${inst.port}`;
       if (await healthyAt(url, inst.token)) {
         active = { port: Number(inst.port), url, token: inst.token, prId: 0, owned: false };
-        await maybeOpenBrowser();
+        if (!headless) await maybeOpenBrowser();
         return { reused: true, adopted: true, url };
       }
     }
     active = await launchNew({ browse: true });
-    await maybeOpenBrowser();
+    if (!headless) await maybeOpenBrowser();
     return { reused: false, url: active.url };
   }
 

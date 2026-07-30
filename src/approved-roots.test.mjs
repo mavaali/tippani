@@ -68,5 +68,21 @@ function fakeFs({ links = {}, roots = null, writes = {} } = {}) {
   ok("bad path returns null", ar.approveLocalRoot("") === null || ar.approveLocalRoot(null) === null);
 }
 
+// --- extraRoots (Custom-list folders) union into containment, dynamically ----
+{
+  const fs = fakeFs({ roots: ["/clone/repo"] });
+  let extra = [];
+  const ar = createApprovedRoots({ fs, path: P, rootsFile: "/roots.json", configDir: "/cfg", extraRoots: () => extra });
+  ok("local-clone root still approved", ar.isContained("/clone/repo/a.md"));
+  ok("custom folder NOT approved before add", !ar.isContained("/custom/dir/x.md"));
+  extra = ["/custom/dir"]; // the custom list gains a file under /custom/dir
+  ok("custom folder approved after add (dynamic)", ar.isContained("/custom/dir/x.md"));
+  ok("custom root itself contained", ar.isContained("/custom/dir"));
+  ok("sibling of custom root NOT approved", !ar.isContained("/custom/dir-evil/x.md"));
+  extra = []; // last file removed -> folder revoked
+  ok("custom folder revoked after removal", !ar.isContained("/custom/dir/x.md"));
+  ok("local-clone root unaffected by custom churn", ar.isContained("/clone/repo/a.md"));
+}
+
 console.log(`approved-roots: ${pass} passed, ${fail} failed`);
 if (fail > 0) process.exit(1);

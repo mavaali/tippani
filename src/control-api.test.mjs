@@ -92,6 +92,10 @@ const openPr = async (args) => {
 let lastAdoToken = null;
 const app = express();
 app.use(express.json());
+// Clickstop 2: Custom-list fake store shared by the injected deps below.
+const customListStore = [];
+const shapeCl = (p) => ({ path: p, dir: p.replace(/\/[^/]*$/, ""), name: p.split("/").pop(), addedAt: "T", openHref: "/open-file-view?path=" + encodeURIComponent(p) });
+
 registerControlApi(app, {
   port: PORT_FOR_PREFIXES,
   sessionToken: SESSION_TOKEN,
@@ -103,6 +107,13 @@ registerControlApi(app, {
   specDrafts,
   specLocks,
   specDiff: async (idx) => ({ hunks: [{ startLine: 3, endLine: 3, oldHtml: "<p>a</p>", newHtml: "<p>b</p>" }], source: "test", updatedAt: 1 }),
+  specPreview: async (idx, { original, proposed } = {}) => ({
+    html: "<p>" + String(proposed || "") + "</p>",
+    hunks: String(original) === String(proposed)
+      ? []
+      : [{ startLine: 1, endLine: 1, oldHtml: "<p>" + String(original) + "</p>", newHtml: "<p>" + String(proposed) + "</p>" }],
+    source: "user",
+  }),
   renderDraft: async (idx, { draft } = {}) => ({ html: draft ? "<p>DRAFT</p>" : "<p>COMMITTED</p>" }),
   listPrs: async (q) => ({ prs: [{ id: 1, title: "PR One", author: "Kay" }], mine: q.creator !== "any", status: 1 }),
   // Clickstop 2: Open file resolve. Fake classifier — "/ok/a.md" resolves, else error.
@@ -110,6 +121,17 @@ registerControlApi(app, {
     p === "/ok/a.md"
       ? { ok: true, realpath: "/ok/a.md" }
       : { ok: false, reason: "outside-root", error: "outside every approved folder" },
+  // Clickstop 2: Custom list. In-memory fake store; add validates .md only.
+  customFilesList: () => customListStore.map(shapeCl),
+  customFileAdd: ({ path: p } = {}) => {
+    if (!p || !/\.md$/i.test(p)) return { ok: false, reason: "not-md", error: "Only .md files can be added here." };
+    if (!customListStore.includes(p)) customListStore.push(p);
+    return { ok: true, files: customListStore.map(shapeCl) };
+  },
+  customFileRemove: ({ path: p } = {}) => {
+    const i = customListStore.indexOf(p); if (i >= 0) customListStore.splice(i, 1);
+    return { ok: true, files: customListStore.map(shapeCl) };
+  },
   remoteSpecDrafts,
   remoteSpecLocks,
   pushRemoteSpec,
@@ -181,6 +203,29 @@ try {
   {
     const r = await call("/api/v1/specs/99/diff");
     check("diff: out-of-range index -> empty hunks", r.status === 200 && Array.isArray(r.body.hunks) && r.body.hunks.length === 0);
+  }
+
+  // --- POST /api/v1/specs/:fileIndex/preview (live editor-buffer preview) ---
+  {
+    const r = await fetch(BASE + "/api/v1/specs/0/preview", {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ original: "a", proposed: "b" }),
+    });
+    check("preview: missing X-Tippani-Client -> 403", r.status === 403);
+  }
+  {
+    const r = await call("/api/v1/specs/0/preview", { method: "POST", body: { original: "a", proposed: "b" } });
+    check("preview: with client header -> 200", r.status === 200);
+    check("preview: renders proposed html", typeof r.body.html === "string" && r.body.html.includes("b"));
+    check("preview: returns diff hunks for a change", Array.isArray(r.body.hunks) && r.body.hunks.length === 1);
+    check("preview: source is user (personal edit)", r.body.source === "user");
+  }
+  {
+    const r = await call("/api/v1/specs/0/preview", { method: "POST", body: { original: "same", proposed: "same" } });
+    check("preview: unchanged buffer -> no hunks", r.status === 200 && Array.isArray(r.body.hunks) && r.body.hunks.length === 0);
+  }
+  {
+    const r = await call("/api/v1/specs/99/preview", { method: "POST", body: { original: "a", proposed: "b" } });
+    check("preview: out-of-range index -> 404", r.status === 404);
   }
 
   // --- GET /api/v1/threads ---
@@ -269,7 +314,7 @@ try {
     check("nav: backslash path -> 400", r.status === 400);
   }
 
-  // --- POST /api/v1/ado-token (Coforce token push) ---
+  // --- POST /api/v1/ado-token (host token push) ---
   {
     const r = await call("/api/v1/ado-token", { method: "POST", headers: authHeaders, body: { token: "fresh-bearer-xyz" } });
     check("ado-token: 200", r.status === 200 && r.body.ok === true);
@@ -486,6 +531,40 @@ try {
   {
     const r = await call("/api/v1/open-file", { method: "POST", headers: authHeaders, body: { path: "/etc/passwd.md" } });
     check("open-file: invalid -> ok:false + reason + error", r.status === 200 && r.body.ok === false && r.body.reason === "outside-root" && typeof r.body.error === "string");
+  }
+
+  // --- Custom list (clickstop 2) ---
+  {
+    const r = await fetch(BASE + "/api/v1/custom-files");
+    check("custom-files GET: missing X-Tippani-Client -> 403", r.status === 403);
+  }
+  {
+    const r = await fetch(BASE + "/api/v1/custom-files", {
+      method: "POST",
+      headers: { "X-Tippani-Client": "test", "Content-Type": "application/json" },
+      body: JSON.stringify({ path: "/ok/a.md" }),
+    });
+    check("custom-files POST: mutation without bearer -> 401", r.status === 401);
+  }
+  {
+    const r = await call("/api/v1/custom-files", { headers: authHeaders });
+    check("custom-files: initially empty", r.status === 200 && r.body.ok === true && Array.isArray(r.body.files) && r.body.files.length === 0);
+  }
+  {
+    const r = await call("/api/v1/custom-files", { method: "POST", headers: authHeaders, body: { path: "/x/a.md" } });
+    check("custom-files add: ok + tile shape", r.status === 200 && r.body.ok === true && r.body.files.length === 1 && r.body.files[0].name === "a.md" && r.body.files[0].openHref.includes("open-file-view"));
+  }
+  {
+    const r = await call("/api/v1/custom-files", { method: "POST", headers: authHeaders, body: { path: "/x/note.txt" } });
+    check("custom-files add: non-.md rejected 400", r.status === 400 && r.body.ok === false && r.body.reason === "not-md");
+  }
+  {
+    const r = await call("/api/v1/custom-files", { headers: authHeaders });
+    check("custom-files: GET reflects the add", r.status === 200 && r.body.files.length === 1 && r.body.files[0].path === "/x/a.md");
+  }
+  {
+    const r = await call("/api/v1/custom-files", { method: "DELETE", headers: authHeaders, body: { path: "/x/a.md" } });
+    check("custom-files remove: ok + empty", r.status === 200 && r.body.ok === true && r.body.files.length === 0);
   }
 
   // --- Remote (pre-PR) spec authoring (clickstop 2, step 11) ---

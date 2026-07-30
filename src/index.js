@@ -40,7 +40,8 @@ import { isExpiredJwt } from "./ado-token-check.js";
 import { buildPrCriteria, summarizePr, mergeRolePrs, prStatusLabel } from "./pr-criteria.js";
 import { navSkipsBarePathClobber, navShouldNavigate, navTarget } from "./nav-guard.js";
 import { createApprovedRoots } from "./approved-roots.js";
-import { classifyOpenFilePath } from "./open-file-path.js";
+import { classifyOpenFilePath, classifyAddFile } from "./open-file-path.js";
+import { createCustomFiles } from "./custom-files.js";
 import { fileReviewContext } from "./comment-key.js";
 import { isAllowedHost } from "./host-guard.js";
 import { buildPushChangeSet } from "./push-changeset.js";
@@ -52,6 +53,7 @@ import { makeRepoSession, createSessionTokens } from "./repo-session.js";
 import { saveSpecDraft, loadSpecDraft, deleteSpecDraft } from "./spec-draft-store.js";
 import { openSpecReviewPr } from "./pr-open.js";
 import { specSearchUnavailableMessage } from "./spec-search-error.js";
+import { prContentVersion, toVersionDescriptor, adoErrorInContent } from "./pr-version.js";
 import {
   decodeConfigValue,
   extOf,
@@ -218,11 +220,27 @@ function savePersonalComments(repoId, branch, filePath, comments) {
 // session still trusts a repo the user set up earlier. realpath-based, so a
 // symlinked alias of an approved root still matches.
 const LOCAL_ROOTS_FILE = path.join(CONFIG_DIR, "local-roots.json");
+// Clickstop 2 (Custom list): the durable user-curated file list. Its parent
+// folders are the custom-contributed approved roots, unioned into containment
+// below via `extraRoots` — so adding a file approves its folder and removing the
+// last file under a folder revokes it, with no dead roots ever accumulating.
+const CUSTOM_FILES_FILE = path.join(CONFIG_DIR, "custom-files.json");
+let _customFiles;
+try {
+  _customFiles = createCustomFiles({ fs, path, file: CUSTOM_FILES_FILE, configDir: CONFIG_DIR });
+} catch (e) {
+  // A corrupt store was quarantined; start empty rather than refusing to boot.
+  console.error("Custom-list store:", e.message);
+  _customFiles = createCustomFiles({ fs, path, file: CUSTOM_FILES_FILE, configDir: CONFIG_DIR });
+}
 // Clickstop 2, step 1: the approved-roots gate now lives in an importable,
 // tested module (behavior unchanged). `isContained` is the pure containment
 // check used by the open-a-file validator to distinguish a symlink escape.
+// `extraRoots` unions in the Custom-list folders (kept separate from persisted
+// local-clone roots so the two provenances never cross-revoke).
 const { approveLocalRoot, isApprovedRoot, isContained } = createApprovedRoots({
   fs, path, rootsFile: LOCAL_ROOTS_FILE, configDir: CONFIG_DIR,
+  extraRoots: () => _customFiles.customRoots(),
 });
 
 // --- ADO error helper ---
@@ -343,9 +361,9 @@ function applyRepoContextFromPR(pr) {
   return ctx;
 }
 
-async function getFileContent(conn, filePath, branch) {
+async function getFileContent(conn, filePath, ver) {
   const gitApi = await conn.getGitApi();
-  const versionDesc = branch.replace("refs/heads/", "");
+  const versionDesc = toVersionDescriptor(ver);
   const item = await gitApi.getItemContent(
     ADO_REPO,
     filePath,
@@ -355,14 +373,26 @@ async function getFileContent(conn, filePath, branch) {
     undefined,
     undefined,
     undefined,
-    { version: versionDesc, versionType: 0 }
+    versionDesc
   );
   const chunks = [];
   for await (const chunk of item) {
     chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
   }
-  return Buffer.concat(chunks).toString("utf-8");
+  const text = Buffer.concat(chunks).toString("utf-8");
+  // An unresolvable version (deleted source branch, gc'd commit) makes ADO stream
+  // its error envelope as the "content". Never return that as a file body — throw
+  // so callers cache nothing and render a clean placeholder instead.
+  const adoErr = adoErrorInContent(text);
+  if (adoErr) throw new Error(adoErr);
+  return text;
 }
+
+// Version descriptor for reading the bound PR's file content: prefer the PR's
+// source commit (survives source-branch deletion / PR completion), else the
+// branch name. Falls back to the raw _branch when no PR is bound (browse). Used
+// by every PR-content read; write/tip lookups still use _branch directly.
+function contentVersion() { return _pr ? prContentVersion(_pr) : _branch; }
 
 // Fetch a binary blob (an embedded image) from the repo as raw bytes. Same ADO
 // call as getFileContent, but returns the Buffer undecoded so the image proxy
@@ -370,9 +400,9 @@ async function getFileContent(conn, filePath, branch) {
 // return the real object for Git-LFS-tracked images (the specs store screenshots
 // in LFS); without it the call returns the ~130-byte LFS pointer text, which
 // would stream as a broken image.
-async function getImageBlob(conn, filePath, branch) {
+async function getImageBlob(conn, filePath, ver) {
   const gitApi = await conn.getGitApi();
-  const versionDesc = branch.replace("refs/heads/", "");
+  const versionDesc = toVersionDescriptor(ver);
   const item = await gitApi.getItemContent(
     ADO_REPO,
     filePath,
@@ -382,7 +412,7 @@ async function getImageBlob(conn, filePath, branch) {
     undefined,        // includeContentMetadata
     undefined,        // latestProcessedChange
     true,             // download — raw bytes
-    { version: versionDesc, versionType: 0 },
+    versionDesc,
     undefined,        // includeContent
     true              // resolveLfs — return the real blob, not the LFS pointer
   );
@@ -495,7 +525,7 @@ async function bindPr(prId) {
   _otherChangedFiles = fileResult.otherFiles;
   const fileContents = {};
   for (const f of _changedFiles) {
-    try { fileContents[f.path] = await getFileContent(_conn, f.path, _branch); } catch { /* skip uncacheable file */ }
+    try { fileContents[f.path] = await getFileContent(_conn, f.path, contentVersion()); } catch { /* skip uncacheable file */ }
   }
   let threads = [];
   try { threads = await getCommentThreads(_conn, prId); } catch { /* threads optional */ }
@@ -1894,28 +1924,78 @@ table.wi-results { width: 100%; table-layout: fixed; border-collapse: collapse; 
     } catch (e) { status.textContent = 'Failed: ' + e.message; }
   }
   function runActiveBranches() { if (brMode === 'local') runLocalBranches(); else runBranches(); }
-  // Clickstop 2 (Open file tab): resolve the typed path, then render a clickable
-  // card (valid) or an inline, non-clickable error. All text goes through esc()
-  // (never raw HTML), so a path/error containing markup can't break out.
-  async function runOpenFile() {
-    var input = document.getElementById('ofPath');
-    var out = document.getElementById('ofResults');
-    if (!input || !out) return;
-    var p = (input.value || '').trim();
-    if (!p) { out.innerHTML = ''; return; }
-    out.innerHTML = '<div class="wi-note">Checking\u2026</div>';
+  // Clickstop 2 (Custom-list tab): a durable, user-curated list of one-off .md
+  // files. Add validates + persists the file (approving its folder); each tile
+  // opens the read-only view; the × removes it (revoking its folder if last).
+  // All text goes through esc() (never raw HTML) so a path can't break out.
+  function clTile(f) {
+    var dir = f.dir ? '<div style="font-size:11px;color:var(--cp-text-muted);margin-bottom:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + esc(f.dir) + '</div>' : '';
+    return '<div class="pr-card" style="display:flex;align-items:center;gap:12px;">' +
+      '<a href="' + esc(f.openHref) + '" style="flex:1 1 auto;min-width:0;text-decoration:none;color:inherit;">' +
+        dir + '<div class="pr-title">' + esc(f.name) + '</div>' +
+      '</a>' +
+      '<button class="cl-remove" data-path="' + esc(f.path) + '" title="Remove from list" ' +
+        'style="flex:0 0 auto;border:1px solid var(--cp-border);background:var(--cp-surface);color:var(--cp-text-muted);' +
+        'width:28px;height:28px;border-radius:8px;cursor:pointer;font-size:16px;line-height:1;">\u00d7</button>' +
+    '</div>';
+  }
+  function renderCustomList(files) {
+    var list = document.getElementById('clList');
+    if (!list) return;
+    files = files || [];
+    if (!files.length) { list.innerHTML = '<div class="empty">No files yet. Add a .md file above.</div>'; return; }
+    list.innerHTML = '<div class="pr-list">' + files.map(clTile).join('') + '</div>';
+    list.querySelectorAll('.cl-remove').forEach(function (b) {
+      b.addEventListener('click', function () { removeCustomFile(b.dataset.path); });
+    });
+  }
+  async function loadCustomList() {
     try {
-      var r = await fetch('/api/v1/open-file', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ path: p }) });
+      var r = await fetch('/api/v1/custom-files');
       var d = await r.json();
-      if (d && d.ok) {
-        var href = '/open-file-view?path=' + encodeURIComponent(d.realpath);
-        out.innerHTML = '<div class="pr-list"><a class="pr-card" href="' + esc(href) + '"><div class="pr-top"><span class="pr-id">Open</span><span class="pr-status">read-only</span></div><div class="pr-title">' + esc(d.realpath) + '</div></a></div>';
-      } else {
-        out.innerHTML = '<div class="empty" style="color:var(--cp-danger,#c0392b)">' + esc((d && d.error) || 'Not a valid .md file path.') + '</div>';
-      }
+      if (d && d.ok) renderCustomList(d.files);
+    } catch (e) { /* leave the list as-is on a transient error */ }
+  }
+  async function runAddFile() {
+    var input = document.getElementById('ofPath');
+    var err = document.getElementById('ofError');
+    if (!input) return;
+    if (err) err.innerHTML = '';
+    var p = (input.value || '').trim();
+    if (!p) return;
+    try {
+      var r = await fetch('/api/v1/custom-files', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ path: p }) });
+      var d = await r.json();
+      if (d && d.ok) { input.value = ''; renderCustomList(d.files); }
+      else if (err) { err.innerHTML = '<div class="empty" style="color:var(--cp-danger,#c0392b)">' + esc((d && d.error) || 'Not a valid .md file path.') + '</div>'; }
     } catch (e) {
-      out.innerHTML = '<div class="empty" style="color:var(--cp-danger,#c0392b)">' + esc(String((e && e.message) || e)) + '</div>';
+      if (err) err.innerHTML = '<div class="empty" style="color:var(--cp-danger,#c0392b)">' + esc(String((e && e.message) || e)) + '</div>';
     }
+  }
+  // Native OS file picker (served locally, filtered to .md) — mirrors the Local
+  // branches Browse. Fills the box with the chosen real path; the user then Adds.
+  async function pickMdFile() {
+    var input = document.getElementById('ofPath');
+    var status = document.getElementById('ofStatus');
+    var err = document.getElementById('ofError'); if (err) err.innerHTML = '';
+    if (status) status.textContent = 'Opening file picker\u2026';
+    try {
+      var r = await fetch('/api/v1/pick-md-file', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+      var d = await r.json();
+      if (d && d.canceled) { if (status) status.textContent = ''; return; }
+      if (d && d.ok && d.path) { if (input) input.value = d.path; if (status) status.textContent = ''; }
+      else { if (status) status.textContent = ''; if (err) err.innerHTML = '<div class="empty" style="color:var(--cp-danger,#c0392b)">' + esc((d && d.error) || 'Could not open the file picker.') + '</div>'; }
+    } catch (e) {
+      if (status) status.textContent = '';
+      if (err) err.innerHTML = '<div class="empty" style="color:var(--cp-danger,#c0392b)">' + esc(String((e && e.message) || e)) + '</div>';
+    }
+  }
+  async function removeCustomFile(p) {
+    try {
+      var r = await fetch('/api/v1/custom-files', { method: 'DELETE', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ path: p }) });
+      var d = await r.json();
+      if (d && d.ok) renderCustomList(d.files);
+    } catch (e) { /* leave the list as-is on a transient error */ }
   }
   window.addEventListener('DOMContentLoaded', function () {
     document.querySelectorAll('.tab').forEach(function (t) { t.addEventListener('click', function () { activateTab(t.dataset.tab); }); });
@@ -1973,8 +2053,10 @@ table.wi-results { width: 100%; table-layout: fixed; border-collapse: collapse; 
     });
     var brRefresh = document.getElementById('brRefreshBtn'); if (brRefresh) brRefresh.addEventListener('click', runActiveBranches);
     var brBrowse = document.getElementById('brBrowseBtn'); if (brBrowse) brBrowse.addEventListener('click', pickWorkspace);
-    var ofBtn = document.getElementById('ofOpenBtn'); if (ofBtn) ofBtn.addEventListener('click', runOpenFile);
-    var ofBox = document.getElementById('ofPath'); if (ofBox) ofBox.addEventListener('keydown', function (e) { if (e.key === 'Enter') { e.preventDefault(); runOpenFile(); } });
+    var ofBtn = document.getElementById('ofOpenBtn'); if (ofBtn) ofBtn.addEventListener('click', runAddFile);
+    var ofBrowse = document.getElementById('ofBrowseBtn'); if (ofBrowse) ofBrowse.addEventListener('click', pickMdFile);
+    var ofBox = document.getElementById('ofPath'); if (ofBox) ofBox.addEventListener('keydown', function (e) { if (e.key === 'Enter') { e.preventDefault(); runAddFile(); } });
+    loadCustomList();
     var brPathInput = document.getElementById('brLocalPath');
     if (brPathInput) {
       brPathInput.addEventListener('keydown', function (e) { if (e.key === 'Enter') { e.preventDefault(); runLocalBranches(); } });
@@ -2036,7 +2118,7 @@ table.wi-results { width: 100%; table-layout: fixed; border-collapse: collapse; 
       <button class="tab" data-tab="queue" type="button">Review queue</button>
       <button class="tab" data-tab="workitems" type="button">Work items</button>
       <button class="tab" data-tab="branches" type="button">Branches</button>
-      <button class="tab" data-tab="openfile" type="button">Open file</button>
+      <button class="tab" data-tab="openfile" type="button">My spec list</button>
     </div>
 
     <div class="pane" data-pane="queue">
@@ -2102,12 +2184,14 @@ table.wi-results { width: 100%; table-layout: fixed; border-collapse: collapse; 
       <div class="wi-row">
         <span class="wi-label">File</span>
         <div class="br-ws-field">
-          <input id="ofPath" class="br-local-input" type="text" spellcheck="false" placeholder="Type or paste a path to a .md file\u2026">
+          <input id="ofPath" class="br-local-input" type="text" spellcheck="false" placeholder="Type or paste a path to a .md file, or click Browse\u2026">
         </div>
-        <button id="ofOpenBtn" class="wi-search" type="button">Open</button>
+        <button id="ofBrowseBtn" class="wi-search" type="button">Browse\u2026</button>
       </div>
-      <div class="wi-note">Open any single <code>.md</code> file read-only. The file must sit inside a folder you've already opened in Tippani (Branches \u2192 Local).</div>
-      <div id="ofResults"></div>
+      <div class="wi-actions"><span id="ofStatus" class="wi-status"></span><button id="ofOpenBtn" class="wi-search" type="button">Add</button></div>
+      <div class="wi-note">Add any local <code>.md</code> file to your spec list — it's remembered across restarts. Click a file to open it read-only.</div>
+      <div id="ofError"></div>
+      <div id="clList"></div>
     </div>
   </div>
 ${NAV_WATCHER}
@@ -3030,7 +3114,7 @@ ${NAV_WATCHER}
 }
 
 // --- Spec review page (3-column layout) ---
-function buildSpecPage(specHtml, toc, metadata, pr, threads, specPath, sourceMap, changedFiles, currentFileIndex, rawMarkdown, canEdit, baseObjectId, viewedMap = {}, viewedError = null) {
+function buildSpecPage(specHtml, toc, metadata, pr, threads, specPath, sourceMap, changedFiles, currentFileIndex, rawMarkdown, canEdit, baseObjectId, viewedMap = {}, viewedError = null, reviewing = false) {
   const tocHtml = toc
     .map(
       (t) =>
@@ -3379,6 +3463,9 @@ details[open] .resolved-summary::before { content: '▾ '; }
 .docdiff-old::before { content: 'Current'; color: #d93f0b; }
 .docdiff-new { background: color-mix(in srgb, var(--cp-success) 12%, transparent); border-color: color-mix(in srgb, var(--cp-success) 34%, transparent); margin-top: 6px; }
 .docdiff-new::before { content: 'Proposed'; color: var(--cp-success); }
+    .docdiff-widget.docdiff-personal .docdiff-new { background: color-mix(in srgb, var(--cp-accent) 12%, transparent); border-color: color-mix(in srgb, var(--cp-accent) 40%, transparent); }
+    .docdiff-widget.docdiff-personal .docdiff-new::before { content: 'Your edit'; color: var(--cp-accent); }
+    .docdiff-widget.docdiff-personal.docdiff-active::after { background: var(--cp-accent); }
 .docdiff-merged { padding: 0 0 0 22px; border: none; background: transparent; overflow: visible; }
 .docdiff-merged::before { display: none; }
 .docdiff-table { border-collapse: collapse; width: 100%; font-size: 13px; }
@@ -3398,8 +3485,11 @@ details[open] .resolved-summary::before { content: '▾ '; }
 .conflict-msg { font-size: 13px; line-height: 1.55; color: var(--cp-text); margin-bottom: 6px; }
 
 /* Toast */
-.toast { position: fixed; bottom: 80px; right: 24px; background: var(--cp-surface); color: var(--cp-text); padding: 10px 18px; border-radius: 10px; font-size: 13px; display: none; z-index: 200; border: 1px solid var(--cp-border); box-shadow: var(--cp-shadow); }
-.toast.show { display: block; }
+.toast { position: fixed; bottom: 80px; right: 24px; background: var(--cp-surface); color: var(--cp-text); padding: 10px 18px; border-radius: 10px; font-size: 13px; display: none; z-index: 200; border: 1px solid var(--cp-border); box-shadow: var(--cp-shadow); max-width: 440px; }
+    .toast.show { display: flex; align-items: flex-start; gap: 12px; }
+    .toast.toast-error { border-color: var(--cp-danger); color: var(--cp-danger); }
+    .toast .toast-x { flex: 0 0 auto; margin-left: auto; background: none; border: none; color: inherit; font-size: 16px; line-height: 1; cursor: pointer; opacity: .7; padding: 0 2px; }
+    .toast .toast-x:hover { opacity: 1; }
 <\/style>
 <script>
   if (window.matchMedia('(prefers-color-scheme: dark)').matches) document.documentElement.dataset.theme = 'dark';
@@ -3519,10 +3609,10 @@ details[open] .resolved-summary::before { content: '▾ '; }
   <button class="sync-btn" id="syncBtn" onclick="syncPending()">Sync to ADO</button>
 </div>
 
-<div class="review-bar">
+${reviewing ? `<div class="review-bar">
   <button class="review-btn review-btn-approve" onclick="submitReview('approve')">Approve</button>
   <button class="review-btn review-btn-changes" onclick="submitReview('reject')">Request Changes</button>
-</div>
+</div>` : ``}
 
 <div class="comment-modal" id="commentModal">
   <div class="comment-modal-inner">
@@ -3593,7 +3683,8 @@ window.tippani = (function () {
 
   const el = (id) => document.getElementById(id);
   const isDirty = () => !!editor && editor.getMarkdown() !== RAW_MARKDOWN;
-  const toast = (m) => window.showToast && window.showToast(m);
+  const toast = (m, o) => window.showToast && window.showToast(m, o);
+  const toastError = (m) => { if (window.showToast) window.showToast(m, { persist: true, error: true }); };
 
   // Save button is enabled only when there are unsaved changes.
   function updateSaveState() {
@@ -3612,6 +3703,9 @@ window.tippani = (function () {
   function onEditorChange() {
     updateSaveState();
     updateDirtyIndicator();
+    // setViewButtonsEnabled lives in the separate view <script> block (a global
+    // function); refresh Diff/Proposed enablement whenever dirty state changes.
+    if (typeof setViewButtonsEnabled === 'function') { try { setViewButtonsEnabled(); } catch (e) {} }
   }
 
   function ensureEditor() {
@@ -3792,11 +3886,12 @@ window.tippani = (function () {
     maybeSeedProposal();
     editor.view.focus();
   }
-  function exitEdit() {
-    // Unsaved-changes prompt on mode switch. Edits are kept for the session (not
-    // discarded) so they survive toggle cycles; saving is via the Save button.
-    // Cancel keeps you in edit mode.
-    if (isDirty() && !confirm("You have unsaved changes. Switch to read view? Your edits are kept for this session.")) return;
+  function exitEdit(silent, targetView) {
+    // Unsaved-changes prompt on an explicit mode switch (the View toggle). Edits
+    // are kept for the session (not discarded) so they survive toggle cycles;
+    // saving is via the Save button. Cancel keeps you in edit mode. A view-button
+    // click passes silent=true — it's just switching reading views, edits kept.
+    if (!silent && isDirty() && !confirm("You have unsaved changes. Switch to read view? Your edits are kept for this session.")) return;
     el("spec-editor").style.display = "none";
     el("spec-content").style.display = "";
     const tb = el("fmtToolbar");
@@ -3809,7 +3904,15 @@ window.tippani = (function () {
     { const find = el("findBtn"); if (find) find.style.display = "none"; }
     editMode = false;
     applyEditPaneState();
-    if (typeof applyView === "function") applyView(typeof _currentView === "string" ? _currentView : "current");
+    // Land on the requested view, else the current one — but if you have unsaved
+    // edits and were on Current (committed), switch to Proposed so your edit
+    // stays visible instead of vanishing behind the committed text.
+    let v = targetView;
+    if (!v) {
+      const cur = (typeof getSpecView === "function") ? getSpecView() : "current";
+      v = (isDirty() && cur === "current") ? "proposed" : cur;
+    }
+    if (typeof applyView === "function") applyView(v);
   }
   function toggle() {
     editMode ? exitEdit() : enterEdit();
@@ -3903,12 +4006,13 @@ window.tippani = (function () {
       } else if (data.queued) {
         RAW_MARKDOWN = newMd; // safely persisted to the queue; will retry on sync
         await dropStagedProposal(); // committed buffer supersedes any staged proposal
-        toast(data.error ? "Push failed (" + data.error + ") — queued, will retry on sync" : (data.message || "Saved locally — will sync"));
+        if (data.error) toastError("Push failed (" + data.error + ") — queued, will retry on sync");
+        else toast(data.message || "Saved locally — will sync");
       } else {
-        toast("Save failed: " + (data.error || "unknown") + " — your edits are kept");
+        toastError("Save failed: " + (data.error || "unknown") + " — your edits are kept");
       }
     } catch (e) {
-      toast("Save failed: " + e.message + " — your edits are kept");
+      toastError("Save failed: " + e.message + " — your edits are kept");
     } finally {
       saving = false;
       if (btn) btn.textContent = "Save";
@@ -4032,11 +4136,15 @@ window.tippani = (function () {
     // True while the spec editor is open — drives the edit lock heartbeat.
     isEditing: () => editMode,
     // Open the Find & Replace panel (manual equivalent of edit_spec's find kind).
-    search: () => { if (ensureEditor() && editor && editor.openSearch) editor.openSearch(); },
+    search: () => { if (ensureEditor() && editor) { if (editor.toggleSearch) editor.toggleSearch(); else if (editor.openSearch) editor.openSearch(); } },
     // Switch the spec reading view (item 3). Applies locally at once + records it
     // server-side so the agent's set_view and the manual toggle share one state.
     setView: (v) => {
-      if (typeof applyView === "function") applyView(v);
+      // The reading-view buttons work in View mode. If clicked while editing,
+      // leave the editor first (keeping edits) so the view actually swaps in and
+      // Proposed/Diff can show the uncommitted buffer.
+      if (editMode) exitEdit(true, v);
+      else if (typeof applyView === "function") applyView(v);
       fetch("/api/v1/commands/view", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ view: v }) }).catch(() => {});
     },
   };
@@ -4185,11 +4293,20 @@ function clearDiffOverlay() {
   document.querySelectorAll('.docdiff-widget').forEach((e) => e.remove());
   document.querySelectorAll('.docdiff-hidden').forEach((e) => { e._diffDest = null; e.classList.remove('docdiff-hidden'); });
 }
-async function applyDiffOverlay() {
+async function applyDiffOverlay(opts) {
+  opts = opts || {};
+  const personal = !!opts.personal;
   try {
-    const r = await fetch('/api/v1/specs/' + CURRENT_FILE_INDEX + '/diff');
-    if (!r.ok) return;
-    const data = await r.json();
+    let data;
+    if (personal) {
+      const r = await fetch('/api/v1/specs/' + CURRENT_FILE_INDEX + '/preview', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ original: window.tippani.getOriginal(), proposed: window.tippani.getMarkdown() }) });
+      if (!r.ok) return;
+      data = await r.json();
+    } else {
+      const r = await fetch('/api/v1/specs/' + CURRENT_FILE_INDEX + '/diff');
+      if (!r.ok) return;
+      data = await r.json();
+    }
     clearDiffOverlay();
     const hunks = (data && data.hunks) || [];
     const db0 = document.getElementById('discardProposalBtn');
@@ -4208,7 +4325,7 @@ async function applyDiffOverlay() {
       if (!target && bestKey != null) target = commentableEls[parseInt(bestKey)];
 
       const wrap = document.createElement('div');
-      wrap.className = 'docdiff-widget';
+      wrap.className = 'docdiff-widget' + (personal ? ' docdiff-personal' : '');
       wrap.dataset.start = h.startLine;
       wrap.dataset.end = h.endLine;
       if (h.mergedHtml) {
@@ -4312,6 +4429,10 @@ function scrollEditorToLine(lineNo) {
 // proposed draft clean into #spec-current; 'diff' overlays; 'current' is the
 // committed #spec-content.
 let _currentView = 'current';
+let _hasAgentDraft = false;
+// Exposed so the editor <script> block can read the active reading view when it
+// leaves edit mode (the two blocks don't share a lexical scope).
+function getSpecView() { return _currentView; }
 async function applyView(view) {
   if (!['current','diff','proposed'].includes(view)) return;
   _currentView = view;
@@ -4319,17 +4440,27 @@ async function applyView(view) {
   const content = document.getElementById('spec-content');
   const current = document.getElementById('spec-current');
   const editing = !!(document.getElementById('mainContent') && document.getElementById('mainContent').classList.contains('editing'));
+  const personal = !!(window.tippani && window.tippani.isDirty && window.tippani.isDirty());
+  // Always clear any prior diff overlay first — switching to Proposed/Current
+  // must not leave the Diff boxes lingering. The 'diff' branch re-applies it.
+  clearDiffOverlay();
   if (view === 'proposed') {
     try {
-      const r = await fetch('/api/v1/specs/' + CURRENT_FILE_INDEX + '/render?draft=1');
-      if (r.ok) { const d = await r.json(); if (current) { current.innerHTML = d.html || ''; if (window.tippaniRenderMermaid) window.tippaniRenderMermaid(current); } }
+      let d = null;
+      if (personal) {
+        const r = await fetch('/api/v1/specs/' + CURRENT_FILE_INDEX + '/preview', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ original: window.tippani.getOriginal(), proposed: window.tippani.getMarkdown() }) });
+        if (r.ok) d = await r.json();
+      } else {
+        const r = await fetch('/api/v1/specs/' + CURRENT_FILE_INDEX + '/render?draft=1');
+        if (r.ok) d = await r.json();
+      }
+      if (d && current) { current.innerHTML = d.html || ''; if (window.tippaniRenderMermaid) window.tippaniRenderMermaid(current); }
     } catch {}
     if (!editing) { if (content) content.style.display = 'none'; if (current) current.style.display = ''; }
   } else {
     if (current) current.style.display = 'none';
     if (!editing && content) content.style.display = '';
-    clearDiffOverlay();
-    if (view === 'diff') { try { await applyDiffOverlay(); } catch {} }
+    if (view === 'diff') { try { await applyDiffOverlay({ personal }); } catch {} }
   }
 }
 // Item 2: persistent dark-red highlight on the source section tied to a thread.
@@ -4352,13 +4483,15 @@ function highlightSectionForThread(threadId) {
 // Enable Diff/Proposed only when a staged proposal exists for this file (else
 // they're greyed). Current is always available.
 function setViewButtonsEnabled(hasDraft) {
+  if (typeof hasDraft === 'boolean') _hasAgentDraft = hasDraft;
+  const avail = _hasAgentDraft || !!(window.tippani && window.tippani.isDirty && window.tippani.isDirty());
   document.querySelectorAll('.view-btn').forEach((b) => {
     if (b.dataset.view === 'diff' || b.dataset.view === 'proposed') {
-      b.disabled = !hasDraft;
-      if (!hasDraft) b.title = 'No staged proposal yet';
+      b.disabled = !avail;
+      b.title = avail ? '' : 'No changes to preview yet';
     }
   });
-  if (!hasDraft && (_currentView === 'diff' || _currentView === 'proposed')) applyView('current');
+  if (!avail && (_currentView === 'diff' || _currentView === 'proposed')) applyView('current');
 }
 applyView('current');
 (async () => {
@@ -4366,6 +4499,7 @@ applyView('current');
     const r = await fetch('/api/v1/specs/' + CURRENT_FILE_INDEX + '/draft');
     if (r.ok) { const d = await r.json(); setViewButtonsEnabled(!!(d && d.draft && d.draft.content)); }
   } catch {}
+  setViewButtonsEnabled();
 })();
 
 // open_file deep-link: /file/<idx>?line=N scrolls to that line once the view settles.
@@ -4395,11 +4529,31 @@ document.addEventListener('keydown', (e) => {
   }
 });
 
-function showToast(msg) {
+function showToast(msg, opts) {
+  opts = opts || {};
   const t = document.getElementById('toast');
-  t.textContent = msg;
-  t.classList.add('show');
-  setTimeout(() => t.classList.remove('show'), 2500);
+  if (!t) return;
+  if (window.__toastTimer) { clearTimeout(window.__toastTimer); window.__toastTimer = null; }
+  t.classList.toggle('toast-error', !!opts.error);
+  if (opts.persist) {
+    // Stays until the user dismisses it with the × (used for push/save failures).
+    t.innerHTML = '';
+    const span = document.createElement('span');
+    span.textContent = msg;
+    t.appendChild(span);
+    const x = document.createElement('button');
+    x.className = 'toast-x';
+    x.type = 'button';
+    x.setAttribute('aria-label', 'Dismiss');
+    x.textContent = '\u00d7';
+    x.addEventListener('click', () => t.classList.remove('show'));
+    t.appendChild(x);
+    t.classList.add('show');
+  } else {
+    t.textContent = msg;
+    t.classList.add('show');
+    window.__toastTimer = setTimeout(() => t.classList.remove('show'), 2500);
+  }
 }
 
 async function submitComment() {
@@ -4920,7 +5074,7 @@ let _adoToken = null;
 // token) keeps the tokenless CLI/PAT fallback chain.
 let HOST_TOKEN_MODE = false;
 
-// Swap the live ADO bearer token at runtime. Coforce is the token authority and
+// Swap the live ADO bearer token at runtime. The host is the token authority and
 // pushes a freshly-minted token here (POST /api/v1/ado-token) before the old one
 // expires, so a long-lived portal never makes ADO calls with a stale token.
 // Rebuilds the connection so every subsequent ADO call uses the new bearer.
@@ -5372,7 +5526,7 @@ async function main() {
     const fileContents = {};
     for (const f of _changedFiles) {
       try {
-        fileContents[f.path] = await getFileContent(_conn, f.path, _branch);
+        fileContents[f.path] = await getFileContent(_conn, f.path, contentVersion());
       } catch (e) {
         console.log("    \u26A0 Could not cache " + f.path);
       }
@@ -5689,7 +5843,7 @@ async function main() {
       const pcDataSeq = _focus.get().pcDataSeq;
       return res.type("html").send(buildReadonlySpecPage({
         title, bodyHtml, toc, specPath: real, repo: title, adoUrl: "", backHref: "/discovery?tab=openfile",
-        backLabel: "Open file", historyUrl: "", sourceMap: ranges, reviewing: true, editMode: "local",
+        backLabel: "My spec list", historyUrl: "", sourceMap: ranges, reviewing: true, editMode: "local",
         commentCount, reviewRepo: ctx.repo, reviewBranch: ctx.branch, reviewPath: ctx.path,
         currentUser: "You", personalComments, pcDataSeq,
       }));
@@ -5835,11 +5989,19 @@ async function main() {
       if (_cache?.fileContents?.[filePath]) {
         raw = _cache.fileContents[filePath];
       } else if (!_isOffline && _conn) {
-        raw = await getFileContent(_conn, filePath, _branch);
-        if (_cache) {
-          _cache.fileContents = _cache.fileContents || {};
-          _cache.fileContents[filePath] = raw;
-          saveCache(_prId, _cache);
+        try {
+          raw = await getFileContent(_conn, filePath, contentVersion());
+          if (_cache) {
+            _cache.fileContents = _cache.fileContents || {};
+            _cache.fileContents[filePath] = raw;
+            saveCache(_prId, _cache);
+          }
+        } catch (e) {
+          // Content unreadable (e.g. the PR's source branch AND commit are gone).
+          // Render a clean placeholder rather than leaking the raw ADO error JSON.
+          raw = "# File unavailable\n\nThis file couldn't be loaded from Azure DevOps.\n\n> "
+            + String((e && e.message) || e).replace(/\s+/g, " ").trim()
+            + "\n\nThe pull request's source branch or commit may no longer exist in the repository.";
         }
       } else {
         return res.status(503).send("File not in cache and running offline.");
@@ -5891,7 +6053,7 @@ async function main() {
         try { baseObjectId = await getBranchTip(_conn, _branch); } catch { /* non-fatal */ }
       }
       const { map: viewedMap, error: viewedError } = await loadViewedState(_conn, _prId, _isOffline);
-      res.type("html").send(buildSpecPage(specHtml, toc, metadata, _pr, allThreads, filePath, sourceMap, _changedFiles, idx, body, canEdit, baseObjectId, viewedMap, viewedError));
+      res.type("html").send(buildSpecPage(specHtml, toc, metadata, _pr, allThreads, filePath, sourceMap, _changedFiles, idx, body, canEdit, baseObjectId, viewedMap, viewedError, !!_pr && !_pr.isDraft));
     } catch (e) {
       res.status(500).send("Error rendering spec. Check the server console for details.");
       console.error("Spec render error:", e.message);
@@ -5915,7 +6077,7 @@ async function main() {
       const type = imageContentType(resolved);
       if (!type) return res.status(404).end();
       if (_isOffline || !_conn) return res.status(503).end();
-      const buf = await getImageBlob(_conn, resolved, _branch);
+      const buf = await getImageBlob(_conn, resolved, contentVersion());
       if (!buf || buf.length === 0) return res.status(404).end();
       if (isLfsPointer(buf)) {
         // resolveLfs was requested but ADO still returned the pointer — better
@@ -5949,7 +6111,7 @@ async function main() {
     const filePath = files[idx].path;
     let raw = _cache?.fileContents?.[filePath];
     if (!raw && !_isOffline && _conn) {
-      try { raw = await getFileContent(_conn, filePath, _branch); } catch { /* fall through */ }
+      try { raw = await getFileContent(_conn, filePath, contentVersion()); } catch { /* fall through */ }
     }
     if (!raw) return { hunks: [] };
     const { body } = stripFrontmatter(raw);
@@ -5973,12 +6135,26 @@ async function main() {
     }
     if (content == null) {
       let raw = _cache?.fileContents?.[filePath];
-      if (!raw && !_isOffline && _conn) { try { raw = await getFileContent(_conn, filePath, _branch); } catch {} }
+      if (!raw && !_isOffline && _conn) { try { raw = await getFileContent(_conn, filePath, contentVersion()); } catch {} }
       content = raw || "";
     }
     const { body } = stripFrontmatter(content);
     const { html } = await renderSpecBody(body, specSanitizeSchema, { rewriteImagesForFileIndex: idx });
     return { html };
+  }
+
+  // Stateless preview of the user's LIVE (uncommitted) editor buffer for the
+  // reading views — renders the buffer clean (Proposed) and diffs it against the
+  // committed baseline the client sends (Diff). No draft-store side effects, so
+  // it never touches the agent's staged proposal; the client colors these hunks
+  // as personal edits, distinct from agent edits.
+  async function computeSpecPreview(idx, { original = "", proposed = "" } = {}) {
+    const { body: propBody } = stripFrontmatter(String(proposed || ""));
+    const { body: origBody } = stripFrontmatter(String(original || ""));
+    const { html } = await renderSpecBody(propBody, specSanitizeSchema, { rewriteImagesForFileIndex: idx });
+    let hunks = [];
+    try { hunks = await computeSpecDiffHunks(origBody, propBody); } catch { hunks = []; }
+    return { html, hunks, source: "user" };
   }
 
   // List PRs to review (item 6). Defaults to the authenticated user's active
@@ -6233,8 +6409,17 @@ async function main() {
     for (const r of comment.replies || []) replies.push({ ...r, html: await renderMarkdownSafe(r.content || "") });
     return { ...comment, html: await renderMarkdownSafe(comment.content || ""), replies };
   }
+  // A bare-file reviewing context (open_local_file, clickstop 2 step 3/4) keys
+  // comments by realpath under a "file:" repo scheme and legitimately has NO
+  // branch; every other context still needs repo + branch + path. Without this,
+  // the one-off local-file comment loop failed over MCP with "Missing repo/branch/path."
+  function _pcTargetOk(repo, branch, filePath) {
+    if (!repo || !filePath) return false;
+    if (!branch && !String(repo).startsWith("file:")) return false;
+    return true;
+  }
   async function listPersonalComments({ repo, branch, path: filePath, rawText, sourceMap } = {}) {
-    if (!repo || !branch || !filePath) return { ok: false, error: "Missing repo/branch/path." };
+    if (!_pcTargetOk(repo, branch, filePath)) return { ok: false, error: "Missing repo/branch/path." };
     let list;
     try { list = loadPersonalComments(repo, branch, filePath); }
     catch (e) { return { ok: false, error: `Could not read comments: ${e.code || e.message}` }; }
@@ -6260,7 +6445,7 @@ async function main() {
     return { ok: true, comments };
   }
   async function createPersonalComment({ repo, branch, path: filePath, line, content } = {}) {
-    if (!repo || !branch || !filePath) return { ok: false, error: "Missing repo/branch/path." };
+    if (!_pcTargetOk(repo, branch, filePath)) return { ok: false, error: "Missing repo/branch/path." };
     const text = String(content == null ? "" : content).trim();
     if (!text) return { ok: false, error: "Empty comment." };
     const me = await getMe();
@@ -6274,7 +6459,7 @@ async function main() {
     return { ok: true, comment: await _pcWithHtml(c), dataSeq: _focus.bumpPcData() };
   }
   async function editPersonalComment({ repo, branch, path: filePath, id, content } = {}) {
-    if (!repo || !branch || !filePath || !id) return { ok: false, error: "Missing repo/branch/path/id." };
+    if (!_pcTargetOk(repo, branch, filePath) || !id) return { ok: false, error: "Missing repo/branch/path/id." };
     try {
       const cur = loadPersonalComments(repo, branch, filePath);
       if (!pcFind(cur, id)) return { ok: false, error: "Not found." };
@@ -6289,7 +6474,7 @@ async function main() {
     }
   }
   async function deletePersonalComment({ repo, branch, path: filePath, id } = {}) {
-    if (!repo || !branch || !filePath || !id) return { ok: false, error: "Missing repo/branch/path/id." };
+    if (!_pcTargetOk(repo, branch, filePath) || !id) return { ok: false, error: "Missing repo/branch/path/id." };
     try {
       savePersonalComments(repo, branch, filePath, pcRemove(loadPersonalComments(repo, branch, filePath), id));
     } catch (e) {
@@ -6298,7 +6483,7 @@ async function main() {
     return { ok: true, id, dataSeq: _focus.bumpPcData() };
   }
   async function resolvePersonalComment({ repo, branch, path: filePath, id, resolved } = {}) {
-    if (!repo || !branch || !filePath || !id) return { ok: false, error: "Missing repo/branch/path/id." };
+    if (!_pcTargetOk(repo, branch, filePath) || !id) return { ok: false, error: "Missing repo/branch/path/id." };
     try {
       const cur = loadPersonalComments(repo, branch, filePath);
       if (!pcFind(cur, id)) return { ok: false, error: "Not found." };
@@ -6312,7 +6497,7 @@ async function main() {
   // Append a reply (a follow-up note) to a comment — e.g. the assistant recording
   // how it addressed the feedback before resolving.
   async function replyPersonalComment({ repo, branch, path: filePath, id, author, content } = {}) {
-    if (!repo || !branch || !filePath || !id) return { ok: false, error: "Missing repo/branch/path/id." };
+    if (!_pcTargetOk(repo, branch, filePath) || !id) return { ok: false, error: "Missing repo/branch/path/id." };
     const text = String(content == null ? "" : content).trim();
     if (!text) return { ok: false, error: "Empty reply." };
     try {
@@ -6339,7 +6524,7 @@ async function main() {
   }
   async function mcpReadPersonalComments(args = {}) {
     const { repo, branch, path: filePath } = pcCtx(args);
-    if (!repo || !branch || !filePath) return { ok: false, error: "No open reviewing file \u2014 open a file first or pass repo/branch/path." };
+    if (!_pcTargetOk(repo, branch, filePath)) return { ok: false, error: "No open reviewing file \u2014 open a file first or pass repo/branch/path." };
     let list;
     try { list = pcSort(loadPersonalComments(repo, branch, filePath)); }
     catch (e) { return { ok: false, error: `Could not read comments: ${e.code || e.message}` }; }
@@ -6372,7 +6557,7 @@ async function main() {
     const { repo, branch, path: filePath } = pcCtx(args);
     const id = args.id || _focus.get().pcSelectedId;
     if (!id) return { ok: false, error: "No comment id and none selected." };
-    if (!repo || !branch || !filePath) return { ok: false, error: "No open reviewing file \u2014 open a file first or pass repo/branch/path." };
+    if (!_pcTargetOk(repo, branch, filePath)) return { ok: false, error: "No open reviewing file \u2014 open a file first or pass repo/branch/path." };
     // Post the "how it was addressed" note (if any) AND flip resolved in a
     // SINGLE load/apply/save, so the store is written once — previously this ran
     // reply then resolve as two separate load→save cycles (a lost-update race).
@@ -6400,7 +6585,7 @@ async function main() {
   }
   async function mcpDeleteResolvedPersonalComments(args = {}) {
     const { repo, branch, path: filePath } = pcCtx(args);
-    if (!repo || !branch || !filePath) return { ok: false, error: "No open reviewing file." };
+    if (!_pcTargetOk(repo, branch, filePath)) return { ok: false, error: "No open reviewing file." };
     const cur = loadPersonalComments(repo, branch, filePath);
     const kept = cur.filter((c) => !c.resolved);
     savePersonalComments(repo, branch, filePath, kept);
@@ -6409,7 +6594,7 @@ async function main() {
   }
   async function mcpClearPersonalComments(args = {}) {
     const { repo, branch, path: filePath } = pcCtx(args);
-    if (!repo || !branch || !filePath) return { ok: false, error: "No open reviewing file." };
+    if (!_pcTargetOk(repo, branch, filePath)) return { ok: false, error: "No open reviewing file." };
     const n = loadPersonalComments(repo, branch, filePath).length;
     savePersonalComments(repo, branch, filePath, []);
     _focus.setPcSelected(null);
@@ -6418,7 +6603,7 @@ async function main() {
   }
   async function mcpNavPersonalComment(args = {}) {
     const { repo, branch, path: filePath } = pcCtx(args);
-    if (!repo || !branch || !filePath) return { ok: false, error: "No open reviewing file." };
+    if (!_pcTargetOk(repo, branch, filePath)) return { ok: false, error: "No open reviewing file." };
     const list = pcSort(loadPersonalComments(repo, branch, filePath));
     if (!list.length) return { ok: false, error: "No comments to navigate." };
     const targetId = pcNavTarget(list, _focus.get().pcSelectedId, args.direction || "next");
@@ -6429,7 +6614,7 @@ async function main() {
   }
   async function mcpJumpPersonalComment(args = {}) {
     const { repo, branch, path: filePath } = pcCtx(args);
-    if (!repo || !branch || !filePath) return { ok: false, error: "No open reviewing file." };
+    if (!_pcTargetOk(repo, branch, filePath)) return { ok: false, error: "No open reviewing file." };
     const list = pcSort(loadPersonalComments(repo, branch, filePath));
     let target = null;
     if (args.id) target = pcFind(list, args.id);
@@ -6700,6 +6885,87 @@ if ($path) { [Console]::Out.Write($path) }
           const v = validateLocalRepo(picked);
           if (!v.ok) return resolve({ ok: false, error: "That folder isn't a git repository.", path: picked });
           resolve({ ok: true, path: picked, branch: v.branch });
+        });
+    });
+  }
+
+  // Native OS file-picker dialog: pick a single .md, the SAME mechanism as the
+  // folder picker above (modern IFileOpenDialog via COM, classic OpenFileDialog
+  // fallback). Returns { ok, path } | { ok:false, canceled }. Validation (exists /
+  // .md / readable) happens on Add via classifyAddFile, so no filter is enforced.
+  async function pickLocalMdFile() {
+    if (process.platform !== "win32") {
+      return { ok: false, error: "The file picker is Windows-only here." };
+    }
+    const script = `$ErrorActionPreference = 'Stop'
+$path = $null
+$modernOk = $false
+try {
+  $src = @'
+using System;
+using System.Runtime.InteropServices;
+public static class TippaniFilePicker {
+  [ComImport, ClassInterface(ClassInterfaceType.None), Guid("DC1C5A9C-E88A-4DDE-A5A1-60F82A20AEF7")]
+  private class FileOpenDialogRCW { }
+  [ComImport, Guid("42F85136-DB7E-439C-85F1-E4075D135FC8"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+  private interface IFileOpenDialog {
+    [PreserveSig] uint Show(IntPtr parent);
+    void SetFileTypes(); void SetFileTypeIndex(uint i); void GetFileTypeIndex(out uint i);
+    void Advise(); void Unadvise();
+    void SetOptions(uint fos); void GetOptions(out uint fos);
+    void SetDefaultFolder(IntPtr psi); void SetFolder(IntPtr psi); void GetFolder(out IntPtr ppsi);
+    void GetCurrentSelection(out IntPtr ppsi);
+    void SetFileName([MarshalAs(UnmanagedType.LPWStr)] string n); void GetFileName([MarshalAs(UnmanagedType.LPWStr)] out string n);
+    void SetTitle([MarshalAs(UnmanagedType.LPWStr)] string t);
+    void SetOkButtonLabel(); void SetFileNameLabel();
+    void GetResult(out IShellItem ppsi);
+    void AddPlace(); void SetDefaultExtension(); void Close(); void SetClientGuid(); void ClearClientData(); void SetFilter();
+    void GetResults(); void GetSelectedItems();
+  }
+  [ComImport, Guid("43826D1E-E718-42EE-BC55-A1E261C37BFE"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+  private interface IShellItem {
+    void BindToHandler(); void GetParent();
+    void GetDisplayName(uint sigdn, [MarshalAs(UnmanagedType.LPWStr)] out string name);
+    void GetAttributes(); void Compare();
+  }
+  public static string Pick() {
+    var dlg = (IFileOpenDialog)new FileOpenDialogRCW();
+    dlg.SetOptions(0x40u | 0x1000u);
+    dlg.SetTitle("Select a Markdown file");
+    uint hr = dlg.Show(IntPtr.Zero);
+    if (hr != 0) { return null; }
+    IShellItem item; dlg.GetResult(out item);
+    string p; item.GetDisplayName(0x80058000u, out p);
+    return p;
+  }
+}
+'@
+  Add-Type -TypeDefinition $src -Language CSharp | Out-Null
+  $path = [TippaniFilePicker]::Pick()
+  $modernOk = $true
+} catch {
+  $modernOk = $false
+}
+if (-not $modernOk) {
+  try {
+    Add-Type -AssemblyName System.Windows.Forms | Out-Null
+    $o = New-Object System.Windows.Forms.Form; $o.TopMost = $true; $o.ShowInTaskbar = $false; $o.Opacity = 0; $o.Show()
+    $d = New-Object System.Windows.Forms.OpenFileDialog; $d.Title = 'Select a Markdown file'; $d.Filter = 'Markdown (*.md)|*.md|All files (*.*)|*.*'; $d.Multiselect = $false
+    $r = $d.ShowDialog($o); $o.Close()
+    if ($r -eq [System.Windows.Forms.DialogResult]::OK) { $path = $d.FileName }
+  } catch { $path = $null }
+}
+if ($path) { [Console]::Out.Write($path) }
+`;
+    const tmp = path.join(os.tmpdir(), `tippani-pickmd-${Date.now()}-${Math.random().toString(36).slice(2)}.ps1`);
+    try { fs.writeFileSync(tmp, script, "utf8"); } catch (e) { return { ok: false, error: "Could not stage the file picker." }; }
+    return await new Promise((resolve) => {
+      execFile("powershell", ["-NoProfile", "-STA", "-ExecutionPolicy", "Bypass", "-File", tmp],
+        { windowsHide: true, timeout: 5 * 60 * 1000 }, (err, stdout) => {
+          try { fs.unlinkSync(tmp); } catch { /* best effort */ }
+          const picked = String(stdout || "").trim();
+          if (!picked) return resolve({ ok: false, canceled: true });
+          resolve({ ok: true, path: picked });
         });
     });
   }
@@ -7115,7 +7381,7 @@ if ($path) { [Console]::Out.Write($path) }
     readFileMarkdown: async (filePath) => {
       if (_cache?.fileContents?.[filePath]) return _cache.fileContents[filePath];
       if (!_isOffline && _conn) {
-        const md = await getFileContent(_conn, filePath, _branch);
+        const md = await getFileContent(_conn, filePath, contentVersion());
         _cache.fileContents = _cache.fileContents || {};
         _cache.fileContents[filePath] = md;
         return md;
@@ -7130,6 +7396,7 @@ if ($path) { [Console]::Out.Write($path) }
     specLocks: _specLocks,
     commitSpec: doCommitSpec,
     specDiff: computeSpecDiff,
+    specPreview: computeSpecPreview,
     renderDraft: renderSpecDraft,
     listPrs: doListPrs,
     searchWorkItems,
@@ -7139,7 +7406,41 @@ if ($path) { [Console]::Out.Write($path) }
     openLocalRepo,
     listLocalBranches,
     pickLocalFolder,
+    pickLocalMdFile,
     resolveOpenFile: ({ path: p } = {}) => classifyOpenFilePath(p, { fs, path, isContained }),
+    // Clickstop 2 (Custom list): shape the durable file list into tiles, and
+    // add/remove entries. Add validates a readable .md (no containment gate — the
+    // add IS the approval); the file's folder then becomes an approved root via
+    // the custom-roots union, so opening it (and the open_file MCP tool) passes.
+    customFilesList: () => _customFiles.list().map((e) => ({
+      path: e.path,
+      dir: path.dirname(e.path),
+      name: path.basename(e.path),
+      addedAt: e.addedAt,
+      openHref: `/open-file-view?path=${encodeURIComponent(e.path)}`,
+    })),
+    customFileAdd: ({ path: p } = {}) => {
+      const cls = classifyAddFile(p, { fs, path });
+      if (!cls.ok) return cls;
+      _customFiles.add(cls.realpath);
+      return {
+        ok: true,
+        files: _customFiles.list().map((e) => ({
+          path: e.path, dir: path.dirname(e.path), name: path.basename(e.path),
+          addedAt: e.addedAt, openHref: `/open-file-view?path=${encodeURIComponent(e.path)}`,
+        })),
+      };
+    },
+    customFileRemove: ({ path: p } = {}) => {
+      _customFiles.remove(String(p || "").trim());
+      return {
+        ok: true,
+        files: _customFiles.list().map((e) => ({
+          path: e.path, dir: path.dirname(e.path), name: path.basename(e.path),
+          addedAt: e.addedAt, openHref: `/open-file-view?path=${encodeURIComponent(e.path)}`,
+        })),
+      };
+    },
     remoteSpecDrafts: _remoteSpecDrafts,
     remoteSpecLocks: _remoteSpecLocks,
     pushRemoteSpec,
