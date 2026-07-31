@@ -2544,6 +2544,9 @@ function buildBranchPage({ repoName, project, ref, rows, backHref, adoUrl, error
     ? `<span class="ro-mode" style="background:var(--cp-border);color:var(--cp-text-muted)">Staged</span>`
     : (mode ? `<span class="ro-mode ro-mode-${mode}">${mode === "local" ? "Local" : "Remote"}</span>` : "");
   const initialCount = visibleFileCount(rows, false);
+  const isLocal = mode === "local";
+  const _firstRow = (rows || []).find((r) => !r.isReadme) || (rows || [])[0] || null;
+  const defaultFolder = _firstRow && _firstRow.dir ? String(_firstRow.dir).replace(/^\/+|\/+$/g, "") : "";
   const readmeTotal = (rows || []).filter((r) => r.isReadme).length;
   const listHtml = (rows || []).length
     ? `<div class="pr-list">` + rows.map((r) => {
@@ -2597,7 +2600,9 @@ body { font-family: "Segoe UI", Aptos, Calibri, -apple-system, sans-serif; backg
 .br-new-btn { font-family: inherit; font-size: 13px; font-weight: 600; color: var(--cp-accent); background: none; border: 1px dashed var(--cp-border); border-radius: 8px; padding: 6px 12px; cursor: pointer; }
 .br-new-btn:hover { border-color: var(--cp-accent); }
 .bp-newfile-panel { margin-bottom: 14px; }
-.bp-newfile-form { display: flex; align-items: flex-end; gap: 12px; flex-wrap: wrap; }
+.bp-newfile-form { display: flex; flex-direction: column; align-items: stretch; gap: 12px; max-width: 560px; }
+.bp-newfile-form .br-field { flex: 0 0 auto; }
+.bp-newfile-form .wi-search { align-self: flex-start; }
 .br-field { display: flex; flex-direction: column; gap: 4px; flex: 1 1 220px; min-width: 160px; }
 .br-field > label { font-size: 11px; font-weight: 600; color: var(--cp-text-muted); text-transform: uppercase; letter-spacing: 0.04em; }
 .br-field > input { width: 100%; box-sizing: border-box; height: 32px; font-family: inherit; font-size: 13px; padding: 6px 10px; border: 1px solid var(--cp-border); border-radius: 8px; background: var(--cp-surface); color: var(--cp-text); outline: none; }
@@ -2605,9 +2610,62 @@ body { font-family: "Segoe UI", Aptos, Calibri, -apple-system, sans-serif; backg
 .wi-note { font-size: 12px; color: var(--cp-text-muted); margin-top: 6px; }
 .br-staged-badge { font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.03em; color: var(--cp-text-muted); background: var(--cp-border); padding: 1px 8px; border-radius: 99px; margin-left: 8px; }
 .bp-staged-file { display: flex; align-items: center; gap: 8px; opacity: 0.72; border-style: dashed; }
-.bp-staged-file .pr-title { flex: 1 1 auto; min-width: 0; }
-.bp-staged-link { flex: 1 1 auto; min-width: 0; font-size: 14px; font-weight: 600; color: inherit; text-decoration: none; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.bp-staged-link:hover { color: var(--cp-accent); text-decoration: underline; }
+.bp-staged-file .pr-title { font-size: 14px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bp-staged-link { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; color: inherit; text-decoration: none; }
+.bp-staged-link:hover .pr-title { color: var(--cp-accent); text-decoration: underline; }
+.bp-folder-row { display: flex; gap: 8px; align-items: center; }
+.bp-folder-row > input { flex: 1 1 auto; }
+.bp-browse-btn { flex: 0 0 auto; font-family: inherit; font-size: 13px; font-weight: 600; color: var(--cp-accent); background: var(--cp-surface); border: 1px solid var(--cp-border); border-radius: 8px; height: 32px; padding: 0 14px; cursor: pointer; }
+.bp-browse-btn:hover { border-color: var(--cp-accent); }
+.fp-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.45); z-index: 200; display: flex; align-items: center; justify-content: center; }
+.fp-overlay[hidden] { display: none; }
+.fp-dialog { width: 560px; max-width: 92vw; max-height: 82vh; display: flex; flex-direction: column; background: var(--cp-bg-elevated, #22272e); border: 1px solid var(--cp-border); border-radius: 12px; box-shadow: 0 18px 50px rgba(0,0,0,0.5); overflow: hidden; }
+.fp-titlebar { display: flex; align-items: flex-start; gap: 10px; padding: 12px 16px; background: var(--cp-surface); border-bottom: 1px solid var(--cp-border); }
+.fp-titlewrap { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.fp-subtitle { font-size: 12px; font-weight: 400; color: var(--cp-text-muted); line-height: 1.35; }
+.fp-title { font-size: 14px; font-weight: 700; }
+.fp-x { flex: 0 0 auto; background: none; border: none; color: var(--cp-text-muted); font-size: 15px; cursor: pointer; padding: 2px 6px; border-radius: 6px; }
+.fp-x:hover { background: var(--cp-border); color: var(--cp-text); }
+.fp-toolbar { display: flex; align-items: center; gap: 8px; padding: 10px 14px; border-bottom: 1px solid var(--cp-border); }
+.fp-crumbs { flex: 1 1 auto; min-width: 0; display: flex; align-items: center; gap: 3px; font-size: 12px; color: var(--cp-text-muted); overflow: hidden; white-space: nowrap; }
+.fp-crumb { color: var(--cp-accent); cursor: pointer; }
+.fp-crumb:hover { text-decoration: underline; }
+.fp-crumb-sep { color: var(--cp-text-muted); }
+.fp-spacer { flex: 0 0 auto; }
+.fp-btn { font-family: inherit; font-size: 12px; font-weight: 600; color: var(--cp-text); background: var(--cp-surface); border: 1px solid var(--cp-border); border-radius: 8px; height: 30px; padding: 0 12px; cursor: pointer; white-space: nowrap; }
+.fp-btn:hover:not(:disabled) { border-color: var(--cp-accent); }
+.fp-btn:disabled { opacity: 0.5; cursor: default; }
+.fp-primary { background: var(--cp-accent); color: var(--cp-accent-fg); border-color: var(--cp-accent); }
+.fp-del { color: var(--cp-danger, #d13438); }
+.fp-tbtitle { font-size: 12px; font-weight: 700; color: var(--cp-text-muted); text-transform: uppercase; letter-spacing: 0.04em; }
+.fp-newbar { display: flex; align-items: center; gap: 8px; padding: 10px 14px; border-bottom: 1px solid var(--cp-border); background: var(--cp-surface-soft); }
+.fp-newbar[hidden] { display: none; }
+.fp-newbar input { flex: 0 1 220px; height: 30px; font-family: inherit; font-size: 13px; padding: 0 10px; border: 1px solid var(--cp-accent); border-radius: 8px; background: var(--cp-surface); color: var(--cp-text); outline: none; }
+.fp-newnote { flex: 1 1 auto; font-size: 12px; color: var(--cp-text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fp-tree { flex: 1 1 auto; overflow-y: auto; padding: 6px; min-height: 260px; }
+.fp-children[hidden] { display: none; }
+.fp-row { display: flex; align-items: center; gap: 6px; padding: 6px 8px; border-radius: 8px; cursor: pointer; font-size: 13px; user-select: none; }
+.fp-exp { flex: 0 0 auto; width: 16px; text-align: center; font-size: 13px; font-weight: 700; line-height: 1; color: var(--cp-text-muted); cursor: pointer; }
+.fp-exp.fp-leaf { cursor: default; color: transparent; }
+.fp-row:hover { background: var(--cp-surface-soft); }
+.fp-row.fp-sel { background: var(--cp-accent-soft); }
+.fp-row .fp-ico { flex: 0 0 auto; font-size: 15px; }
+.fp-row .fp-name { flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fp-row .fp-tag { flex: 0 0 auto; font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.03em; color: var(--cp-text-muted); background: var(--cp-border); padding: 1px 7px; border-radius: 99px; }
+.fp-empty, .fp-loading { font-size: 12px; color: var(--cp-text-muted); padding: 6px 8px; }
+.fp-hint { padding: 8px 16px; font-size: 12px; color: var(--cp-text-muted); border-bottom: 1px solid var(--cp-border); }
+.fp-rename-input { flex: 1 1 auto; min-width: 0; height: 26px; font-family: inherit; font-size: 13px; padding: 0 8px; border: 1px solid var(--cp-accent); border-radius: 6px; background: var(--cp-surface); color: var(--cp-text); outline: none; }
+.fp-menu { position: fixed; z-index: 210; min-width: 150px; background: var(--cp-bg-elevated, #22272e); border: 1px solid var(--cp-border); border-radius: 8px; box-shadow: 0 10px 30px rgba(0,0,0,0.4); padding: 4px; display: flex; flex-direction: column; }
+.fp-menu[hidden] { display: none; }
+.fp-menu-item { text-align: left; font-family: inherit; font-size: 13px; color: var(--cp-text); background: none; border: none; border-radius: 6px; padding: 7px 12px; cursor: pointer; }
+.fp-menu-item:hover:not(:disabled) { background: var(--cp-surface-soft); }
+.fp-menu-item:disabled { opacity: 0.4; cursor: default; }
+.fp-newrow { display: flex; align-items: center; gap: 6px; padding: 6px 10px; }
+.fp-newrow input { flex: 1 1 auto; height: 30px; font-family: inherit; font-size: 13px; padding: 0 10px; border: 1px solid var(--cp-accent); border-radius: 8px; background: var(--cp-surface); color: var(--cp-text); outline: none; }
+.fp-footer { display: flex; align-items: center; gap: 12px; padding: 12px 16px; border-top: 1px solid var(--cp-border); background: var(--cp-surface); }
+.fp-selected { flex: 1 1 auto; min-width: 0; font-size: 12px; color: var(--cp-text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fp-selected span { color: var(--cp-text); font-weight: 600; }
+.fp-actions { flex: 0 0 auto; display: flex; gap: 8px; }
 .br-staged-del { flex: 0 0 auto; background: none; border: none; cursor: pointer; font-size: 18px; line-height: 1; padding: 4px 8px; border-radius: 6px; opacity: 0.8; }
 .br-staged-del:hover { opacity: 1; background: var(--cp-border); }
 </style>
@@ -2623,16 +2681,37 @@ ${renderCrumbBar([{ label: "Home", href: "/discovery" }, { label: "Branch" }], {
 </div>
 
 <div class="bp-wrap">
-  <div class="bp-newfile-row">
+  ${isLocal ? "" : `<div class="bp-newfile-row">
     <button id="bpNewFileBtn" class="br-new-btn" type="button">\u002b New md file</button>
   </div>
   <div class="bp-newfile-panel" id="bpNewFilePanel" hidden>
     <div class="bp-newfile-form">
+      <div class="br-field bp-folder-field"><label>Folder</label>
+        <div class="bp-folder-row">
+          <input id="bpNewFileFolder" class="br-create-input" type="text" readonly placeholder="Choose a folder\u2026">
+          <button id="bpBrowseBtn" class="bp-browse-btn" type="button">Browse\u2026</button>
+        </div>
+      </div>
       <div class="br-field"><label>Spec title</label><input id="bpNewFileTitle" class="br-create-input" type="text" spellcheck="false" placeholder="My New Spec"></div>
       <button id="bpNewFileStage" class="wi-search" type="button">Stage</button>
     </div>
     <div id="bpNewFileStatus" class="wi-note"></div>
   </div>
+  <div class="fp-overlay" id="fpOverlay" hidden>
+    <div class="fp-dialog" role="dialog" aria-modal="true" aria-label="Select folder">
+      <div class="fp-titlebar"><div class="fp-titlewrap"><span class="fp-title">Select folder</span><span class="fp-subtitle">Select a folder or right-click one to create a new folder, rename, or delete it (empty folders only).</span></div><button class="fp-x" id="fpClose" type="button" aria-label="Close">\u2715</button></div>
+      <div class="fp-tree" id="fpTree"></div>
+      <div class="fp-footer">
+        <div class="fp-selected">Folder: <span id="fpSelectedPath">/</span></div>
+        <div class="fp-actions"><button class="fp-btn" id="fpCancel" type="button">Cancel</button><button class="fp-btn fp-primary" id="fpSelect" type="button">Select folder</button></div>
+      </div>
+      <div class="fp-menu" id="fpMenu" hidden>
+        <button class="fp-menu-item" data-act="create" type="button">New folder</button>
+        <button class="fp-menu-item" data-act="rename" type="button">Rename</button>
+        <button class="fp-menu-item" data-act="delete" type="button">Delete</button>
+      </div>
+    </div>
+  </div>`}
   <div class="bp-toolbar">
     <span class="bp-count" id="bpCount">${initialCount} file${initialCount === 1 ? "" : "s"}</span>
     ${readmeToggle}
@@ -2644,6 +2723,18 @@ ${renderCrumbBar([{ label: "Home", href: "/discovery" }, { label: "Branch" }], {
   var params = new URLSearchParams(location.search);
   var BP = { project: params.get('project')||'', repo: params.get('repo')||'', repoName: params.get('repoName')||'', branch: (params.get('ref')||'').replace('refs/heads/','') };
   function esch(s){ return String(s==null?'':s).replace(/[&<>"]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];}); }
+  var IS_LOCAL = ${isLocal ? "true" : "false"};
+  var fpFolderPicked = false, fpFolderValue = '';
+  var DEFAULT_FOLDER = ${JSON.stringify(defaultFolder)};
+  (function(){
+    var fld = document.getElementById('bpNewFileFolder');
+    if (!fld) return;
+    function norm(p){ p = String(p == null ? '' : p); while (p.charAt(0) === '/') p = p.slice(1); while (p.length && p.charAt(p.length - 1) === '/') p = p.slice(0, -1); return p; }
+    var key = 'tippani.folderPick:' + BP.repo + ':' + BP.branch;
+    var remembered = null; try { remembered = localStorage.getItem(key); } catch (e) {}
+    var val = (remembered !== null) ? norm(remembered) : norm(DEFAULT_FOLDER);
+    fpFolderValue = val; fpFolderPicked = true; fld.value = '/' + val;
+  })();
   var KEY = 'tippani.brShowReadme';
   var box = document.getElementById('bpShowReadme');
   var countEl = document.getElementById('bpCount');
@@ -2668,10 +2759,11 @@ ${renderCrumbBar([{ label: "Home", href: "/discovery" }, { label: "Branch" }], {
   async function stageNewFile(){
     var title = (titleInput.value||'').trim();
     if (!title) { statusEl.textContent = 'Enter a title.'; return; }
+    if (!fpFolderPicked) { statusEl.textContent = 'Choose a folder.'; return; }
     if (!BP.repo || !BP.branch) { statusEl.textContent = 'Missing branch context.'; return; }
     statusEl.textContent = 'Staging\u2026';
     try {
-      var r = await fetch('/api/v1/files/stage',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ project: BP.project, repo: BP.repo, repoName: BP.repoName, branch: BP.branch, title: title })});
+      var r = await fetch('/api/v1/files/stage',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ project: BP.project, repo: BP.repo, repoName: BP.repoName, branch: BP.branch, title: title, folder: fpFolderValue })});
       var d = await r.json();
       if (!d || !d.ok) { statusEl.textContent = (d && d.error) || 'Stage failed.'; return; }
       titleInput.value=''; statusEl.textContent=''; if(panel) panel.hidden = true;
@@ -2679,6 +2771,209 @@ ${renderCrumbBar([{ label: "Home", href: "/discovery" }, { label: "Branch" }], {
     } catch(e){ statusEl.textContent = 'Failed: '+e.message; }
   }
   if (stageBtn) stageBtn.addEventListener('click', stageNewFile);
+  // Folder picker dialog (remote/staged only): a lazy treeview over the branch's
+  // folder tree (the parent branch's tree for a staged branch). Create / Rename /
+  // Delete are right-click actions; each is a staged change that refreshes the
+  // staged counter. Rename/Delete are limited to empty folders you created.
+  (function () {
+    var browseBtn = document.getElementById('bpBrowseBtn');
+    var overlay = document.getElementById('fpOverlay');
+    if (!browseBtn || !overlay) return;
+    var folderInput = document.getElementById('bpNewFileFolder');
+    var treeEl = document.getElementById('fpTree');
+    var selPathEl = document.getElementById('fpSelectedPath');
+    var menu = document.getElementById('fpMenu');
+    var fpMeta = {}, fpSelPath = '', fpSelRow = null, rootRow = null, menuRow = null;
+    function disp(p){ return '/' + (p || ''); }
+    function foldersUrl(scope){ return '/api/v1/branches/folders?project=' + encodeURIComponent(BP.project) + '&repo=' + encodeURIComponent(BP.repo) + '&repoName=' + encodeURIComponent(BP.repoName) + '&branch=' + encodeURIComponent(BP.branch) + '&scope=' + encodeURIComponent(scope || ''); }
+    function updateFooter(){ selPathEl.textContent = disp(fpSelPath); }
+    function selectRow(row){
+      if (fpSelRow) fpSelRow.classList.remove('fp-sel');
+      fpSelRow = row; if (row) row.classList.add('fp-sel');
+      fpSelPath = row ? row._path : '';
+      updateFooter();
+    }
+    function setExp(row){
+      if (!row._hasChildren){ row._exp.textContent = ''; row._exp.classList.add('fp-leaf'); }
+      else { row._exp.classList.remove('fp-leaf'); row._exp.textContent = row._kids.hidden ? '+' : '\u2212'; }
+    }
+    function mkMsg(text, depth){ var d = document.createElement('div'); d.className = 'fp-empty'; d.style.paddingLeft = (depth * 16 + 8) + 'px'; d.textContent = text; return d; }
+    function makeNode(item, depth){
+      fpMeta[item.path] = { created: !!item.created, empty: !!item.empty };
+      var wrap = document.createElement('div'); wrap.className = 'fp-item';
+      var row = document.createElement('div'); row.className = 'fp-row'; row.style.paddingLeft = (depth * 16 + 8) + 'px';
+      var exp = document.createElement('span'); exp.className = 'fp-exp';
+      var ico = document.createElement('span'); ico.className = 'fp-ico'; ico.textContent = '\uD83D\uDCC1';
+      var nm = document.createElement('span'); nm.className = 'fp-name'; nm.textContent = item.name;
+      row.appendChild(exp); row.appendChild(ico); row.appendChild(nm);
+      if (item.created){ var tag = document.createElement('span'); tag.className = 'fp-tag'; tag.textContent = 'new'; row.appendChild(tag); }
+      var kids = document.createElement('div'); kids.className = 'fp-children'; kids.hidden = true; kids._loaded = false; kids._ownerRow = row;
+      wrap.appendChild(row); wrap.appendChild(kids);
+      row._path = item.path; row._name = item.name; row._kids = kids; row._exp = exp; row._nameEl = nm; row._depth = depth; row._hasChildren = !!item.hasChildren; row._isRoot = (depth === 0);
+      setExp(row);
+      exp.addEventListener('click', function(e){ e.stopPropagation(); if (row._hasChildren) toggle(row); });
+      row.addEventListener('click', function(){ selectRow(row); });
+      row.addEventListener('dblclick', function(){ if (row._hasChildren) toggle(row, true); });
+      row.addEventListener('contextmenu', function(e){ e.preventDefault(); e.stopPropagation(); selectRow(row); openMenu(row, e.clientX, e.clientY); });
+      return wrap;
+    }
+    async function loadKids(row){
+      var kids = row._kids;
+      if (kids._loaded) return;
+      kids.innerHTML = ''; kids.appendChild(mkMsg('Loading\u2026', row._depth + 1));
+      var folders = [];
+      try { var r = await fetch(foldersUrl(row._path)); var d = await r.json(); folders = (d && d.folders) || []; } catch(e){}
+      kids.innerHTML = '';
+      folders.forEach(function(f){ kids.appendChild(makeNode(f, row._depth + 1)); });
+      kids._loaded = true;
+      row._hasChildren = folders.length > 0;
+      setExp(row);
+      updateFooter();
+    }
+    async function toggle(row, forceOpen){
+      var willOpen = forceOpen || row._kids.hidden;
+      if (willOpen){ await loadKids(row); row._kids.hidden = false; }
+      else { row._kids.hidden = true; }
+      setExp(row);
+    }
+    async function refreshNode(row){
+      row._kids._loaded = false;
+      await loadKids(row);
+      row._kids.hidden = false;
+      setExp(row);
+    }
+    function findChildRow(row, path){
+      var items = row._kids.querySelectorAll(':scope > .fp-item > .fp-row');
+      for (var i = 0; i < items.length; i++){ if (items[i]._path === path) return items[i]; }
+      return null;
+    }
+    async function revealPath(path){
+      var segs = path ? path.split('/') : [];
+      var cur = rootRow, acc = '';
+      for (var i = 0; i < segs.length; i++){
+        acc = acc ? acc + '/' + segs[i] : segs[i];
+        await toggle(cur, true);
+        var child = findChildRow(cur, acc);
+        if (!child) break;
+        cur = child;
+      }
+      selectRow(cur);
+      if (cur !== rootRow) cur.scrollIntoView({ block: 'nearest' });
+    }
+    async function initTree(){
+      treeEl.innerHTML = ''; fpMeta = {}; fpSelRow = null;
+      var rootWrap = makeNode({ path: '', name: '/', created: false, empty: false, hasChildren: true }, 0);
+      treeEl.appendChild(rootWrap);
+      rootRow = rootWrap.querySelector('.fp-row');
+      selectRow(rootRow);
+      await toggle(rootRow, true);
+      await revealPath(fpFolderValue || '');
+    }
+    function ownerRowOf(row){ var k = row.closest('.fp-children'); return k ? k._ownerRow : rootRow; }
+    // Context menu
+    function openMenu(row, x, y){
+      menuRow = row;
+      var m = fpMeta[row._path] || {};
+      var canMutate = !!(m.created && m.empty) && !row._isRoot;
+      menu.querySelector('[data-act="rename"]').disabled = !canMutate;
+      menu.querySelector('[data-act="delete"]').disabled = !canMutate;
+      menu.style.left = x + 'px'; menu.style.top = y + 'px'; menu.hidden = false;
+      var r = menu.getBoundingClientRect();
+      if (r.right > window.innerWidth) menu.style.left = Math.max(8, window.innerWidth - r.width - 8) + 'px';
+      if (r.bottom > window.innerHeight) menu.style.top = Math.max(8, window.innerHeight - r.height - 8) + 'px';
+    }
+    function closeMenu(){ menu.hidden = true; menuRow = null; }
+    menu.addEventListener('click', function(e){
+      var btn = e.target.closest('.fp-menu-item'); if (!btn || btn.disabled) return;
+      var act = btn.getAttribute('data-act'); var row = menuRow; closeMenu();
+      if (!row) return;
+      if (act === 'create') startCreate(row);
+      else if (act === 'rename') startRename(row);
+      else if (act === 'delete') doDelete(row);
+    });
+    document.addEventListener('click', function(e){ if (!menu.hidden && !menu.contains(e.target)) closeMenu(); });
+    treeEl.addEventListener('scroll', closeMenu);
+    treeEl.addEventListener('contextmenu', function(e){ if (!e.target.closest('.fp-row')) e.preventDefault(); });
+    async function startCreate(row){
+      await toggle(row, true);
+      row._hasChildren = true; setExp(row);
+      var editor = document.createElement('div'); editor.className = 'fp-newrow'; editor.style.paddingLeft = ((row._depth + 1) * 16 + 8) + 'px';
+      var sp = document.createElement('span'); sp.className = 'fp-exp fp-leaf';
+      var ico = document.createElement('span'); ico.className = 'fp-ico'; ico.textContent = '\uD83D\uDCC1';
+      var input = document.createElement('input'); input.type = 'text'; input.placeholder = 'New folder name'; input.spellcheck = false;
+      editor.appendChild(sp); editor.appendChild(ico); editor.appendChild(input);
+      row._kids.insertBefore(editor, row._kids.firstChild);
+      input.focus();
+      var done = false;
+      function cancel(){ if (done) return; done = true; editor.remove(); }
+      async function commit(){
+        if (done) return;
+        var name = (input.value || '').trim();
+        if (!name) { input.focus(); return; }
+        done = true;
+        var full = row._path ? row._path + '/' + name : name;
+        try {
+          var r = await fetch('/api/v1/branches/folders/create', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ repo: BP.repo, branch: BP.branch, path: full }) });
+          var d = await r.json();
+          if (!d || !d.ok) { alert((d && d.error) || 'Create failed.'); editor.remove(); return; }
+        } catch(e){ alert('Create failed: ' + e.message); editor.remove(); return; }
+        await refreshNode(row);
+        if (window.__tpStagedRefresh) window.__tpStagedRefresh();
+      }
+      input.addEventListener('keydown', function(e){ e.stopPropagation(); if (e.key === 'Enter'){ e.preventDefault(); commit(); } else if (e.key === 'Escape'){ e.preventDefault(); cancel(); } });
+      input.addEventListener('blur', function(){ setTimeout(cancel, 150); });
+    }
+    function startRename(row){
+      if (row._renaming) return; row._renaming = true;
+      var nm = row._nameEl; nm.style.display = 'none';
+      var input = document.createElement('input'); input.type = 'text'; input.className = 'fp-rename-input'; input.value = row._name; input.spellcheck = false;
+      nm.parentNode.insertBefore(input, nm.nextSibling);
+      input.focus(); input.select();
+      var done = false;
+      function finish(){ if (done) return; done = true; row._renaming = false; input.remove(); nm.style.display = ''; }
+      async function commit(){
+        if (done) return;
+        var name = (input.value || '').trim();
+        if (!name || name === row._name){ finish(); return; }
+        done = true; row._renaming = false;
+        try {
+          var r = await fetch('/api/v1/branches/folders/rename', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ repo: BP.repo, branch: BP.branch, path: row._path, newName: name }) });
+          var d = await r.json();
+          if (!d || !d.ok) { alert((d && d.error) || 'Rename failed.'); input.remove(); nm.style.display = ''; return; }
+        } catch(e){ alert('Rename failed: ' + e.message); input.remove(); nm.style.display = ''; return; }
+        var owner = ownerRowOf(row);
+        await refreshNode(owner);
+        selectRow(owner);
+        if (window.__tpStagedRefresh) window.__tpStagedRefresh();
+      }
+      input.addEventListener('keydown', function(e){ e.stopPropagation(); if (e.key === 'Enter'){ e.preventDefault(); commit(); } else if (e.key === 'Escape'){ e.preventDefault(); finish(); } });
+      input.addEventListener('blur', function(){ setTimeout(function(){ if (row._renaming) finish(); }, 150); });
+    }
+    async function doDelete(row){
+      var m = fpMeta[row._path] || {};
+      if (!(m.created && m.empty) || row._isRoot) return;
+      var owner = ownerRowOf(row);
+      try {
+        var r = await fetch('/api/v1/branches/folders/delete', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ repo: BP.repo, branch: BP.branch, path: row._path }) });
+        var d = await r.json();
+        if (!d || !d.ok) { alert((d && d.error) || 'Delete failed.'); return; }
+      } catch(e){ alert('Delete failed: ' + e.message); return; }
+      await refreshNode(owner);
+      selectRow(owner);
+      if (window.__tpStagedRefresh) window.__tpStagedRefresh();
+    }
+    function closeDialog(){ overlay.hidden = true; closeMenu(); }
+    browseBtn.addEventListener('click', function(){ overlay.hidden = false; closeMenu(); initTree(); });
+    document.getElementById('fpClose').addEventListener('click', closeDialog);
+    document.getElementById('fpCancel').addEventListener('click', closeDialog);
+    overlay.addEventListener('click', function(e){ if (e.target === overlay) closeDialog(); });
+    document.addEventListener('keydown', function(e){ if (!overlay.hidden && e.key === 'Escape'){ if (!menu.hidden) closeMenu(); else closeDialog(); } });
+    document.getElementById('fpSelect').addEventListener('click', function(){
+      fpFolderValue = fpSelPath; fpFolderPicked = true; folderInput.value = disp(fpSelPath);
+      try { localStorage.setItem('tippani.folderPick:' + BP.repo + ':' + BP.branch, fpSelPath); } catch (e) {}
+      closeDialog();
+    });
+  })();
   async function unstageFile(path){
     try { await fetch('/api/v1/files/unstage',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ repo: BP.repo, branch: BP.branch, path: path })}); } catch(e){}
     renderStagedFiles();
@@ -2695,7 +2990,10 @@ ${renderCrumbBar([{ label: "Home", href: "/discovery" }, { label: "Branch" }], {
       if (!list) { host.insertAdjacentHTML('afterbegin','<div class="pr-list"></div>'); list = host.querySelector('.pr-list'); }
       var html = mine.map(function(f){
         var href = '/staged-file?project='+encodeURIComponent(BP.project)+'&repo='+encodeURIComponent(BP.repo)+'&repoName='+encodeURIComponent(BP.repoName)+'&branch='+encodeURIComponent(BP.branch)+'&path='+encodeURIComponent(f.path);
-        return '<div class="pr-card bp-staged-file"><a class="bp-staged-link" href="'+href+'">'+esch(f.title||f.path)+'<span class="br-staged-badge">staged only</span></a>'+
+        var p = f.path || ''; var sl = p.lastIndexOf('/'); var dir = sl >= 0 ? p.slice(0, sl) : '';
+        return '<div class="pr-card bp-staged-file"><a class="bp-staged-link" href="'+href+'">'+
+          (dir ? '<div class="bp-dir">'+esch(dir)+'</div>' : '')+
+          '<div class="pr-title">'+esch(f.title||f.path)+'<span class="br-staged-badge">staged only</span></div></a>'+
           '<button class="br-staged-del bp-staged-del" data-path="'+esch(f.path)+'" title="Delete staged file" aria-label="Delete staged file">\uD83D\uDDD1</button></div>';
       }).join('');
       list.insertAdjacentHTML('afterbegin', html);
@@ -2705,7 +3003,7 @@ ${renderCrumbBar([{ label: "Home", href: "/discovery" }, { label: "Branch" }], {
     if (window.__tpStagedRefresh) window.__tpStagedRefresh();
   }
   updateCount();
-  renderStagedFiles();
+  if (!IS_LOCAL) renderStagedFiles();
 })();
 </script>
 ${NAV_WATCHER}
@@ -5614,13 +5912,14 @@ function stageBranch({ project, repo, repoName, branch, base } = {}) {
   return { ok: true, count: _stagedBranches.length, branches: _stagedBranches };
 }
 let _stagedFiles = [];
-function stagedTotal() { return _stagedBranches.length + _stagedFiles.length; }
+function stagedTotal() { return _stagedBranches.length + _stagedFiles.length + _stagedFolders.length; }
 function listStagedBranches() {
-  return { ok: true, count: stagedTotal(), branches: _stagedBranches, files: _stagedFiles };
+  return { ok: true, count: stagedTotal(), branches: _stagedBranches, files: _stagedFiles, folders: _stagedFolders };
 }
-function stageFile({ project, repo, repoName, branch, title, path } = {}) {
+function stageFile({ project, repo, repoName, branch, title, folder, path } = {}) {
   const t = String(title || "").trim();
-  const filePath = String(path || "").trim() || (t ? t + ".md" : "");
+  const fdr = _normFolder(folder);
+  const filePath = String(path || "").trim() || (t ? (fdr ? fdr + "/" : "") + t + ".md" : "");
   if (!filePath) return { ok: false, error: "title is required" };
   if (!repo || !branch) return { ok: false, error: "repo and branch are required" };
   if (_stagedFiles.some((f) => f.repo === repo && f.branch === branch && f.path === filePath)) return { ok: false, error: "that file is already staged" };
@@ -5655,6 +5954,113 @@ function unstageBranch({ repo, branch } = {}) {
   const before = _stagedBranches.length;
   _stagedBranches = _stagedBranches.filter((s) => !(s.repo === repo && s.branch === branch));
   return { ok: true, removed: before - _stagedBranches.length, count: _stagedBranches.length, branches: _stagedBranches };
+}
+
+// Clickstop 2: folder picker. Real ADO folders always contain committed files
+// (git tracks no empty dirs), so brand-new folders live only in memory, scoped
+// to a (repo, branch), until a spec is staged into them and the branch pushed.
+// A staged branch has no ADO branch yet, so its folder tree is read from the
+// parent (base) branch — walking the base chain when the parent is also staged.
+let _stagedFolders = [];
+function _normFolder(p) { return String(p == null ? "" : p).replace(/\\/g, "/").replace(/^\/+|\/+$/g, ""); }
+function _parentFolder(p) { const n = _normFolder(p); const i = n.lastIndexOf("/"); return i < 0 ? "" : n.slice(0, i); }
+function _isUnder(childPath, folderPath) { const c = _normFolder(childPath), f = _normFolder(folderPath); return c === f || (f === "" ? true : (c + "/").startsWith(f + "/")); }
+function resolveEffectiveBranch(repo, branch) {
+  let cur = String(branch || "").trim();
+  const seen = new Set();
+  while (cur && !seen.has(cur)) {
+    seen.add(cur);
+    const st = _stagedBranches.find((s) => s.repo === repo && s.branch === cur);
+    if (!st) return cur;
+    cur = String(st.base || "").trim() || "main";
+  }
+  return cur || "main";
+}
+function _folderHasStagedFile(repo, branch, folderPath) {
+  const f = _normFolder(folderPath);
+  return _stagedFiles.some((x) => x.repo === repo && x.branch === branch && (_normFolder(x.path) + "/").startsWith(f + "/"));
+}
+function _folderHasChild(repo, branch, folderPath) {
+  const f = _normFolder(folderPath);
+  return _stagedFolders.some((y) => y.repo === repo && y.branch === branch && _normFolder(y.path) !== f && (_normFolder(y.path) + "/").startsWith(f + "/"));
+}
+async function listBranchFolders({ project, repo, branch, scope } = {}) {
+  const scopeN = _normFolder(scope);
+  const proj = project || _adoProjectDisplayName || ADO_PROJECT;
+  const eff = resolveEffectiveBranch(repo, branch);
+  const version = String(eff).replace(/^refs\/heads\//, "");
+  const out = new Map();
+  let adoError = null;
+  let gitApi = null;
+  if (!_isOffline && _conn && repo) {
+    try {
+      gitApi = await _conn.getGitApi();
+      const scopePath = scopeN ? "/" + scopeN : "/";
+      const items = await gitApi.getItems(repo, proj, scopePath, 1, false, false, false, false, { version, versionType: 0 });
+      for (const it of items || []) {
+        if (!it || !it.isFolder || !it.path) continue;
+        const pn = _normFolder(it.path);
+        if (!pn || pn === scopeN || _parentFolder(pn) !== scopeN) continue;
+        out.set(pn, { path: pn, name: pn.split("/").pop(), created: false, empty: false, hasChildren: false, _ado: true });
+      }
+    } catch (e) { adoError = e?.message || String(e); }
+  }
+  for (const f of _stagedFolders) {
+    if (f.repo !== repo || f.branch !== branch) continue;
+    const pn = _normFolder(f.path);
+    if (_parentFolder(pn) !== scopeN) continue;
+    const empty = !_folderHasStagedFile(repo, branch, pn) && !_folderHasChild(repo, branch, pn);
+    const existing = out.get(pn);
+    if (existing) { existing.created = true; existing.empty = empty; }
+    else out.set(pn, { path: pn, name: pn.split("/").pop(), created: true, empty, hasChildren: false, _ado: false });
+  }
+  const folders = [...out.values()];
+  // Mark parents: a folder shows an expander if it has ADO subfolders or created subfolders.
+  for (const folder of folders) { if (_folderHasChild(repo, branch, folder.path)) folder.hasChildren = true; }
+  if (gitApi) {
+    await Promise.all(folders.map(async (folder) => {
+      if (folder.hasChildren || !folder._ado) return;
+      try {
+        const sub = await gitApi.getItems(repo, proj, "/" + folder.path, 1, false, false, false, false, { version, versionType: 0 });
+        folder.hasChildren = (sub || []).some((it) => it && it.isFolder && _parentFolder(_normFolder(it.path)) === folder.path);
+      } catch (e) { /* ignore probe failure */ }
+    }));
+  }
+  folders.forEach((f) => { delete f._ado; });
+  folders.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: "base" }));
+  return { ok: true, scope: scopeN, effectiveBranch: eff, folders, adoError };
+}
+function createStagedFolder({ repo, branch, path } = {}) {
+  const pn = _normFolder(path);
+  if (!pn) return { ok: false, error: "folder name is required" };
+  if (!repo || !branch) return { ok: false, error: "repo and branch are required" };
+  const name = pn.split("/").pop();
+  if (/[\\/:*?"<>|]/.test(name)) return { ok: false, error: "invalid folder name" };
+  if (_stagedFolders.some((f) => f.repo === repo && f.branch === branch && _normFolder(f.path) === pn)) return { ok: false, error: "folder already exists" };
+  _stagedFolders.push({ repo, branch, path: pn });
+  return { ok: true, path: pn };
+}
+function deleteStagedFolder({ repo, branch, path } = {}) {
+  const pn = _normFolder(path);
+  const idx = _stagedFolders.findIndex((f) => f.repo === repo && f.branch === branch && _normFolder(f.path) === pn);
+  if (idx < 0) return { ok: false, error: "only folders you created can be deleted" };
+  if (_folderHasStagedFile(repo, branch, pn) || _folderHasChild(repo, branch, pn)) return { ok: false, error: "folder is not empty" };
+  _stagedFolders.splice(idx, 1);
+  return { ok: true };
+}
+function renameStagedFolder({ repo, branch, path, newName } = {}) {
+  const pn = _normFolder(path);
+  const f = _stagedFolders.find((x) => x.repo === repo && x.branch === branch && _normFolder(x.path) === pn);
+  if (!f) return { ok: false, error: "only folders you created can be renamed" };
+  if (_folderHasStagedFile(repo, branch, pn) || _folderHasChild(repo, branch, pn)) return { ok: false, error: "folder is not empty" };
+  const nn = String(newName || "").trim();
+  if (!nn) return { ok: false, error: "folder name is required" };
+  if (/[\\/:*?"<>|]/.test(nn)) return { ok: false, error: "invalid folder name" };
+  const parent = _parentFolder(pn);
+  const newPath = parent ? parent + "/" + nn : nn;
+  if (newPath !== pn && _stagedFolders.some((x) => x.repo === repo && x.branch === branch && _normFolder(x.path) === newPath)) return { ok: false, error: "folder already exists" };
+  f.path = newPath;
+  return { ok: true, path: newPath };
 }
 
 // Session token authorises external (non-browser-same-origin) mutations.
@@ -6216,7 +6622,11 @@ async function main() {
     const filePath = String(req.query.path || "").trim();
     const file = _stagedFiles.find((f) => f.repo === repo && f.branch === branch && f.path === filePath);
     if (!file) return res.redirect("/discovery?tab=branches");
-    const backHref = "/branch?project=" + encodeURIComponent(file.project || "") + "&repo=" + encodeURIComponent(file.repo) + "&repoName=" + encodeURIComponent(file.repoName || "") + "&ref=" + encodeURIComponent(file.branch) + "&staged=1";
+    // Only force the staged (pre-push, empty) branch view when the branch itself is
+    // staged. For a real remote branch, link back without staged=1 so its existing
+    // files load (the staged file is layered on client-side).
+    const isStagedBranch = _stagedBranches.some((s) => s.repo === file.repo && s.branch === file.branch);
+    const backHref = "/branch?project=" + encodeURIComponent(file.project || "") + "&repo=" + encodeURIComponent(file.repo) + "&repoName=" + encodeURIComponent(file.repoName || "") + "&ref=" + encodeURIComponent(file.branch) + (isStagedBranch ? "&staged=1" : "");
     res.type("html").send(buildStagedFilePage({ file, backHref }));
   });
 
@@ -7825,6 +8235,10 @@ if ($path) { [Console]::Out.Write($path) }
     stageFile,
     unstageFile,
     updateStagedFileContent,
+    listBranchFolders,
+    createStagedFolder,
+    deleteStagedFolder,
+    renameStagedFolder,
     listPersonalComments,
     createPersonalComment,
     editPersonalComment,

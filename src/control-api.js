@@ -56,7 +56,7 @@ export function registerControlApi(app, deps) {
     mcpNavPersonalComment, mcpJumpPersonalComment, mcpSetPcResolvedVisibility, // MCP personal-comment ops
     mcpRefreshSpec, mcpOpenBranch, mcpOpenBranchFile, mcpOpenFile, // MCP: refresh + open review surface
     mcpCreateBranch, // MCP: create/adopt a branch for remote authoring (clickstop 2)
-    stageBranch, listStagedBranches, pushStagedBranches, unstageBranch, stageFile, unstageFile, updateStagedFileContent, // clickstop 2: staged (pre-push) branches
+    stageBranch, listStagedBranches, pushStagedBranches, unstageBranch, stageFile, unstageFile, updateStagedFileContent, listBranchFolders, createStagedFolder, deleteStagedFolder, renameStagedFolder, // clickstop 2: staged (pre-push) branches
   } = deps;
 
   const ALLOWED_ORIGINS = new Set([
@@ -782,6 +782,23 @@ export function registerControlApi(app, deps) {
   app.post("/api/v1/files/content", requireAuth({ mutation: true }), (req, res) => {
     if (typeof updateStagedFileContent !== "function") return res.status(501).json({ error: "file content not wired" });
     res.json(updateStagedFileContent(req.body || {}));
+  });
+  app.get("/api/v1/branches/folders", requireAuth(), async (req, res) => {
+    if (typeof listBranchFolders !== "function") return res.status(501).json({ error: "folders not wired" });
+    try { res.json(await listBranchFolders({ project: req.query.project, repo: req.query.repo, repoName: req.query.repoName, branch: req.query.branch, scope: req.query.scope })); }
+    catch (e) { res.status(502).json({ error: String(e?.message || e) }); }
+  });
+  app.post("/api/v1/branches/folders/create", requireAuth({ mutation: true }), (req, res) => {
+    if (typeof createStagedFolder !== "function") return res.status(501).json({ error: "folder create not wired" });
+    res.json(createStagedFolder(req.body || {}));
+  });
+  app.post("/api/v1/branches/folders/delete", requireAuth({ mutation: true }), (req, res) => {
+    if (typeof deleteStagedFolder !== "function") return res.status(501).json({ error: "folder delete not wired" });
+    res.json(deleteStagedFolder(req.body || {}));
+  });
+  app.post("/api/v1/branches/folders/rename", requireAuth({ mutation: true }), (req, res) => {
+    if (typeof renameStagedFolder !== "function") return res.status(501).json({ error: "folder rename not wired" });
+    res.json(renameStagedFolder(req.body || {}));
   });
 
   app.post("/api/v1/personal-comments/:id/resolve", requireAuth({ mutation: true }), async (req, res) => {
