@@ -6,13 +6,15 @@
 
 > टिप्पणी — *annotation* (Sanskrit)
 
-**Tippani** turns Azure DevOps pull-request markdown specs into a clean **reading, annotation, and authoring** workspace — so writers and reviewers never have to learn ADO's raw diff view. Discover finished specs, pick up reviews, comment inline, edit WYSIWYG, and author brand-new specs, branches, and PRs — all from a local browser portal. A matching **MCP server** exposes the same workflow to AI agents.
+**Tippani** is a friendly workspace for the Markdown **specs** that live in your Git repositories. Instead of squinting at raw diffs, you get clean, readable pages where you can **read** a spec, **comment** on it, **edit** it, and **write** brand-new ones — then send your changes up as a pull request when you're ready.
 
-Tippani runs entirely on your machine: it talks to Azure DevOps directly and serves its UI from `http://localhost`. Nothing is uploaded anywhere else.
+Everything runs on your own machine. Tippani opens in your web browser at `http://localhost`, connects to the repositories you point it at, and never uploads your work anywhere else. There's also a matching **MCP server** so an AI assistant can do the same things for you.
 
-**New here?** Read the [User Guide](docs/user-guide.md) for a full tour of every screen, and the [MCP & API Reference](docs/mcp-api.md) for the agent tools and HTTP endpoints.
+**New here?** The [User Guide](docs/user-guide.md) walks through every screen; the [MCP & API Reference](docs/mcp-api.md) covers the assistant tools and endpoints.
 
 ## Quick Start
+
+Tippani is a small command-line tool. Point it at your repositories once, then open the home screen in your browser.
 
 Install globally from npm:
 
@@ -55,16 +57,16 @@ Or download a standalone binary from the [latest release](https://github.com/mav
 
 ## Features
 
-- **Discovery home** — Specs (ADO Code Search), Review queue, Work items (WIQL), Branches (remote + local clones), and a personal Reading list.
-- **Three-pane reviewing** — resizable contents rail, rendered spec, and comment threads; jump between comments with `J`/`K`.
-- **Rendered specs** — Markdown with tables, code, images, and **Mermaid** diagrams; **Current / Diff / Proposed** views for every changed file.
-- **Inline commenting** — official ADO threads plus private **personal comments** anchored to source lines that survive edits.
-- **WYSIWYG editing** — edit a spec in place and stage the change.
-- **Remote authoring** — stage a branch, add or edit `.md` files, stage a PR (with an optional work-item link), and publish the whole set with one action — no local clone required.
-- **Staged everywhere** — every change is staged locally and reviewable before a single **Push to remote** crosses into Azure DevOps.
-- **Local-clone review** — review branches and files straight from a git clone, no ADO round-trip.
-- **Offline mode** — cache a PR, comment offline, and sync when reconnected.
-- **MCP server** — drive the entire workflow from an AI agent (`tippani-mcp`).
+- **A home screen for finding work** — search your specs, pick up a review, look up a linked work item, browse branches, or reopen something from your reading list.
+- **Comfortable reviewing** — a table of contents, the rendered spec, and the comment threads side by side; move between comments with `J` / `K`.
+- **Nicely rendered specs** — Markdown with tables, code, images, and **Mermaid** diagrams, and **Current / Diff / Proposed** views of every changed file.
+- **Two kinds of notes** — shared comment threads on the pull request, plus private **personal comments** pinned to a line that follow the text as it changes.
+- **Edit in place** — change a spec in a WYSIWYG editor, no hand-written Markdown required.
+- **Write new specs** — create a branch, add or edit `.md` files, and open a pull request (optionally linked to a work item) — without cloning anything locally.
+- **Nothing happens by surprise** — every change waits, staged and reviewable, until you press **Push to remote** once.
+- **Work from a local clone** — review branches and files straight from a folder on disk.
+- **Offline mode** — cache a review, comment offline, and sync when you reconnect.
+- **Assistant-ready** — an MCP server (`tippani-mcp`) that can do all of this on your behalf.
 
 ## Documentation
 
@@ -89,7 +91,7 @@ npx tippani <PR_ID> --file="/path/to/spec.md"
 # Work offline (must have run online at least once for this PR)
 npx tippani <PR_ID> --offline
 
-# Force re-fetch from ADO
+# Fetch fresh data, ignoring the cache
 npx tippani <PR_ID> --refresh
 ```
 
@@ -97,18 +99,18 @@ npx tippani <PR_ID> --refresh
 
 | Flag | Meaning |
 |---|---|
-| `--org=<url>` | ADO org URL, e.g. `https://dev.azure.com/myorg`. |
-| `--project=<name>` | ADO project name. |
-| `--repo=<name>` | ADO repo name (optional; auto-detected from the PR). |
-| `--browse` | Open the Discovery portal instead of a single PR. |
+| `--org=<url>` | The address of the service that hosts your repositories, e.g. `https://dev.azure.com/myorg`. |
+| `--project=<name>` | The project that contains your repositories. |
+| `--repo=<name>` | The repository name (optional — detected from the pull request). |
+| `--browse` | Open the home screen instead of a single pull request. |
 | `--file=<path>` | Open a specific file directly. |
-| `--offline` | Work from cache only, no ADO connection. |
-| `--refresh` | Force re-fetch from ADO (ignore cache). |
-| `--save-config` | Save `--org/--project/--repo` to `~/.tippani/config.json`. |
+| `--offline` | Work from a local cache, with no connection. |
+| `--refresh` | Fetch fresh data, ignoring the cache. |
+| `--save-config` | Remember `--org/--project/--repo` in `~/.tippani/config.json`. |
 | `--port=<n>` | Serve on a specific port (default `3847`). |
-| `--headless` | Don't open a browser — agent-only session. |
-| `--ado-token=<t>` | Use a bearer token for ADO (skip PAT / Azure CLI). |
-| `--local-repo=<path>` | Review a local git clone with no ADO round-trip. |
+| `--headless` | Don't open a browser — for assistant-only sessions. |
+| `--ado-token=<t>` | Sign in with an access token instead of an interactive login. |
+| `--local-repo=<path>` | Work from a local clone on disk, with no server round-trip. |
 
 Environment equivalents: `TIPPANI_ORG`, `TIPPANI_PROJECT`, `TIPPANI_REPO`, `TIPPANI_PORT`, `TIPPANI_HEADLESS`, `TIPPANI_ADO_TOKEN`, `TIPPANI_LOCAL_REPO`. Precedence: **CLI flags > env vars > config file**.
 
@@ -131,33 +133,31 @@ You can also use environment variables:
 
 Priority: CLI flags > env vars > config file.
 
-## Authentication
+## Connecting to your repositories
 
-The CLI authenticates to Azure DevOps in this order:
+Tippani reads and writes using **your own** credentials — it never stores a shared secret. The one place connection details matter is signing in to the service that hosts your repositories:
 
-1. **Saved PAT** — stored at `~/.tippani/pat` (only if you created one previously)
-2. **Azure CLI** — `az account get-access-token` (recommended: just run `az login` once — no PAT needed)
-3. **Interactive prompt** — falls back to asking for a PAT only if neither of the above is available
+1. **Already signed in on this machine?** If your host has a command-line tool and you've signed in with it, Tippani picks that up automatically and never prompts.
+2. **Prefer a token?** Provide an access token with **Code (read & write)** permission via `--ado-token` (or the `TIPPANI_ADO_TOKEN` environment variable). This is how the assistant integration connects.
+3. **Neither?** Tippani asks you for a token once and remembers it.
 
-**You do not need a PAT.** If `az` is installed and you've run `az login`, tippani authenticates automatically and never prompts. This is the recommended path — in many tenants, PAT creation is disabled by policy.
+You only do this the first time; after that, Tippani connects on its own.
 
-If you can't use `az login`, generate a PAT at `https://dev.azure.com/YOUR_ORG/_usersSettings/tokens` with **Code (Read & Write)** scope.
-
-## Offline Mode
+## Offline mode
 
 ```bash
 # First run caches everything
 npx tippani 12345
 
-# Later, work offline — no ADO connection needed
+# Later, work offline — no connection needed
 npx tippani 12345 --offline
 
-# Comments are queued locally
-# When back online, sync to ADO:
-npx tippani 12345   # click "Sync to ADO" in the status bar
+# Your comments are queued locally.
+# When you're back online, sync them:
+npx tippani 12345   # then click 'Sync' in the status bar
 ```
 
-Cache is stored at `~/.tippani/cache/` and is valid for 1 hour.
+The cache lives in `~/.tippani/cache/` and is valid for one hour.
 
 ## Build Standalone Binary
 
@@ -172,17 +172,17 @@ Produces:
 
 To build a Windows `.exe`, run `npm run build` on a Windows machine with Node.js 20+.
 
-## Architecture
+## How it works
 
-Single-file CLI (`src/index.js`) that:
-1. Authenticates to ADO via PAT or `az cli`
-2. Fetches PR metadata, changed files, file contents, comment threads
+Tippani is a single-file command-line tool (`src/index.js`) that:
+1. Signs you in to your repository host
+2. Fetches the pull request's details, changed files, contents, and comment threads
 3. Caches everything locally for offline use
-4. Starts a local Express server on port 3847
-5. Renders markdown to HTML via `remark` + `rehype`
-6. Opens the browser to Tippani
+4. Starts a local web server on port 3847
+5. Renders Markdown to HTML (via `remark` + `rehype`)
+6. Opens Tippani in your browser
 
-Comments are written to a local queue first, then synced to ADO. If offline, they stay in the queue until the next sync.
+Comments are written to a local queue first, then sent to the host. Offline, they wait in the queue until the next sync.
 
 ## AI / MCP integration
 
@@ -190,14 +190,14 @@ Tippani exposes a [Model Context Protocol](https://modelcontextprotocol.io) serv
 
 **Self-bootstrapping — you don't start tippani first.** The shim launches (or adopts) a review portal per PR on demand via the `open_pr` tool, opening a visible browser window for you while the agent drives it. Multiple PRs can run at once on separate ports, discovered across processes via a per-port registry under `~/.tippani/instances/`.
 
-**Setup (Claude Desktop):** install tippani globally (`npm i -g tippani`), then add to your `claude_desktop_config.json`. The shim authenticates to Azure DevOps with a token you pass in via `TIPPANI_ADO_TOKEN` (an ADO REST/git access token) — it will refuse to start without one. Optionally set `TIPPANI_ADO_AUDIENCE` to have it verify the token's audience on startup:
+**Setup (Claude Desktop):** install tippani globally (`npm i -g tippani`), then add to your `claude_desktop_config.json`. The shim authenticates with an access token you pass in via `TIPPANI_ADO_TOKEN` (a read/write access token for your repository host) — it will refuse to start without one. Optionally set `TIPPANI_ADO_AUDIENCE` to have it verify the token's audience on startup:
 
 ```json
 {
   "mcpServers": {
     "tippani": {
       "command": "tippani-mcp",
-      "env": { "TIPPANI_ADO_TOKEN": "<your ADO access token>" }
+      "env": { "TIPPANI_ADO_TOKEN": "<your repository host access token>" }
     }
   }
 }
@@ -207,11 +207,11 @@ Tippani exposes a [Model Context Protocol](https://modelcontextprotocol.io) serv
 
 - **Portal & navigation** — `open_pr` (call first), `open_file`, `open_thread`, `show_feedback` (cross-PR triage page).
 - **Reading** — `list_threads`, `get_thread`, `get_spec`, `get_spec_draft`, `triage_summary`; focus with `focus_thread`.
-- **Stage-then-push** — stage review work with `stage_draft`, `edit_spec`, and `stage_resolve_thread`; stage authoring work with `stage_branch`, `stage_spec`, and `stage_spec_pr`. Nothing staged by MCP reaches Azure DevOps until one explicit `push_staged_changes` call. Also `clear_draft` and `clear_spec_edit`.
+- **Stage-then-push** — stage review work with `stage_draft`, `edit_spec`, and `stage_resolve_thread`; stage authoring work with `stage_branch`, `stage_spec`, and `stage_spec_pr`. Nothing staged by MCP reaches your repository host until one explicit `push_staged_changes` call. Also `clear_draft` and `clear_spec_edit`.
 
-Staged whole-file edits show up in the portal as a GitHub-style Current/Proposed diff you can accept-and-refine in the editor before committing.
+Staged whole-file edits show up in the portal as a side-by-side Current/Proposed diff you can accept-and-refine in the editor before committing.
 
-The portal can also run standalone with `--headless` (agent-only, no browser), `--port=<n>` (run several at once), and `--ado-token=<t>` (bearer auth, skipping the PAT / az CLI). The underlying HTTP control API is directly usable for scripts and IDE extensions — see `src/control-api.js`.
+The portal can also run standalone with `--headless` (assistant-only, no browser), `--port=<n>` (run several at once), and `--ado-token=<t>` (token-based sign-in, skipping the interactive login). The underlying HTTP control API is directly usable for scripts and IDE extensions — see `src/control-api.js`.
 
 ## License
 
