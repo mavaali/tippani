@@ -150,10 +150,10 @@ try {
     "get_spec_draft", "clear_spec_edit",
     "edit_spec", "set_view", "set_feedback_filter",
     "list_prs", "search_work_items", "search_specs", "get_file_commits",
-    "read_personal_comments", "add_personal_comment", "edit_personal_comment",
-    "delete_personal_comment", "resolve_personal_comment", "reply_personal_comment", "delete_resolved_personal_comments",
-    "delete_all_personal_comments", "navigate_personal_comments", "jump_to_personal_comment",
-    "show_resolved_personal_comments", "open_branch", "open_branch_file", "open_local_file", "refresh_spec",
+      "read_annotations", "add_annotation", "edit_annotation",
+      "delete_annotation", "resolve_annotation", "reply_annotation", "delete_resolved_annotations",
+      "delete_all_annotations", "navigate_annotations", "jump_to_annotation",
+      "show_resolved_annotations", "open_branch", "open_branch_file", "open_local_file", "refresh_spec",
     "stage_branch", "stage_spec", "stage_spec_pr", "push_staged_changes",
   ];
   check("tools: exactly 40 registered", tools.length === 40);

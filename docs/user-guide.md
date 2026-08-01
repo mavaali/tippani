@@ -161,9 +161,9 @@ The right-hand panel is built for fast, keyboard-driven review:
 - Replies and resolutions are **staged** locally; nothing leaves your machine
   until you push.
 
-### Personal comments
+### Annotations
 
-Beyond the shared review threads, Tippani supports **personal comments** —
+Beyond the shared review threads, Tippani supports **annotations** —
 private notes pinned to a specific line of the open spec. They stay on your
 machine, follow the text as it's edited, and are never sent to the host. They're
 ideal for a first read-through before you leave formal review feedback.

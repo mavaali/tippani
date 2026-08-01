@@ -3256,7 +3256,7 @@ function buildReadonlySpecPage({ title, bodyHtml, toc, specPath, repo, adoUrl, b
   const crumb = escHtml((repo ? repo + " \u00b7 " : "") + specPath);
   // File-reviewing mode (opened from a branch): the margin is a Personal Comments
   // pane (hidden until a comment exists); otherwise it's the PR Review History.
-  const paneTitle = reviewing ? "Personal Comments" : "Review History";
+  const paneTitle = reviewing ? "Annotations" : "Review History";
   const marginCollapsed = reviewing ? (commentCount > 0 ? "" : "collapsed") : "collapsed";
   const modeTag = editMode
     ? `<span class="ro-mode ro-mode-${editMode}">${editMode === "local" ? "Local" : "Remote"}</span>`
@@ -3266,7 +3266,7 @@ function buildReadonlySpecPage({ title, bodyHtml, toc, specPath, repo, adoUrl, b
     ? (toc || []).map((t) => `<a href="#${t.id}" class="toc-item" style="padding-left:${(t.level - 1) * 10 + 8}px">${escHtml(t.text)}</a>`).join("")
     : '<div class="ro-empty">No headings.</div>';
   const historyHtml = reviewing
-    ? '<div class="ro-empty" id="roHistLoading">No personal comments yet.</div>'
+    ? '<div class="ro-empty" id="roHistLoading">No annotations yet.</div>'
     : '<div class="ro-empty" id="roHistLoading">Loading review history\u2026</div>';
   return `<!DOCTYPE html>
 <html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -3610,7 +3610,7 @@ body.show-markers .rh-marker { display: inline-flex; }
       function clearMarkers() { docEl.querySelectorAll('.rh-marker').forEach(function (m) { m.remove(); }); docEl.querySelectorAll('[data-pc-mk]').forEach(function (b) { b.__mk = 0; b.removeAttribute('data-pc-mk'); }); }
       function pcRefresh() {
         cards = [].slice.call(marginEl.querySelectorAll('.pc-card'));
-        if (!cards.length) { var b = pcBody(); if (b && !b.querySelector('.ro-empty')) b.innerHTML = '<div class="ro-empty">No personal comments yet.</div>'; }
+        if (!cards.length) { var b = pcBody(); if (b && !b.querySelector('.ro-empty')) b.innerHTML = '<div class="ro-empty">No annotations yet.</div>'; }
         clearMarkers();
         docEl.querySelectorAll('h1,h2,h3,h4,h5,h6,p,li,blockquote,table,pre,.mermaid-block').forEach(function (b) { b.__mk = 0; });
         makeMarkers();
@@ -3641,7 +3641,7 @@ body.show-markers .rh-marker { display: inline-flex; }
           if (pcDraft || marginEl.querySelector('.pc-editing, .pc-replying')) return;
           var body = pcBody(); if (body) body.innerHTML = '';
           (d.comments || []).forEach(function (c) { pcBody().appendChild(pcBuildCard(c, false)); });
-          if (!(d.comments || []).length && body) body.innerHTML = '<div class="ro-empty">No personal comments yet.</div>';
+          if (!(d.comments || []).length && body) body.innerHTML = '<div class="ro-empty">No annotations yet.</div>';
           pcRefresh();
         }).catch(function () {});
       }
@@ -3852,7 +3852,7 @@ body.show-markers .rh-marker { display: inline-flex; }
         block.style.position = 'relative';
         var dot = document.createElement('button');
         dot.type = 'button'; dot.className = 'pc-add'; dot.textContent = '\uff0b';
-        dot.title = 'Add personal comment';
+        dot.title = 'Add annotation';
         dot.addEventListener('click', function (e) { e.stopPropagation(); pcCreateDraft(block, pcLineForBlock(block)); });
         block.appendChild(dot);
       }
@@ -3893,7 +3893,7 @@ body.show-markers .rh-marker { display: inline-flex; }
         var body = pcBody();
         if (body) body.innerHTML = '';
         (RO_PERSONAL_COMMENTS || []).forEach(function (c) { pcBody().appendChild(pcBuildCard(c, false)); });
-        if (!(RO_PERSONAL_COMMENTS || []).length && body) body.innerHTML = '<div class="ro-empty">No personal comments yet.</div>';
+        if (!(RO_PERSONAL_COMMENTS || []).length && body) body.innerHTML = '<div class="ro-empty">No annotations yet.</div>';
         pcWireHover();
         pcWireContentClicks();
         pcRefresh();
@@ -4461,7 +4461,7 @@ ${ctx ? renderCrumbBar([{ label: "Home", href: "/discovery" }, { label: ctx.back
       <span class="fmt-group">
         <button class="fmt-btn" id="fmtLink" title="Link (⌘K)" aria-label="Insert link" tabindex="-1">🔗</button>
         <button class="fmt-btn" id="fmtImage" title="Image" aria-label="Insert image" tabindex="-1">🖼</button>
-        ${ctx && ctx.pc ? '<button class="fmt-btn" id="fmtComment" title="Add personal comment at cursor" aria-label="Add personal comment at cursor" tabindex="-1">💬</button>' : ""}
+        ${ctx && ctx.pc ? '<button class="fmt-btn" id="fmtComment" title="Add annotation at cursor" aria-label="Add annotation at cursor" tabindex="-1">💬</button>' : ""}
       </span>
       <span class="fmt-sep" role="separator"></span>
       <span class="fmt-group">
@@ -4480,12 +4480,12 @@ ${ctx ? renderCrumbBar([{ label: "Home", href: "/discovery" }, { label: ctx.back
   <div class="resize-handle" id="resizeRight"></div>
 
   <aside class="sidebar-right${ctx && ctx.pc ? " pc-margin" : ""}" id="sidebarRight">
-    <div class="tp-pane-head"><button type="button" class="tp-collapse-btn" onclick="tpPaneCollapse('right')" title="Collapse" aria-label="Collapse comments">»</button><span class="sidebar-section-label">${ctx && ctx.pc ? "Personal Comments" : `Comments <span class="comment-count-badge">${activeThreads.length} active</span>`}</span></div>
+    <div class="tp-pane-head"><button type="button" class="tp-collapse-btn" onclick="tpPaneCollapse('right')" title="Collapse" aria-label="Collapse comments">»</button><span class="sidebar-section-label">${ctx && ctx.pc ? "Annotations" : `Comments <span class="comment-count-badge">${activeThreads.length} active</span>`}</span></div>
     ${ctx && ctx.pc
-      ? `<div class="pc-margin-body" id="pcMarginBody"><div class="ro-empty">No personal comments yet.</div></div>`
+      ? `<div class="pc-margin-body" id="pcMarginBody"><div class="ro-empty">No annotations yet.</div></div>`
       : `<div class="kbd-hint"><kbd>J</kbd>/<kbd>K</kbd> next/prev · <kbd>R</kbd> reply · <kbd>S</kbd> skip · <kbd>⌘↵</kbd> post &amp; next</div>
     ${threadsHtml}`}
-    <button type="button" class="tp-rail" onclick="tpPaneCollapse('right')" title="Expand comments" aria-label="Expand comments"><span>«</span><span class="tp-rail-label">${ctx && ctx.pc ? "Personal Comments" : "Comments"}</span></button>
+    <button type="button" class="tp-rail" onclick="tpPaneCollapse('right')" title="Expand comments" aria-label="Expand comments"><span>«</span><span class="tp-rail-label">${ctx && ctx.pc ? "Annotations" : "Comments"}</span></button>
   </aside>
 </div>
 
@@ -5224,7 +5224,7 @@ if (PC_MODE && window.__PC) (function () {
       mk.className = 'rh-marker ' + (card.querySelector('.rh-res') ? 'rh-marker-resolved' : 'rh-marker-active');
       var cnt = card.querySelector('.rh-count');
       mk.textContent = cnt ? cnt.textContent : '';
-      mk.title = 'Personal comment \u2014 jump to note';
+      mk.title = 'Annotation \u2014 jump to note';
       mk.style.right = (-10 - n * 22) + 'px';
       mk.addEventListener('click', function (e) { e.stopPropagation(); focus(card, 'card'); });
       b.appendChild(mk);
@@ -5252,7 +5252,7 @@ if (PC_MODE && window.__PC) (function () {
   function clearMarkers() { docEl.querySelectorAll('.rh-marker').forEach(function (m) { m.remove(); }); blocks.forEach(function (b) { b.__mk = 0; }); }
   function pcRefresh() {
     cards = [].slice.call(marginEl.querySelectorAll('.pc-card'));
-    if (!cards.length) { var b = pcBody(); if (b && !b.querySelector('.ro-empty')) b.innerHTML = '<div class="ro-empty">No personal comments yet.</div>'; }
+    if (!cards.length) { var b = pcBody(); if (b && !b.querySelector('.ro-empty')) b.innerHTML = '<div class="ro-empty">No annotations yet.</div>'; }
     clearMarkers();
     makeMarkers();
     cards.forEach(function (card) { if (card.classList.contains('pc-resolved')) card.hidden = !pcShowResolvedState; });
@@ -5280,7 +5280,7 @@ if (PC_MODE && window.__PC) (function () {
       if (pcDraft || marginEl.querySelector('.pc-editing, .pc-replying')) return;
       var body = pcBody(); if (body) body.innerHTML = '';
       (d.comments || []).forEach(function (c) { pcBody().appendChild(pcBuildCard(c, false)); });
-      if (!(d.comments || []).length && body) body.innerHTML = '<div class="ro-empty">No personal comments yet.</div>';
+      if (!(d.comments || []).length && body) body.innerHTML = '<div class="ro-empty">No annotations yet.</div>';
       pcRefresh();
     }).catch(function () {});
   }
@@ -5481,7 +5481,7 @@ if (PC_MODE && window.__PC) (function () {
     block.style.position = 'relative';
     var dot = document.createElement('button');
     dot.type = 'button'; dot.className = 'pc-add'; dot.textContent = '\uff0b';
-    dot.title = 'Add personal comment';
+    dot.title = 'Add annotation';
     dot.addEventListener('click', function (e) { e.stopPropagation(); pcCreateDraft(block, pcLineForBlock(block)); });
     block.appendChild(dot);
   }
@@ -5526,7 +5526,7 @@ if (PC_MODE && window.__PC) (function () {
     var body = pcBody();
     if (body) body.innerHTML = '';
     (RO_PERSONAL_COMMENTS || []).forEach(function (c) { pcBody().appendChild(pcBuildCard(c, false)); });
-    if (!(RO_PERSONAL_COMMENTS || []).length && body) body.innerHTML = '<div class="ro-empty">No personal comments yet.</div>';
+    if (!(RO_PERSONAL_COMMENTS || []).length && body) body.innerHTML = '<div class="ro-empty">No annotations yet.</div>';
     pcWireHover();
     pcWireContentClicks();
     pcRefresh();
@@ -6685,7 +6685,7 @@ function unstageFile({ repo, branch, path } = {}) {
   try {
     for (const file of removing) pcStoreDelete(PERSONAL_COMMENTS_DIR, file.repo, file.branch, file.path);
   } catch (e) {
-    return { ok: false, error: `could not remove personal comments: ${e.code || e.message}` };
+    return { ok: false, error: `could not remove annotations: ${e.code || e.message}` };
   }
   const before = _stagedFiles.length;
   _stagedFiles = _stagedFiles.filter((f) => !(f.repo === repo && f.branch === branch && f.path === path));

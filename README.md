@@ -60,7 +60,7 @@ Or download a standalone binary from the [latest release](https://github.com/mav
 - **A home screen for finding work** — search your specs, pick up a review, look up a linked work item, browse branches, or reopen something from your reading list.
 - **Comfortable reviewing** — a table of contents, the rendered spec, and the comment threads side by side; move between comments with `J` / `K`.
 - **Nicely rendered specs** — Markdown with tables, code, images, and **Mermaid** diagrams, and **Current / Diff / Proposed** views of every changed file.
-- **Two kinds of notes** — shared comment threads on the pull request, plus private **personal comments** pinned to a line that follow the text as it changes.
+- **Two kinds of notes** — shared comment threads on the pull request, plus private **annotations** pinned to a line that follow the text as it changes.
 - **Edit in place** — change a spec in a WYSIWYG editor, no hand-written Markdown required.
 - **Write new specs** — create a branch, add or edit `.md` files, and open a pull request (optionally linked to a work item) — without cloning anything locally.
 - **Nothing happens by surprise** — every change waits, staged and reviewable, until you press **Push to remote** once.

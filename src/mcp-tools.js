@@ -476,10 +476,10 @@ export function buildTools(http, session) {
     // selected comment, so most take no coordinates. Navigation/jump/visibility
     // steer the open page (it polls ~1.2s).
     {
-      name: "read_personal_comments",
+      name: "read_annotations",
       description:
-        "Read ALL personal comments on the spec file the user currently has open " +
-        "in the reviewing page (opened from a branch). Returns every comment " +
+        "Read ALL annotations on the spec file the user currently has open " +
+        "in the reviewing page (opened from a branch). Returns every annotation " +
         "(id, anchor line, author, text, resolved) plus which one is selected. " +
         "Read-only. Optionally target a specific file with repo+branch+path.",
       inputSchema: {
@@ -495,48 +495,48 @@ export function buildTools(http, session) {
       },
     },
     {
-      name: "add_personal_comment",
+      name: "add_annotation",
       description:
-        "Add a personal comment to the open spec file, anchored to a source line " +
+        "Add an annotation to the open spec file, anchored to a source line " +
         "(get_spec resolves headings/sections to lines). Saves immediately and " +
-        "selects the new comment in the open page.",
+        "selects the new annotation in the open page.",
       inputSchema: {
-        content: z.string().describe("Comment text (markdown allowed)"),
+        content: z.string().describe("Annotation text (markdown allowed)"),
         line: z.number().int().positive().optional().describe("1-based source line to anchor to"),
         repo: z.string().optional(), branch: z.string().optional(), path: z.string().optional(),
       },
       handler: (args) => ensuredPost("/api/v1/personal-comments/mcp/add", args),
     },
     {
-      name: "edit_personal_comment",
+      name: "edit_annotation",
       description:
-        "Edit a personal comment's text. Defaults to the SELECTED comment; pass " +
-        "id to target a specific one. Emptying the text keeps an empty comment " +
+        "Edit an annotation's text. Defaults to the SELECTED annotation; pass " +
+        "id to target a specific one. Emptying the text keeps an empty annotation " +
         "(use delete to remove).",
       inputSchema: {
-        content: z.string().describe("New comment text"),
-        id: z.string().optional().describe("Comment id (defaults to the selected comment)"),
+        content: z.string().describe("New annotation text"),
+        id: z.string().optional().describe("Annotation id (defaults to the selected annotation)"),
         repo: z.string().optional(), branch: z.string().optional(), path: z.string().optional(),
       },
       handler: (args) => ensuredPost("/api/v1/personal-comments/mcp/edit", args),
     },
     {
-      name: "delete_personal_comment",
+      name: "delete_annotation",
       description:
-        "Delete a personal comment. Defaults to the SELECTED comment; pass id to " +
+        "Delete an annotation. Defaults to the SELECTED annotation; pass id to " +
         "target a specific one.",
-      inputSchema: { id: z.string().optional().describe("Comment id (defaults to the selected comment)"), repo: z.string().optional(), branch: z.string().optional(), path: z.string().optional() },
+      inputSchema: { id: z.string().optional().describe("Annotation id (defaults to the selected annotation)"), repo: z.string().optional(), branch: z.string().optional(), path: z.string().optional() },
       handler: (args) => ensuredPost("/api/v1/personal-comments/mcp/delete", args),
     },
     {
-      name: "reply_personal_comment",
+      name: "reply_annotation",
       description:
-        "Post a reply on a personal comment — a follow-up note recorded under the " +
-        "comment (e.g. how you addressed the feedback). Defaults to the SELECTED " +
-        "comment; pass id to target a specific one. Reflects live in the open page.",
+        "Post a reply on an annotation — a follow-up note recorded under the " +
+        "annotation (e.g. how you addressed the feedback). Defaults to the SELECTED " +
+        "annotation; pass id to target a specific one. Reflects live in the open page.",
       inputSchema: {
-        content: z.string().describe("The reply text (Markdown), e.g. what you changed to address the comment"),
-        id: z.string().optional().describe("Comment id (defaults to the selected comment)"),
+        content: z.string().describe("The reply text (Markdown), e.g. what you changed to address the annotation"),
+        id: z.string().optional().describe("Annotation id (defaults to the selected annotation)"),
         repo: z.string().optional(), branch: z.string().optional(), path: z.string().optional(),
       },
       handler: async (args) => {
@@ -545,17 +545,17 @@ export function buildTools(http, session) {
       },
     },
     {
-      name: "resolve_personal_comment",
+      name: "resolve_annotation",
       description:
-        "Mark a personal comment resolved (or reopen it with resolved=false). " +
-        "Defaults to the SELECTED comment; pass id to target a specific one. When " +
+        "Mark an annotation resolved (or reopen it with resolved=false). " +
+        "Defaults to the SELECTED annotation; pass id to target a specific one. When " +
         "resolving after addressing feedback, pass `note` with a short summary of " +
-        "what you changed — it's posted as a reply on the comment BEFORE resolving, " +
+        "what you changed — it's posted as a reply on the annotation BEFORE resolving, " +
         "so the reviewer sees how it was handled (don't just silently resolve).",
       inputSchema: {
-        id: z.string().optional().describe("Comment id (defaults to the selected comment)"),
+        id: z.string().optional().describe("Annotation id (defaults to the selected annotation)"),
         resolved: z.boolean().optional().describe("true = resolve (default), false = reopen"),
-        note: z.string().optional().describe("Short summary of how you addressed the comment; posted as a reply before resolving"),
+        note: z.string().optional().describe("Short summary of how you addressed the annotation; posted as a reply before resolving"),
         repo: z.string().optional(), branch: z.string().optional(), path: z.string().optional(),
       },
       handler: async (args) => {
@@ -564,46 +564,46 @@ export function buildTools(http, session) {
       },
     },
     {
-      name: "delete_resolved_personal_comments",
+      name: "delete_resolved_annotations",
       description:
-        "Delete ALL resolved personal comments on the open spec file. Returns how " +
+        "Delete ALL resolved annotations on the open spec file. Returns how " +
         "many were removed. Reflects live in the open page.",
       inputSchema: {},
       handler: (args) => ensuredPost("/api/v1/personal-comments/mcp/delete-resolved", args || {}),
     },
     {
-      name: "delete_all_personal_comments",
+      name: "delete_all_annotations",
       description:
-        "Delete EVERY personal comment on the open spec file (resolved or not). " +
+        "Delete EVERY annotation on the open spec file (resolved or not). " +
         "Irreversible. Reflects live in the open page.",
       inputSchema: {},
       handler: (args) => ensuredPost("/api/v1/personal-comments/mcp/clear", args || {}),
     },
     {
-      name: "navigate_personal_comments",
+      name: "navigate_annotations",
       description:
-        "Move the selection to the next/previous personal comment (or first/last) " +
+        "Move the selection to the next/previous annotation (or first/last) " +
         "and scroll the open page to it. next/prev wrap around.",
       inputSchema: {
-        direction: z.enum(["next", "prev", "first", "last"]).describe("Which comment to select"),
+        direction: z.enum(["next", "prev", "first", "last"]).describe("Which annotation to select"),
       },
       handler: ({ direction }) => ensuredPost("/api/v1/personal-comments/mcp/nav", { direction }),
     },
     {
-      name: "jump_to_personal_comment",
+      name: "jump_to_annotation",
       description:
-        "Select and scroll the open page to a specific personal comment — by id, " +
+        "Select and scroll the open page to a specific annotation — by id, " +
         "or by the source line it's anchored to.",
       inputSchema: {
-        id: z.string().optional().describe("Comment id"),
+        id: z.string().optional().describe("Annotation id"),
         line: z.number().int().positive().optional().describe("Anchor line to jump to"),
       },
       handler: (args) => ensuredPost("/api/v1/personal-comments/mcp/jump", args),
     },
     {
-      name: "show_resolved_personal_comments",
+      name: "show_resolved_annotations",
       description:
-        "Hide or show resolved personal comments in the open reviewing page. " +
+        "Hide or show resolved annotations in the open reviewing page. " +
         "show=false hides resolved ones; show=true (default) shows them all.",
       inputSchema: { show: z.boolean().optional().describe("true = show resolved (default), false = hide") },
       handler: ({ show }) => ensuredPost("/api/v1/personal-comments/mcp/show-resolved", { show: show !== false }),

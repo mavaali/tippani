@@ -55,24 +55,24 @@ required.
 | `edit_spec` | Apply one or more anchored, atomic edits to a file and stage the result as a review-only draft. Never commits. | `fileIndex`, `edits`, `source` |
 | `clear_spec_edit` | Remove a staged spec edit. Idempotent. | `fileIndex` |
 
-### Personal comments
+### Annotations
 
 Private notes anchored to a source line of the open spec — they persist locally,
 survive edits, and never post to ADO.
 
 | Tool | Purpose | Parameters |
 |---|---|---|
-| `read_personal_comments` | Read all personal comments on the open spec file (id, anchor line, author, text, resolved) plus the selected one. | `repo`, `branch`, `path` |
-| `add_personal_comment` | Add a comment anchored to a source line; saves immediately and selects it. | `content*`, `line`, `repo`, `branch`, `path` |
-| `edit_personal_comment` | Edit a comment's text (defaults to the selected one). | `content*`, `id`, `repo`, `branch`, `path` |
-| `delete_personal_comment` | Delete a comment (defaults to the selected one). | `id`, `repo`, `branch`, `path` |
-| `reply_personal_comment` | Post a follow-up reply on a comment. | `content*`, `id`, `repo`, `branch`, `path` |
-| `resolve_personal_comment` | Mark a comment resolved (or reopen with `resolved=false`); `note` is posted as a reply first. | `id`, `resolved`, `note`, `repo`, `branch`, `path` |
-| `delete_resolved_personal_comments` | Delete all resolved comments on the open file. | — |
-| `delete_all_personal_comments` | Delete every comment on the open file. Irreversible. | — |
-| `navigate_personal_comments` | Move selection next/prev/first/last and scroll to it. | `direction*` |
-| `jump_to_personal_comment` | Select and scroll to a comment by id or anchor line. | `id`, `line` |
-| `show_resolved_personal_comments` | Show or hide resolved comments in the open page. | `show` |
+| `read_annotations` | Read all annotations on the open spec file (id, anchor line, author, text, resolved) plus the selected one. | `repo`, `branch`, `path` |
+| `add_annotation` | Add an annotation anchored to a source line; saves immediately and selects it. | `content*`, `line`, `repo`, `branch`, `path` |
+| `edit_annotation` | Edit an annotation's text (defaults to the selected one). | `content*`, `id`, `repo`, `branch`, `path` |
+| `delete_annotation` | Delete an annotation (defaults to the selected one). | `id`, `repo`, `branch`, `path` |
+| `reply_annotation` | Post a follow-up reply on an annotation. | `content*`, `id`, `repo`, `branch`, `path` |
+| `resolve_annotation` | Mark an annotation resolved (or reopen with `resolved=false`); `note` is posted as a reply first. | `id`, `resolved`, `note`, `repo`, `branch`, `path` |
+| `delete_resolved_annotations` | Delete all resolved annotations on the open file. | — |
+| `delete_all_annotations` | Delete every annotation on the open file. Irreversible. | — |
+| `navigate_annotations` | Move selection next/prev/first/last and scroll to it. | `direction*` |
+| `jump_to_annotation` | Select and scroll to an annotation by id or anchor line. | `id`, `line` |
+| `show_resolved_annotations` | Show or hide resolved annotations in the open page. | `show` |
 
 ### Branch and file reading
 

@@ -60,7 +60,7 @@ if (process.env.TIPPANI_ADO_TOKEN) {
 } else {
   console.error(
     "tippani-mcp: no Azure DevOps token \u2014 starting in local-only mode. " +
-    "Local review (open_branch / open_branch_file / personal comments) works " +
+        "Local review (open_branch / open_branch_file / annotations) works " +
     "without one; ADO tools (open_pr, list_prs) will need a token."
   );
 }

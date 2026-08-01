@@ -13,6 +13,10 @@ publish the whole set with one `push_staged_changes`. From branch `clickstop-2`.
   into Azure DevOps. Staged PR cards can be deleted before publishing.
 - **Shared staged-changes ticker** refreshed from both Branches and the Review
   queue.
+- **"Personal comments" are now "Annotations"** — the private, line-anchored
+  notes are renamed across the UI, the MCP tools (`add_annotation`,
+  `read_annotations`, `resolve_annotation`, …), and the docs. Fittingly,
+  *tippani* itself means "annotation".
 - **Links behave sensibly** — clicking a link inside a rendered spec opens a
   Markdown file that lives under the current file's root folder **in Tippani**
   (the read-only reviewing view), and everything else — external URLs,
