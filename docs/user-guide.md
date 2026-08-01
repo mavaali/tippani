@@ -1,11 +1,11 @@
 # Tippani User Guide
 
 A screen-by-screen tour of the Tippani portal: how to **discover**, **read**,
-**annotate**, **edit**, and **author** Azure DevOps pull-request specs without
-touching ADO's raw diff view.
+**annotate**, **edit**, and **author** the Markdown specs in your Git
+repositories — without ever touching a raw diff.
 
-All screenshots use placeholder *lorem ipsum* content in a throwaway sandbox
-project. Your own org, project, and specs will appear in their place.
+All screenshots use placeholder *lorem ipsum* content in a throwaway sandbox.
+Your own repositories and specs will appear in their place.
 
 ## Contents
 
@@ -28,7 +28,8 @@ project. Your own org, project, and specs will appear in their place.
 
 ## Launching the portal
 
-Save your org and project once, then open the Discovery portal:
+Point Tippani at your repositories once (this is the one place the connection
+details matter), then open the Discovery portal:
 
 ```bash
 tippani --org=https://dev.azure.com/YOUR_ORG --project="Your Project" --save-config
@@ -36,8 +37,8 @@ tippani --browse
 ```
 
 The portal serves from `http://localhost:3847` by default (override with
-`--port`). Everything runs locally — Tippani talks to Azure DevOps on your
-behalf and renders the UI in your browser.
+`--port`). Everything runs locally — Tippani connects to your repositories on
+your behalf and renders the UI in your browser.
 
 The top bar is consistent everywhere: a **breadcrumb** on the left (`Home ›
 …`) and the Tippani wordmark with the current mode (`· discovery`, `· read ·
@@ -53,9 +54,8 @@ Discovery answers "what should I work on?" It has five tabs:
 
 ### Specs tab
 
-Full-text search over the `.md` specs in the selected project, powered by
-**Azure DevOps Code Search**. Type a keyword and press **Search**; results are
-specs from the project's default branch.
+Full-text search across the `.md` specs in your repositories. Type a keyword and
+press **Search**; results are specs from each repository's default branch.
 
 ![Specs search](img/discovery-specs-search.png)
 
@@ -65,8 +65,8 @@ specs from the project's default branch.
 - Opening a result shows it **read-only at `main`**; the ↗ affordance opens it
   read-only inside Tippani (see [Reading a finished spec](#reading-a-finished-spec)).
 
-> Newly pushed specs appear here once ADO Code Search has indexed them, which
-> can lag a few minutes behind a commit.
+> Newly pushed specs appear here once search has indexed them, which can lag a
+> few minutes behind a commit.
 
 ### Review queue tab
 
@@ -90,16 +90,16 @@ Every pull request you can act on, as cards.
 
 ### Work items tab
 
-Run a **WIQL** query against the selected project; results open in Azure DevOps.
+Look up the work items your specs relate to. Results open in your work tracker.
 
 ![Work items](img/discovery-work-items.png)
 
-- The large text area holds a `SELECT … FROM workitems WHERE …` query. Edit it
-  and press **Search**.
+- The text area holds a query for the items you want. Edit it and press
+  **Search**.
 - Results show a count and a left rail faceted by **Assigned To**, **Status**,
   and **Type**.
 - Each row shows the **id**, **type · state**, and **title**, and links out to
-  the work item in Azure DevOps (↗).
+  the work item (↗).
 
 ### Branches tab
 
@@ -107,8 +107,8 @@ Your branches across the repos in the selected project.
 
 ![Branches](img/discovery-branches.png)
 
-- A **Remote / Local** toggle switches between ADO branches and branches in a
-  local git clone.
+- A **Remote / Local** toggle switches between remote branches and branches in
+  a local clone on disk.
 - **Project** selector, a branch count, and **Refresh**.
 - **+ New branch** stages a branch creation (part of the authoring flow).
 - Each branch card links to the branch's file list, where you can open specs
@@ -158,16 +158,15 @@ The right-hand panel is built for fast, keyboard-driven review:
   text, and **Reply** + **✓ Resolve** controls.
 - Keyboard shortcuts are shown inline: `J` / `K` move to the next / previous
   comment, `R` replies, `S` skips, and `⌘⏎` posts and moves to the next.
-- Replies and resolutions are **staged** locally; nothing is written to Azure
-  DevOps until you push.
+- Replies and resolutions are **staged** locally; nothing leaves your machine
+  until you push.
 
 ### Personal comments
 
-Beyond official ADO threads, Tippani supports **personal comments** — private
-notes anchored to a specific source line of the open spec. They persist locally,
-survive edits (each carries a content-addressed anchor that re-resolves on every
-render), and never post to ADO. They're ideal for a first read-through before
-you leave formal review feedback.
+Beyond the shared review threads, Tippani supports **personal comments** —
+private notes pinned to a specific line of the open spec. They stay on your
+machine, follow the text as it's edited, and are never sent to the host. They're
+ideal for a first read-through before you leave formal review feedback.
 
 ---
 
@@ -226,7 +225,7 @@ is **staged** first and published together. The flow:
 
 1. **Stage a branch.** From the **Branches** tab, **+ New branch** (or the
    authoring tools) stages a branch creation from a base branch. Nothing is
-   created in ADO yet.
+   created on the host yet.
 2. **Add or edit `.md` files.** Add new folders and Markdown files, or edit
    existing ones, on the staged branch. New and edited files use the same
    Current / Diff / Proposed reading views as PR-bound proposals.
@@ -255,11 +254,11 @@ and draft→published promotions — is collected into one pending set. A top-ro
 across the Branches and Review-queue surfaces whenever anything is pending.
 
 Pressing **Push to remote** (or the MCP `push_staged_changes` tool) is the single
-boundary that crosses into Azure DevOps. In order, it:
+moment anything is sent to the host. In order, it:
 
 1. flushes staged review replies and resolutions;
 2. creates any staged branches and publishes staged file adds/edits (grouped by
-   `org · project · repo · branch`, one commit per group);
+   repository and branch, one commit per group);
 3. creates staged PRs and optional work-item links; and
 4. applies staged **draft → published** PR promotions.
 
