@@ -168,6 +168,14 @@ private notes pinned to a specific line of the open spec. They stay on your
 machine, follow the text as it's edited, and are never sent to the host. They're
 ideal for a first read-through before you leave formal review feedback.
 
+![Annotations](img/annotations.png)
+
+- The **Annotations** rail on the right lists every note on the open file, each
+  stamped with the author, date, and the line it's pinned to.
+- A small count badge appears next to any heading whose section carries
+  annotations, so you can see at a glance where your notes are.
+- Each note has controls to reply, resolve, edit, and delete it.
+
 ---
 
 ## The Feedback screen
@@ -197,6 +205,12 @@ Every changed file in a PR can be viewed three ways from the top-bar tabs:
 - **Proposed** — the file as it would read after any staged edits are applied.
 - **Edit** — opens the WYSIWYG editor to change the spec in place; edits are
   staged, not written directly.
+
+The **Edit** view is a rich Markdown editor with a formatting toolbar (bold,
+italic, lists, tables, blockquotes, code, links, and images), while the
+**Comments** rail and review controls stay alongside:
+
+![WYSIWYG editor](img/wysiwyg-editor.png)
 
 The **Contents** rail and the per-file **Comments** count stay in sync as you
 switch views and files.
@@ -252,6 +266,8 @@ Every staged change — review replies, resolutions, new/edited files, staged PR
 and draft→published promotions — is collected into one pending set. A top-row
 **staged-changes ticker** ("You have N staged changes · Push to remote") appears
 across the Branches and Review-queue surfaces whenever anything is pending.
+
+![Staged-changes ticker](img/staged-changes-ticker.png)
 
 Pressing **Push to remote** (or the MCP `push_staged_changes` tool) is the single
 moment anything is sent to the host. In order, it:
