@@ -1,6 +1,7 @@
 // Tests for the Discovery Branches-tab helpers: ref shaping, default-branch
 // drop, ADO web URL, and sort.
-import { shortBranchName, buildBranchWebUrl, summarizeBranchRef, branchesForRepo, sortBranches } from "./branch-list.js";
+import fs from "node:fs";
+import { shortBranchName, buildBranchWebUrl, summarizeBranchRef, branchesForRepo, repoOptions, branchAuthorAlias, branchNamePlaceholder, sortBranches } from "./branch-list.js";
 
 let pass = 0, fail = 0;
 function ok(name, cond) { if (cond) pass++; else { fail++; console.error("  FAIL: " + name); } }
@@ -47,6 +48,22 @@ eq("no default branch keeps all heads",
   branchesForRepo(refs, { id: "R", name: "r", project: { name: "P" } }, ORG).map(r => r.name),
   ["main", "dev/kay/a", "dev/kay/b"]);
 
+// --- repoOptions (last fallback when no personal branch or main exists) ------
+eq("lists every valid repo",
+  repoOptions([repo, { id: "R2", name: "empty", project: { name: "PBI" } }, { name: "invalid" }]),
+  [
+    { id: "R1", name: "specs-repo", project: "PBI" },
+    { id: "R2", name: "empty", project: "PBI" },
+  ]);
+eq("null repos -> []", repoOptions(null), []);
+
+eq("branch alias prefers account name", branchAuthorAlias({ uniqueName: "Kay@Example.com", displayName: "Kay User" }), "kay");
+eq("branch alias sanitizes display name", branchAuthorAlias({ displayName: "Kay U. User" }), "kay-u-user");
+eq("missing identity uses generic alias", branchAuthorAlias(null), "user");
+eq("token identity builds branch placeholder", branchNamePlaceholder("Kay@contoso.onmicrosoft.com"), "dev/kay/myspec");
+eq("missing token identity uses plain fallback", branchNamePlaceholder(null), "mybranch");
+eq("invalid token identity uses plain fallback", branchNamePlaceholder("---"), "mybranch");
+
 // --- sortBranches ------------------------------------------------------------
 const unsorted = [
   { repo: "beta", name: "zeta" },
@@ -57,6 +74,12 @@ eq("sort by repo then name (ci)",
   sortBranches(unsorted).map(r => r.repo + "/" + r.name),
   ["alpha/A", "alpha/b", "beta/zeta"]);
 eq("sort null -> []", sortBranches(null), []);
+
+const indexSource = fs.readFileSync(new URL("./index.js", import.meta.url), "utf8");
+ok("repository-list failures return the sanitized ADO detail",
+  indexSource.includes('const error = friendlyAdoError(e, "List repositories");') &&
+  indexSource.includes("return { branches: [], project: proj, error };") &&
+  !indexSource.includes('error: "Could not list repositories. Check the server console."'));
 
 console.log(`branch-list: ${pass} passed, ${fail} failed`);
 if (fail > 0) process.exit(1);

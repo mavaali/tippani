@@ -52,6 +52,14 @@ export function renderCrumbs(trail) {
 const STAGED_HINT_SCRIPT = `<script>(function(){
   if (window.__tpStagedInit) return; window.__tpStagedInit = 1;
   function el(){ return document.getElementById('tpStaged'); }
+  function layout(){
+    var e=el(); if(!e) return;
+    var bar=e.closest('.tp-topbar'); var right=bar&&bar.querySelector('.tp-topbar-right');
+    if(!bar||!right){ e.style.left='50%'; return; }
+    var br=bar.getBoundingClientRect(); var rr=right.getBoundingClientRect(); var er=e.getBoundingClientRect();
+    var centered=br.width/2; var clearOfRight=rr.left-br.left-er.width/2-12;
+    e.style.left=Math.min(centered,clearOfRight)+'px';
+  }
   async function refresh(){
     var e = el(); if (!e) return;
     try {
@@ -61,9 +69,26 @@ const STAGED_HINT_SCRIPT = `<script>(function(){
         e.innerHTML = 'You have <strong style="color:var(--cp-text,#e6edf3)">'+n+'</strong> staged change'+(n===1?'':'s')+' \u00b7 <a href="#" id="tpPush" style="color:var(--cp-accent,#316dca);text-decoration:none;font-weight:600">Push to remote</a>';
         var p = document.getElementById('tpPush'); if (p) p.addEventListener('click', push);
       } else { e.innerHTML=''; }
+      layout();
     } catch (x) {}
   }
-  async function push(ev){ ev.preventDefault(); var e=el(); if(e) e.textContent='Pushing\u2026'; try { await fetch('/api/v1/branches/push',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'}); } catch(x){} location.reload(); }
+  async function push(ev){
+    ev.preventDefault(); var e=el(); if(e) e.textContent='Pushing\u2026';
+    try {
+      var r=await fetch('/api/v1/branches/push',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});
+      var d=await r.json();
+      if(r.ok&&d&&d.ok){
+        await fetch('/api/v1/commands/view',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({view:'current'})});
+        try { sessionStorage.removeItem('tippani.brCache.remote'); } catch(x) {}
+        location.reload(); return;
+      }
+      var failed=d&&d.results&&d.results.find(function(x){return !x.ok;});
+      if(e){ e.textContent='Push failed: '+((failed&&failed.error)||(d&&d.error)||('HTTP '+r.status)); e.title=e.textContent; }
+    } catch(x){ if(e){ e.textContent='Push failed: '+x.message; e.title=e.textContent; } }
+  }
+  var staged=el(); var bar=staged&&staged.closest('.tp-topbar'); var right=bar&&bar.querySelector('.tp-topbar-right');
+  if(window.ResizeObserver){ var ro=new ResizeObserver(layout); if(bar)ro.observe(bar); if(right)ro.observe(right); if(staged)ro.observe(staged); }
+  window.addEventListener('resize',layout);
   window.__tpStagedRefresh = refresh; refresh();
 })();<\/script>`;
 

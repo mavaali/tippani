@@ -16,7 +16,7 @@ let pass = 0, fail = 0;
 function ok(name, cond) { if (cond) pass++; else { fail++; console.error("  FAIL: " + name); } }
 
 // The directive names the flow and forbids raw git/ADO.
-ok("flow names all four tools in order", AUTHORING_FLOW === "create_branch → stage_spec → push_spec → create_spec_pr");
+ok("flow names all four tools in order", AUTHORING_FLOW === "stage_branch → stage_spec → stage_spec_pr → push_staged_changes");
 ok("directive embeds the never-raw rule", ROUTING_DIRECTIVE.includes(NEVER_RAW_RULE));
 ok("directive names the flow", ROUTING_DIRECTIVE.includes(AUTHORING_FLOW));
 

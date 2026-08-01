@@ -160,7 +160,7 @@ export function buildTools(http, session) {
         "needs-your-reply / awaiting-reviewer / viewed / for-your-information / resolved, " +
         "plus a per-thread list (anchor, category, gist). Use right after show_feedback to " +
         "give the user a brief spoken summary (e.g. 'X resolved, Y need your reply, Z can be " +
-        "ignored') and offer to mark the ignorable (FYI) threads as viewed via mark_viewed.",
+        "ignored') and help the user decide which threads need staged replies or resolutions.",
       inputSchema: {},
       handler: () => http.get("/api/v1/triage"),
     },
@@ -196,7 +196,7 @@ export function buildTools(http, session) {
         "Switch the spec reading view the user sees for a file: 'current' (the " +
         "committed text), 'diff' (proposed changes overlaid), or 'proposed' (the " +
         "proposed draft rendered clean). The browser view NEVER auto-flips when " +
-        "you stage an edit \u2014 call this after edit_spec / stage_spec_edit so the " +
+        "you stage an edit — call this after edit_spec so the " +
         "user actually sees the change. Optionally pass fileIndex to navigate to " +
         "that file first.",
       inputSchema: {
@@ -284,50 +284,14 @@ export function buildTools(http, session) {
       handler: ({ threadId }) => http.delete(`/api/v1/threads/${threadId}/draft`),
     },
     {
-      name: "post_reply",
-      description:
-        "Post a reply to ADO directly (bypasses staging). Use only when the user " +
-        "has explicitly approved a reply via this tool's caller. Returns 409 if " +
-        "another reply is already in flight for the same thread.",
-      inputSchema: {
-        threadId: z.number(),
-        content: z.string().describe("Reply body to post to ADO"),
-      },
-      handler: ({ threadId, content }) =>
-        http.post(`/api/v1/threads/${threadId}/reply`, { content }),
-    },
-    {
-      name: "resolve_thread",
-      description: "Mark a comment thread resolved in ADO.",
-      inputSchema: { threadId: z.number() },
-      handler: ({ threadId }) =>
-        http.post(`/api/v1/threads/${threadId}/resolve`, {}),
-    },
-    {
       name: "stage_resolve_thread",
       description:
         "Stage a thread resolution LOCALLY without pushing to ADO — it shows as resolved " +
-        "(pending) in the portal and is pushed only at Finalize. Use this (not resolve_thread) " +
+        "(pending) in the portal and is pushed only with push_staged_changes. " +
         "during review so resolves stay local and undoable until the user finalizes.",
       inputSchema: { threadId: z.number() },
       handler: ({ threadId }) =>
         http.post(`/api/v1/threads/${threadId}/stage-resolve`, {}),
-    },
-    {
-      name: "mark_viewed",
-      description:
-        "Mark a comment thread as viewed/acknowledged WITHOUT resolving it: it drops out " +
-        "of the \"needs your reply\" triage but stays open in ADO, and resurfaces if a newer " +
-        "comment is added. Durable (stored as an ADO thread property). Use for threads the " +
-        "user has read and intentionally left open. Pass clear=true to un-view.",
-      inputSchema: {
-        threadId: z.number(),
-        clear: z.boolean().optional().describe("Un-view the thread instead of marking it viewed"),
-      },
-      handler: ({ threadId, clear }) =>
-        clear
-          ? http.delete(`/api/v1/threads/${threadId}/viewed`)
-          : http.post(`/api/v1/threads/${threadId}/viewed`, {}),
     },
     {
       name: "get_spec",
@@ -339,29 +303,10 @@ export function buildTools(http, session) {
       handler: ({ fileIndex }) => http.get(`/api/v1/specs/${fileIndex}`),
     },
     {
-      name: "stage_spec_edit",
-      description:
-        "Stage a proposed whole-file edit for the user to review in tippani's " +
-        "editor before committing. The staged draft is review-only: the user sees " +
-        "your version as a diff and can load it into the editor to refine, then " +
-        "either commits their own version via Save or tells you to commit_spec with " +
-        "explicit content. You never commit without the user. Returns 409 if the " +
-        "user is currently editing that file (try again in ~10s).",
-      inputSchema: {
-        fileIndex: z.number().describe("0-based index into the PR's changed files"),
-        content: z.string().describe("Full proposed markdown for the file"),
-        source: z.string().optional().describe("Free-form attribution e.g. model name"),
-      },
-      handler: ({ fileIndex, content, source }) =>
-        http.put(`/api/v1/specs/${fileIndex}/draft`, { content, source }),
-    },
-    {
       name: "get_spec_draft",
       description:
-        "Read the current staged spec proposal for a file (the version you staged " +
-        "via stage_spec_edit). Review-only — it does not reflect unsaved edits the " +
-        "user is making in the portal editor. To commit, pass explicit content to " +
-        "commit_spec.",
+        "Read the current staged spec proposal for a PR file. Review-only — it " +
+        "does not reflect unsaved edits the user is making in the portal editor.",
       inputSchema: { fileIndex: z.number() },
       handler: ({ fileIndex }) => http.get(`/api/v1/specs/${fileIndex}/draft`),
     },
@@ -372,33 +317,18 @@ export function buildTools(http, session) {
       handler: ({ fileIndex }) => http.delete(`/api/v1/specs/${fileIndex}/draft`),
     },
     {
-      name: "commit_spec",
-      description:
-        "Commit a spec file to the PR's source branch. You must pass the full " +
-        "content to commit — the staged draft is review-only and is never committed " +
-        "implicitly (this prevents a stale proposal from overwriting the user's " +
-        "saved edits). Use only after the user approves. Returns 409 if the branch " +
-        "moved since load (reload and retry).",
-      inputSchema: {
-        fileIndex: z.number(),
-        content: z.string().describe("Full markdown to commit (required)"),
-        message: z.string().optional().describe("Commit message"),
-      },
-      handler: ({ fileIndex, content, message }) =>
-        http.post(`/api/v1/specs/${fileIndex}/commit`, { content, message }),
-    },
-    {
       name: "edit_spec",
       description:
         "Make surgical edits to one spec file without resending the whole body. " +
         "Applies one or more anchored edits and STAGES the result as a review-only " +
-        "draft (like stage_spec_edit \u2014 it never commits; use commit_spec to commit). " +
+        "draft. It never commits; publish staged work only through " +
+        "push_staged_changes. " +
         "Edits apply to the file's current staged draft if one exists, else the " +
         "committed body, so successive calls accumulate. All edits in a call are " +
         "atomic: if any can't be located, its guard doesn't match, or two overlap, " +
         "nothing is staged. After staging, call set_view('diff') or set_view('current') " +
         "so the user sees the change \u2014 the browser view does not auto-flip. Prefer " +
-        "this over stage_spec_edit for anything short of a full rewrite.",
+        "this for PR-bound surgical edits.",
       inputSchema: {
         fileIndex: z.number().describe("0-based index into the PR's changed files"),
         edits: z.array(z.object({
@@ -744,88 +674,84 @@ export function buildTools(http, session) {
       inputSchema: {},
       handler: (args) => ensuredPost("/api/v1/spec/refresh", args || {}),
     },
-    // ---- Remote spec authoring write tools (clickstop 2, step 13) ----
+    // ---- Staged spec authoring tools -------------------------------------
     {
-      name: "create_branch",
+      name: "stage_branch",
       description:
-        "Create (or adopt) a branch to author a spec on, in an EXPLICIT project + " +
-        "repo (Tippani never guesses the repo). Resolves a base branch " +
-        "(main/master/develop/trunk unless you pass one) and returns the new " +
-        "branch and its tip. Idempotent: an existing branch is adopted, not " +
-        "re-created. " + NEVER_RAW_RULE,
+        "Stage a branch creation in Tippani without creating anything in ADO. " +
+        "push_staged_changes creates it later. " + NEVER_RAW_RULE,
       inputSchema: {
         project: z.string().describe("ADO project name (required — the write target)"),
-        repo: z.string().describe("ADO repository name (required — the write target)"),
-        branch: z.string().describe("Branch name to create/adopt, e.g. spec/my-feature"),
+        repo: z.string().describe("ADO repository id or name (required — the write target)"),
+        repoName: z.string().optional().describe("Repository display name"),
+        branch: z.string().describe("Branch name to stage, e.g. spec/my-feature"),
         base: z.string().optional().describe("Base branch to fork from (defaults to main/master/develop/trunk)"),
         org: z.string().describe("ADO org URL (required — the write target; config defaults are for PR review only, never a write)"),
       },
-      handler: async ({ org, project, repo, branch, base }) => {
-        const r = await ensuredPost("/api/v1/spec/create-branch", { org, project, repo, branch, base });
-        return withHints("create_branch", r, { repo: r.repo, branch: r.branch, path: null });
+      handler: async (args) => {
+        const r = await ensuredPost("/api/v1/branches/stage", args);
+        return withHints("stage_branch", r, { repo: args.repo, branch: args.branch, path: null });
       },
     },
     {
       name: "stage_spec",
       description:
-        "Stage a whole-file spec markdown draft for (project, repo, branch, path). " +
-        "The draft is written durably but NOT committed — call push_spec to commit. " +
-        "Collides with a 409 if the user is editing the same file. " + NEVER_RAW_RULE,
+        "Stage a whole-file spec in the same aggregate store used by the portal. " +
+        "Set existing=true and pass the load-time branch tip when updating an " +
+        "existing file. Nothing is written to ADO until push_staged_changes. " + NEVER_RAW_RULE,
       inputSchema: {
         project: z.string().describe("ADO project name (required — the write target)"),
-        repo: z.string().describe("ADO repository name (required — the write target)"),
-        branch: z.string().describe("Branch to author on (from create_branch)"),
+        repo: z.string().describe("ADO repository id or name (required — the write target)"),
+        repoName: z.string().optional().describe("Repository display name"),
+        branch: z.string().describe("Branch to author on"),
         path: z.string().describe("Spec file path within the repo, e.g. docs/spec.md"),
         body: z.string().describe("Full markdown body of the spec"),
-        baseObjectId: z.string().optional().describe("Object id the draft is based on (set for an existing file; omit for a new file)"),
+        existing: z.boolean().optional().describe("True when updating an existing remote file"),
+        baseObjectId: z.string().optional().describe("Load-time branch tip; required for an existing file"),
         org: z.string().describe("ADO org URL (required — the write target; config defaults are for PR review only, never a write)"),
       },
-      handler: async ({ org, project, repo, branch, path, body, baseObjectId }) => {
-        const r = await ensuredPut("/api/v1/specs/draft", { org, project, repo, branch, path, body, baseObjectId });
+      handler: async ({ org, project, repo, repoName, branch, path, body, existing, baseObjectId }) => {
+        if (existing && !baseObjectId) throw new Error("baseObjectId is required when existing=true");
+        const target = { org, project, repo, repoName, branch, path };
+        const r = existing
+          ? await ensuredPost("/api/v1/files/edit", { ...target, content: body, baseObjectId })
+          : await ensuredPost("/api/v1/files/stage", target);
+        if (!existing && r && r.ok) await ensuredPost("/api/v1/files/content", { repo, branch, path, content: body });
         return withHints("stage_spec", r, { repo, branch, path });
       },
     },
     {
-      name: "push_spec",
+      name: "stage_spec_pr",
       description:
-        "Commit EVERY staged draft for (project, repo, branch) as one " +
-        "all-or-nothing commit. Fails with 409 if the branch moved since you " +
-        "staged (re-stage against the new tip). " + NEVER_RAW_RULE,
-      inputSchema: {
-        project: z.string().describe("ADO project name (required — the write target)"),
-        repo: z.string().describe("ADO repository name (required — the write target)"),
-        branch: z.string().describe("Branch to commit to"),
-        message: z.string().optional().describe("Commit message"),
-        oldObjectId: z.string().optional().describe("Branch tip you staged against, for optimistic concurrency"),
-        org: z.string().describe("ADO org URL (required — the write target; config defaults are for PR review only, never a write)"),
-      },
-      handler: async ({ org, project, repo, branch, message, oldObjectId }) => {
-        const r = await ensuredPost("/api/v1/specs/draft/push", { org, project, repo, branch, message, oldObjectId });
-        return withHints("push_spec", r, { repo, branch, path: null });
-      },
-    },
-    {
-      name: "create_spec_pr",
-      description:
-        "Open a pull request for the authored branch (in an EXPLICIT project + " +
-        "repo — Tippani never guesses the repo) and find-or-create-and-link a Spec " +
-        "review work item. Title and work-item type are yours to supply — Tippani " +
-        "never infers them. " + NEVER_RAW_RULE,
+        "Stage a pull-request intent without creating a PR or work item in ADO. " +
+        "push_staged_changes publishes it after its staged branch and files. " + NEVER_RAW_RULE,
       inputSchema: {
         project: z.string().describe("ADO project name (required — the write target)"),
         repo: z.string().describe("ADO repository name (required — the write target)"),
         title: z.string().describe("PR title (never inferred)"),
-        sourceBranch: z.string().describe("Branch to merge from (the authored branch)"),
+        sourceBranch: z.string().describe("Branch to merge from"),
         targetBranch: z.string().describe("Branch to merge into, e.g. main"),
         description: z.string().optional().describe("PR description"),
         isDraft: z.boolean().optional().describe("Open as a draft PR (default true)"),
         workItemTitle: z.string().optional().describe("Spec review work item title to find or create"),
-        workItemType: z.string().optional().describe("Work item type (required when workItemTitle is set; never inferred)"),
+        workItemType: z.string().optional().describe("Required when workItemTitle is set"),
         org: z.string().describe("ADO org URL (required — the write target; config defaults are for PR review only, never a write)"),
       },
       handler: async (args) => {
-        const r = await ensuredPost("/api/v1/pr/open", args);
-        return withHints("create_spec_pr", r, { repo: null, branch: args.sourceBranch, path: null });
+        const r = await ensuredPost("/api/v1/pr/stage", args);
+        return withHints("stage_spec_pr", r, { repo: args.repo, branch: args.sourceBranch, path: null });
+      },
+    },
+    {
+      name: "push_staged_changes",
+      description:
+        "Publish every currently staged branch, folder, file update, PR intent, " +
+        "reply, and resolution. This is the sole MCP authoring operation that " +
+        "writes staged changes to ADO; failures remain staged. " + NEVER_RAW_RULE,
+      inputSchema: {},
+      handler: async () => {
+        const r = await ensuredPost("/api/v1/branches/push", {});
+        return withHints("push_staged_changes", r, {});
       },
     },
   ];

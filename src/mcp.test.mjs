@@ -71,6 +71,10 @@ async function fakeResolve(threadId) {
 }
 const viewedCalls = [];
 const stageResolveCalls = [];
+const stagedBranches = [];
+const stagedFiles = [];
+const stagedPrs = [];
+let aggregatePushCalls = 0;
 async function fakeSetViewed(threadId, commentId) {
   viewedCalls.push({ threadId, commentId });
   return { ok: true, status: 200, body: { ok: true, viewedCommentId: commentId == null ? null : String(commentId) } };
@@ -102,6 +106,17 @@ registerControlApi(app, {
   remoteSpecLocks: createKeyedLockStore({ ttlMs: 60_000 }),
   pushRemoteSpec: async ({ project, repo, branch }) => ({ ok: true, status: 200, body: { ok: true, commitId: "c1", pushedFiles: remoteDraftStore.forBranch(project, repo, branch).map((d) => d.path) } }),
   openPr: async (args) => ({ ok: true, pullRequestId: 77, url: "http://pr/77", isDraft: !!args.isDraft, workItemId: args.workItemTitle ? 88 : null, workItemCreated: !!args.workItemTitle, linked: !!args.workItemTitle }),
+  stageBranch: (args) => { stagedBranches.push(args); return { ok: true, branches: stagedBranches }; },
+  stageFile: (args) => { stagedFiles.push({ ...args, content: "" }); return { ok: true, files: stagedFiles }; },
+  updateStagedFileContent: ({ repo, branch, path: filePath, content }) => {
+    const file = stagedFiles.find((item) => item.repo === repo && item.branch === branch && item.path === filePath);
+    if (!file) return { ok: false, error: "staged file not found" };
+    file.content = content;
+    return { ok: true };
+  },
+  saveExistingEdit: (args) => { stagedFiles.push({ ...args, existing: true }); return { ok: true, files: stagedFiles }; },
+  stageSpecPr: (args) => { stagedPrs.push(args); return { ok: true, prs: stagedPrs }; },
+  pushStagedBranches: async () => { aggregatePushCalls++; return { ok: true, count: 0, results: [{ ok: true, pushedFiles: stagedFiles.length, pullRequestId: 77 }] }; },
 });
 
 const server = await new Promise((res) => {
@@ -131,21 +146,23 @@ try {
     "open_pr",
     "list_threads", "triage_summary", "show_feedback",
     "open_thread", "open_file", "get_thread", "focus_thread",
-    "stage_draft", "clear_draft", "post_reply",
-    "resolve_thread", "stage_resolve_thread", "mark_viewed", "get_spec",
-    "stage_spec_edit", "get_spec_draft", "clear_spec_edit", "commit_spec",
+    "stage_draft", "clear_draft", "stage_resolve_thread", "get_spec",
+    "get_spec_draft", "clear_spec_edit",
     "edit_spec", "set_view", "set_feedback_filter",
     "list_prs", "search_work_items", "search_specs", "get_file_commits",
     "read_personal_comments", "add_personal_comment", "edit_personal_comment",
     "delete_personal_comment", "resolve_personal_comment", "reply_personal_comment", "delete_resolved_personal_comments",
     "delete_all_personal_comments", "navigate_personal_comments", "jump_to_personal_comment",
     "show_resolved_personal_comments", "open_branch", "open_branch_file", "open_local_file", "refresh_spec",
-    "create_branch", "stage_spec", "push_spec", "create_spec_pr",
+    "stage_branch", "stage_spec", "stage_spec_pr", "push_staged_changes",
   ];
-  check("tools: exactly 45 registered", tools.length === 45);
+  check("tools: exactly 40 registered", tools.length === 40);
   for (const n of expected) {
     check(`tools: includes ${n}`, !!byName[n]);
     check(`tools: ${n} has description`, typeof byName[n].description === "string" && byName[n].description.length > 20);
+  }
+  for (const n of ["post_reply", "resolve_thread", "mark_viewed", "stage_spec_edit", "commit_spec", "create_branch", "push_spec", "create_spec_pr"]) {
+    check(`tools: excludes direct/redundant ${n}`, !byName[n]);
   }
 
   // --- open_pr ---
@@ -187,40 +204,31 @@ try {
     check("open_local_file: outside-root rejected (400, not read)", rejected && rejStatus === 400);
   }
 
-  // --- Remote authoring write tools (clickstop 2, step 13) ---
+  // --- Staged-only authoring tools ---
   const WPROJ = "Big Data", WREPO = "MyRepo";
   {
-    const r = await byName.create_branch.handler({ project: WPROJ, repo: WREPO, branch: "spec/x" });
-    check("create_branch: creates + echoes repo/branch", r.ok === true && r.context.repo === "MyRepo" && r.context.branch === "spec/x");
-    check("create_branch: next-step points at stage_spec", /stage_spec/.test(r.nextStep));
-    // Missing project/repo -> the dep refuses (never guesses the repo).
-    let refused = false;
-    try { const bad = await byName.create_branch.handler({ branch: "spec/x" }); refused = bad.ok === false; }
-    catch (e) { refused = e.status === 400; }
-    check("create_branch: refuses without project/repo (never guessed)", refused);
+    const r = await byName.stage_branch.handler({ org: "https://dev.azure.com/o", project: WPROJ, repo: WREPO, branch: "spec/x" });
+    check("stage_branch: stages + echoes repo/branch", r.ok === true && r.context.repo === WREPO && r.context.branch === "spec/x");
+    check("stage_branch: does not cross ADO boundary", aggregatePushCalls === 0);
   }
   {
-    const r = await byName.stage_spec.handler({ project: WPROJ, repo: WREPO, branch: "spec/x", path: "docs/spec.md", body: "# Spec\n\nhi" });
+    const r = await byName.stage_spec.handler({ org: "https://dev.azure.com/o", project: WPROJ, repo: WREPO, branch: "spec/x", path: "docs/spec.md", body: "# Spec\n\nhi" });
     check("stage_spec: stages + echoes full context", r.ok === true && r.context.repo === "MyRepo" && r.context.branch === "spec/x" && r.context.path === "docs/spec.md");
-    check("stage_spec: next-step points at push_spec", /push_spec/.test(r.nextStep));
-    // Verify the body reached the store via a second file, then a multi-file push.
-    await byName.stage_spec.handler({ project: WPROJ, repo: WREPO, branch: "spec/x", path: "docs/two.md", body: "second" });
+    check("stage_spec: body reaches aggregate store", stagedFiles[0].content === "# Spec\n\nhi");
+    check("stage_spec: does not cross ADO boundary", aggregatePushCalls === 0);
   }
   {
-    const r = await byName.push_spec.handler({ project: WPROJ, repo: WREPO, branch: "spec/x", message: "Add specs" });
-    check("push_spec: commits all staged files in one commit", r.ok === true && r.commitId === "c1" && r.pushedFiles.length === 2);
-    check("push_spec: next-step points at create_spec_pr", /create_spec_pr/.test(r.nextStep));
+    const r = await byName.stage_spec_pr.handler({ org: "https://dev.azure.com/o", project: WPROJ, repo: WREPO, title: "Add spec", sourceBranch: "spec/x", targetBranch: "main" });
+    check("stage_spec_pr: stages intent", r.ok === true && stagedPrs.length === 1);
+    check("stage_spec_pr: does not cross ADO boundary", aggregatePushCalls === 0);
   }
   {
-    const r = await byName.create_spec_pr.handler({ project: WPROJ, repo: WREPO, title: "Add spec", sourceBranch: "spec/x", targetBranch: "main", isDraft: true, workItemTitle: "Spec review", workItemType: "Task" });
-    check("create_spec_pr: opens PR + links work item", r.ok === true && r.pullRequestId === 77 && r.workItemId === 88 && r.linked === true);
-    check("create_spec_pr: echoes the source branch", r.context.branch === "spec/x");
-    check("create_spec_pr: next-step points at review", /review/i.test(r.nextStep));
+    const r = await byName.push_staged_changes.handler({});
+    check("push_staged_changes: crosses aggregate boundary once", r.ok === true && aggregatePushCalls === 1);
+    check("push_staged_changes: returns per-target result", r.results[0].pushedFiles === 1 && r.results[0].pullRequestId === 77);
   }
   {
-    // Every write tool description carries the never-raw-git/ADO rule (step 14
-    // lint asserts the same; here we prove step 13 embedded it).
-    for (const n of ["create_branch", "stage_spec", "push_spec", "create_spec_pr"]) {
+    for (const n of ["stage_branch", "stage_spec", "stage_spec_pr", "push_staged_changes"]) {
       check(`${n}: description embeds the never-raw rule`, /never edit files|never .* raw git|Azure DevOps MCP/i.test(byName[n].description));
     }
   }
@@ -277,39 +285,6 @@ try {
     check("clear_draft: removed=true on hit", r.removed === true);
     const r2 = await byName.clear_draft.handler({ threadId: 201 });
     check("clear_draft: idempotent (removed=false on miss)", r2.removed === false);
-  }
-
-  // --- post_reply ---
-  {
-    const r = await byName.post_reply.handler({ threadId: 202, content: "Agreed." });
-    check("post_reply: ok+synced", r.ok === true && r.synced === true);
-    check("post_reply: backend received reply", postedReplies.length === 1 && postedReplies[0].threadId === 202);
-  }
-  {
-    // empty content -> 400 from server
-    let bad = false;
-    try { await byName.post_reply.handler({ threadId: 202, content: "  " }); }
-    catch (e) { bad = e.status === 400; }
-    check("post_reply: 400 on empty content", bad);
-  }
-
-  // --- resolve_thread ---
-  {
-    const r = await byName.resolve_thread.handler({ threadId: 202 });
-    check("resolve_thread: ok+synced", r.ok === true && r.synced === true);
-    check("resolve_thread: backend received resolve", resolvedThreads.includes(202));
-  }
-
-  // --- mark_viewed ---
-  {
-    const r = await byName.mark_viewed.handler({ threadId: 202 });
-    check("mark_viewed: ok", r.ok === true);
-    // thread 202's last comment id is 12 → viewed at 12
-    check("mark_viewed: backend viewed at last comment id",
-      viewedCalls.some((c) => c.threadId === 202 && c.commentId === 12));
-    const r2 = await byName.mark_viewed.handler({ threadId: 202, clear: true });
-    check("mark_viewed: clear un-views (commentId null)",
-      r2.ok === true && viewedCalls.some((c) => c.threadId === 202 && c.commentId === null));
   }
 
   // --- open_thread (single-tab default) ---

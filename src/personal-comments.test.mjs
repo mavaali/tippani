@@ -10,6 +10,7 @@ const c1 = newComment({ id: "a", line: 12, author: "Kay", content: "hi", now: "2
 eq("newComment shape", c1, { id: "a", line: 12, author: "Kay", content: "hi", resolved: false, createdAt: "2026-01-01T00:00:00Z", updatedAt: "2026-01-01T00:00:00Z", replies: [] });
 eq("newComment null line", newComment({ id: "b", line: null, author: "", content: "", now: "t" }).line, null);
 eq("newComment coerces line", newComment({ id: "c", line: "7", author: "", content: "", now: "t" }).line, 7);
+eq("newComment preserves separate edit line", newComment({ id: "d", line: null, editLine: "9", author: "", content: "", now: "t" }).editLine, 9);
 
 // --- addComment --------------------------------------------------------------
 const l1 = addComment([], c1);

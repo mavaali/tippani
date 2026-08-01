@@ -10,7 +10,7 @@ import { NEVER_RAW_RULE } from "./tool-hints.js";
 
 // The end-to-end authoring flow, named so the model follows the tool chain.
 export const AUTHORING_FLOW =
-  "create_branch → stage_spec → push_spec → create_spec_pr";
+  "stage_branch → stage_spec → stage_spec_pr → push_staged_changes";
 
 // The core directive, embedded in the instructions and the prompt.
 export const ROUTING_DIRECTIVE =
@@ -44,8 +44,8 @@ export function authorSpecPromptMessages({ repo, branch, path } = {}) {
         type: "text",
         text:
           `Author the spec through Tippani.${scope} ${ROUTING_DIRECTIVE} ` +
-          "Start by calling create_branch (unless a branch is already open), then stage_spec, " +
-          "then push_spec, then create_spec_pr. Do not edit files or push with raw git or the " +
+          "Start by calling stage_branch when a new branch is needed, then stage_spec and " +
+          "stage_spec_pr, and publish everything once with push_staged_changes. Do not edit files or push with raw git or the " +
           "Azure DevOps MCP.",
       },
     },
@@ -55,7 +55,7 @@ export function authorSpecPromptMessages({ repo, branch, path } = {}) {
 // Description lint: every remote-authoring write tool must carry the never-raw
 // rule so the guidance can't drift out of a tool. Returns the offending tool
 // names (empty = all good).
-export const WRITE_TOOL_NAMES = ["create_branch", "stage_spec", "push_spec", "create_spec_pr"];
+export const WRITE_TOOL_NAMES = ["stage_branch", "stage_spec", "stage_spec_pr", "push_staged_changes"];
 export function findToolsMissingDirective(tools) {
   const byName = Object.fromEntries((tools || []).map((t) => [t.name, t]));
   return WRITE_TOOL_NAMES.filter((n) => {

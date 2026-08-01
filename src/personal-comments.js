@@ -7,9 +7,9 @@ import crypto from "node:crypto";
 
 // Build a fresh comment record. `line` is the 1-based source line the anchored
 // block starts on (null for an unanchored note).
-export function newComment({ id, line, author, content, now }) {
+export function newComment({ id, line, editLine, author, content, now }) {
   const n = now || new Date().toISOString();
-  return {
+  const comment = {
     id: String(id || ""),
     line: line == null ? null : Number(line),
     author: String(author || ""),
@@ -19,6 +19,8 @@ export function newComment({ id, line, author, content, now }) {
     updatedAt: n,
     replies: [],
   };
+  if (editLine != null) comment.editLine = Number(editLine);
+  return comment;
 }
 
 export function addComment(list, comment) {

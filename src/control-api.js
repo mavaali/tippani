@@ -51,12 +51,13 @@ export function registerControlApi(app, deps) {
     editPersonalComment,    // async ({repo, branch, path, id, content}) => {ok, comment|deleted} (optional)
     deletePersonalComment,  // async ({repo, branch, path, id}) => {ok, id} (optional)
     resolvePersonalComment, // async ({repo, branch, path, id, resolved}) => {ok, comment} (optional)
+    replyPersonalComment,   // async ({repo, branch, path, id, content}) => {ok, comment} (optional)
     mcpReadPersonalComments, mcpAddPersonalComment, mcpEditPersonalComment, mcpDeletePersonalComment,
     mcpResolvePersonalComment, mcpReplyPersonalComment, mcpDeleteResolvedPersonalComments, mcpClearPersonalComments,
     mcpNavPersonalComment, mcpJumpPersonalComment, mcpSetPcResolvedVisibility, // MCP personal-comment ops
     mcpRefreshSpec, mcpOpenBranch, mcpOpenBranchFile, mcpOpenFile, // MCP: refresh + open review surface
     mcpCreateBranch, // MCP: create/adopt a branch for remote authoring (clickstop 2)
-    stageBranch, listStagedBranches, pushStagedBranches, unstageBranch, stageFile, unstageFile, updateStagedFileContent, listBranchFolders, createStagedFolder, deleteStagedFolder, renameStagedFolder, // clickstop 2: staged (pre-push) branches
+    stageBranch, listStagedBranches, pushStagedBranches, stageSpecPr, unstageBranch, unstageSpecPr, stagePrPublish, unstagePrPublish, stageFile, unstageFile, updateStagedFileContent, listBranchFolders, createStagedFolder, deleteStagedFolder, renameStagedFolder, renderMarkdown, saveExistingEdit, // clickstop 2: staged (pre-push) branches
   } = deps;
 
   const ALLOWED_ORIGINS = new Set([
@@ -404,6 +405,16 @@ export function registerControlApi(app, deps) {
     }
   });
 
+  app.post("/api/v1/spec-preview", requireAuth(), async (req, res) => {
+    if (typeof specPreview !== "function") return res.status(501).json({ error: "spec preview not wired" });
+    try {
+      const { original, proposed } = req.body || {};
+      res.json(await specPreview(0, { original, proposed }));
+    } catch (e) {
+      res.status(500).json({ error: String(e?.message || e) });
+    }
+  });
+
   app.get("/api/v1/specs/:fileIndex/draft", requireAuth(), (req, res) => {
     const idx = validSpecIndex(req.params.fileIndex);
     if (idx === null) return res.status(404).json({ error: "file index out of range" });
@@ -684,8 +695,8 @@ export function registerControlApi(app, deps) {
   app.post("/api/v1/personal-comments", requireAuth({ mutation: true }), async (req, res) => {
     if (typeof createPersonalComment !== "function") return res.status(501).json({ error: "personal comments not wired" });
     try {
-      const { repo, branch, path: filePath, line, content } = req.body || {};
-      const result = await createPersonalComment({ repo, branch, path: filePath, line, content });
+      const { repo, branch, path: filePath, line, editLine, content } = req.body || {};
+      const result = await createPersonalComment({ repo, branch, path: filePath, line, editLine, content });
       res.status(result.ok ? 200 : 400).json(result);
     } catch (e) {
       res.status(502).json({ error: String(e?.message || e) });
@@ -708,6 +719,17 @@ export function registerControlApi(app, deps) {
     try {
       const src = { ...(req.query || {}), ...(req.body || {}) };
       const result = await deletePersonalComment({ repo: src.repo, branch: src.branch, path: src.path, id: String(req.params.id) });
+      res.status(result.ok ? 200 : 400).json(result);
+    } catch (e) {
+      res.status(502).json({ error: String(e?.message || e) });
+    }
+  });
+
+  app.post("/api/v1/personal-comments/:id/reply", requireAuth({ mutation: true }), async (req, res) => {
+    if (typeof replyPersonalComment !== "function") return res.status(501).json({ error: "personal comment replies not wired" });
+    try {
+      const { repo, branch, path: filePath, content } = req.body || {};
+      const result = await replyPersonalComment({ repo, branch, path: filePath, id: String(req.params.id), content });
       res.status(result.ok ? 200 : 400).json(result);
     } catch (e) {
       res.status(502).json({ error: String(e?.message || e) });
@@ -767,9 +789,25 @@ export function registerControlApi(app, deps) {
     if (typeof pushStagedBranches !== "function") return res.status(501).json({ error: "push not wired" });
     try { res.json(await pushStagedBranches()); } catch (e) { res.status(502).json({ error: String(e?.message || e) }); }
   });
+  app.post("/api/v1/pr/stage", requireAuth({ mutation: true }), (req, res) => {
+    if (typeof stageSpecPr !== "function") return res.status(501).json({ error: "PR staging not wired" });
+    res.json(stageSpecPr(req.body || {}));
+  });
   app.post("/api/v1/branches/unstage", requireAuth({ mutation: true }), (req, res) => {
     if (typeof unstageBranch !== "function") return res.status(501).json({ error: "unstage not wired" });
     res.json(unstageBranch(req.body || {}));
+  });
+  app.post("/api/v1/pr/unstage", requireAuth({ mutation: true }), (req, res) => {
+    if (typeof unstageSpecPr !== "function") return res.status(501).json({ error: "PR unstage not wired" });
+    res.json(unstageSpecPr(req.body || {}));
+  });
+  app.post("/api/v1/pr/publish/stage", requireAuth({ mutation: true }), (req, res) => {
+    if (typeof stagePrPublish !== "function") return res.status(501).json({ error: "PR publish staging not wired" });
+    res.json(stagePrPublish(req.body || {}));
+  });
+  app.post("/api/v1/pr/publish/unstage", requireAuth({ mutation: true }), (req, res) => {
+    if (typeof unstagePrPublish !== "function") return res.status(501).json({ error: "PR publish unstage not wired" });
+    res.json(unstagePrPublish(req.body || {}));
   });
   app.post("/api/v1/files/stage", requireAuth({ mutation: true }), (req, res) => {
     if (typeof stageFile !== "function") return res.status(501).json({ error: "file staging not wired" });
@@ -782,6 +820,15 @@ export function registerControlApi(app, deps) {
   app.post("/api/v1/files/content", requireAuth({ mutation: true }), (req, res) => {
     if (typeof updateStagedFileContent !== "function") return res.status(501).json({ error: "file content not wired" });
     res.json(updateStagedFileContent(req.body || {}));
+  });
+  app.post("/api/v1/render", requireAuth(), async (req, res) => {
+    if (typeof renderMarkdown !== "function") return res.status(501).json({ error: "render not wired" });
+    try { res.json({ ok: true, html: await renderMarkdown(String((req.body && req.body.markdown) || "")) }); }
+    catch (e) { res.status(502).json({ error: String(e?.message || e) }); }
+  });
+  app.post("/api/v1/files/edit", requireAuth({ mutation: true }), (req, res) => {
+    if (typeof saveExistingEdit !== "function") return res.status(501).json({ error: "file edit not wired" });
+    res.json(saveExistingEdit(req.body || {}));
   });
   app.get("/api/v1/branches/folders", requireAuth(), async (req, res) => {
     if (typeof listBranchFolders !== "function") return res.status(501).json({ error: "folders not wired" });

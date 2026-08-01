@@ -36,15 +36,17 @@ import { isTableBlock, computeTableDiff } from "./table-diff.js";
 import { parseViewedMap, updateViewed } from "./viewed-map.js";
 import { writeInstance, removeInstance } from "./portal-registry.js";
 import { reattachFrontmatter } from "./frontmatter.js";
-import { isExpiredJwt } from "./ado-token-check.js";
+import { identityFromAdoToken, isExpiredJwt } from "./ado-token-check.js";
 import { buildPrCriteria, summarizePr, mergeRolePrs, prStatusLabel } from "./pr-criteria.js";
 import { navSkipsBarePathClobber, navShouldNavigate, navTarget } from "./nav-guard.js";
 import { createApprovedRoots } from "./approved-roots.js";
 import { classifyOpenFilePath, classifyAddFile } from "./open-file-path.js";
 import { createCustomFiles } from "./custom-files.js";
+import { buildReadingList, isPinnedManual, manualRoot } from "./reading-list.js";
 import { fileReviewContext } from "./comment-key.js";
 import { isAllowedHost } from "./host-guard.js";
 import { buildPushChangeSet } from "./push-changeset.js";
+import { planStagedPushes } from "./staged-push-plan.js";
 import { adoCall } from "./ado-call.js";
 import { buildCreateBranchRef, resolveBaseBranch, normalizeBranchRef } from "./ado-refs.js";
 import { resolveWriteTarget, draftKeyOf } from "./ado-target.js";
@@ -64,12 +66,12 @@ import {
 import { resolveImagePath, imageContentType, isLfsPointer, secureImageHeaders, isValidRepoId } from "./image-src.js";
 import { cssVariables, changeTypeBadge, escHtml, stripMarkdown, jsonForScript } from "./html-util.js";
 import { getSpecContentAt, getSpecBlobAt, buildSpecWebUrl, getLastCommitAuthor } from "./ado-read.js";
-import { branchesForRepo, sortBranches, shortBranchName } from "./branch-list.js";
-import { branchFileRows, visibleFileCount, mdPathsFromChanges, buildSpecHref } from "./branch-files.js";
+import { branchesForRepo, repoOptions, branchNamePlaceholder, sortBranches, shortBranchName, summarizeBranchRef } from "./branch-list.js";
+import { branchFileRows, visibleFileCount, mdPathsFromChanges, buildSpecHref, stagedFileComparison } from "./branch-files.js";
 import { validateLocalRepo, resolveGitDir, parseGitHead, parsePackedRefs, mergeLocalBranches, parseOriginHeadDefault, userCreatedBranches } from "./local-repo.js";
 import { baseCandidates, safeLocalPath } from "./local-git.js";
 import { newComment as pcNew, addComment as pcAdd, updateComment as pcUpdate, removeComment as pcRemove, findComment as pcFind, sortComments as pcSort, setResolved as pcSetResolved, addReply as pcAddReply, navTargetId as pcNavTarget, reanchorComments as pcReanchor } from "./personal-comments.js";
-import { personalCommentsKey as pcStoreKey, loadPersonalComments as pcStoreLoad, savePersonalComments as pcStoreSave, migrateKey as pcStoreMigrate } from "./personal-comments-store.js";
+import { personalCommentsKey as pcStoreKey, loadPersonalComments as pcStoreLoad, savePersonalComments as pcStoreSave, deletePersonalComments as pcStoreDelete, migrateKey as pcStoreMigrate } from "./personal-comments-store.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -208,10 +210,17 @@ function personalCommentsKey(repoId, branch, filePath) {
 }
 
 function loadPersonalComments(repoId, branch, filePath) {
+  const staged = _stagedFiles.find((f) => !f.existing && f.repo === repoId && f.branch === branch && f.path === filePath);
+  if (staged) return staged.personalComments || [];
   return pcStoreLoad(PERSONAL_COMMENTS_DIR, repoId, branch, filePath);
 }
 
 function savePersonalComments(repoId, branch, filePath, comments) {
+  const staged = _stagedFiles.find((f) => !f.existing && f.repo === repoId && f.branch === branch && f.path === filePath);
+  if (staged) {
+    staged.personalComments = comments;
+    return;
+  }
   pcStoreSave(PERSONAL_COMMENTS_DIR, repoId, branch, filePath, comments);
 }
 
@@ -229,6 +238,8 @@ const LOCAL_ROOTS_FILE = path.join(CONFIG_DIR, "local-roots.json");
 // below via `extraRoots` — so adding a file approves its folder and removing the
 // last file under a folder revokes it, with no dead roots ever accumulating.
 const CUSTOM_FILES_FILE = path.join(CONFIG_DIR, "custom-files.json");
+// The Reading list always pins the Tippani README as the user manual.
+const README_PATH = path.join(__dirname, "..", "README.md");
 let _customFiles;
 try {
   _customFiles = createCustomFiles({ fs, path, file: CUSTOM_FILES_FILE, configDir: CONFIG_DIR });
@@ -244,7 +255,11 @@ try {
 // local-clone roots so the two provenances never cross-revoke).
 const { approveLocalRoot, isApprovedRoot, isContained } = createApprovedRoots({
   fs, path, rootsFile: LOCAL_ROOTS_FILE, configDir: CONFIG_DIR,
-  extraRoots: () => _customFiles.customRoots(),
+  extraRoots: () => {
+    const roots = _customFiles.customRoots();
+    const r = manualRoot({ readmePath: README_PATH, fs, path });
+    return r ? [...roots, r] : roots;
+  },
 });
 
 // --- ADO error helper ---
@@ -254,7 +269,7 @@ function friendlyAdoError(e, context) {
   if (msg.includes("ENOTFOUND") || msg.includes("ECONNREFUSED"))
     return `Could not connect to ADO org. Check the --org URL and your network.`;
   if (status == 401)
-    return `Authentication failed (401). Your credentials may be expired.\n  If using az CLI: run 'az login' and re-run. If using a PAT: delete ~/.tippani/pat and re-run.`;
+    return `Authentication failed (401). Your credentials may be expired. Reauthenticate the account used by Tippani and retry. If using a PAT, replace the expired PAT and restart Tippani.`;
   if (status == 403)
     return `Access denied (403). Your account (or PAT) may lack access to this repo, or the PAT is missing the Code (Read & Write) scope.`;
   if (status == 404 || msg.includes("TF200016"))
@@ -1355,7 +1370,7 @@ ${NAV_WATCHER}
 // tagged, whose cards open the PR INSIDE Tippani (/open/:id re-drive) rather
 // than linking out to ADO. Built on buildPrListPage's styling; later Discovery
 // slices add the work-item and spec-tree panes to this page.
-function buildHomePage(prs, project, projects) {
+function buildHomePage(prs, project, projects, branchPlaceholder = "mybranch", discoveryError = "") {
   const list = prs || [];
   const projectNames = (projects && projects.length ? projects : [project].filter(Boolean));
   const projectOptions = projectNames.map((p) =>
@@ -1367,7 +1382,7 @@ function buildHomePage(prs, project, projects) {
     const activity = (pr.roles || []).map((r) => r === "author" ? "authoring" : "reviewing").join(" ");
     const status = pr.isDraft ? "draft" : "published";
     return `<a class="pr-card" href="/open/${pr.id}" data-author="${escHtml(pr.author || "")}" data-project="${escHtml(pr.project || "(none)")}" data-activity="${activity}" data-status="${status}" data-search="${escHtml(((pr.title || "") + " " + (pr.author || "")).toLowerCase())}">
-      <div class="pr-top"><span class="pr-id">#${pr.id}</span><span class="pr-status">${statusLabel(pr.status)}</span>${pr.isDraft ? '<span class="pr-draft">Draft</span>' : ""}${roleBadge(pr.roles)}</div>
+      <div class="pr-top"><span class="pr-id">#${pr.id}</span><span class="pr-status">${statusLabel(pr.status)}</span>${pr.isDraft ? '<span class="pr-draft">Draft</span>' : ""}${roleBadge(pr.roles)}${pr.isDraft ? `<button type="button" class="pr-publish-btn" data-pr-id="${pr.id}" data-project="${escHtml(pr.project || "")}" data-repo="${escHtml(pr.repo || "")}" data-title="${escHtml(pr.title || "")}">Publish</button>` : ""}</div>
       <div class="pr-title">${escHtml(pr.title || "")}</div>
       <div class="pr-meta">${escHtml(pr.author || "")} \u00b7 ${escHtml(pr.source || "")} \u2192 ${escHtml(pr.target || "")}${pr.repo ? " \u00b7 " + escHtml(pr.repo) : ""}${pr.project ? " \u00b7 " + escHtml(pr.project) : ""}</div>
     </a>`;
@@ -1442,10 +1457,22 @@ table.wi-results { width: 100%; table-layout: fixed; border-collapse: collapse; 
 .br-field > select, .br-field > input { width: 100%; box-sizing: border-box; height: 32px; flex: none; }
 .br-create-row .wi-search { height: 32px; padding: 0 16px; }
 .br-create-panel { margin-top: 10px; }
+.pr-create-panel { margin: 10px 0 16px; padding: 14px; border: 1px solid var(--cp-border); border-radius: 8px; background: var(--cp-surface); }
+.pr-create-panel .wi-row { margin-bottom: 12px; }
+.pr-create-panel .wi-row:last-of-type { margin-bottom: 8px; }
+.pr-create-panel textarea { width: 100%; min-height: 76px; resize: vertical; }
+.pr-create-actions { display: flex; align-items: center; justify-content: flex-end; gap: 12px; }
+.pr-draft-toggle { display: inline-flex; align-items: center; gap: 7px; font-size: 12px; color: var(--cp-text); margin-right: auto; }
+.pr-draft-toggle input { accent-color: var(--cp-accent); }
+.pr-staged-card { opacity: 0.72; border-style: dashed; }
 .br-staged-card { opacity: 0.72; border-style: dashed; display: flex; align-items: center; gap: 8px; }
 .br-staged-link { flex: 1 1 auto; min-width: 0; text-decoration: none; color: inherit; }
 .br-staged-del { flex: 0 0 auto; background: none; border: none; cursor: pointer; font-size: 18px; line-height: 1; padding: 4px 8px; border-radius: 6px; opacity: 0.8; }
 .br-staged-del:hover { opacity: 1; background: var(--cp-border); }
+.pr-staged-del { margin-left: auto; }
+.pr-publish-btn { margin-left: auto; flex: 0 0 auto; font-family: inherit; font-size: 11px; font-weight: 600; padding: 2px 10px; border-radius: 99px; border: 1px solid var(--cp-accent); background: var(--cp-accent); color: var(--cp-accent-fg); cursor: pointer; }
+.pr-publish-btn:hover { filter: brightness(1.08); }
+.pr-publish-btn.pr-publish-staged { background: transparent; color: var(--cp-accent); }
 .br-staged-badge { font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.03em; color: var(--cp-text-muted); background: var(--cp-border); padding: 1px 8px; border-radius: 99px; margin-left: 8px; }
 .br-ws-field { flex: 1; display: flex; align-items: center; border: 1px solid var(--cp-border); border-radius: 8px; background: var(--cp-surface); }
 .br-ws-field:focus-within { border-color: var(--cp-accent); }
@@ -1820,7 +1847,153 @@ table.wi-results { width: 100%; table-layout: fixed; border-collapse: collapse; 
     } catch (e) { status.textContent = 'Search failed: ' + e.message; }
   }
   var SERVER_LOCAL_REPO = ${jsonForScript(_localRepoPath || "")};
+  var BR_ORG = ${jsonForScript(ADO_ORG)};
   var brMode = 'remote';
+  var brCreateRepos = [];
+  var prBranchData = { branches: [], repos: [] };
+  function prRepoOptions() {
+    var byId = {};
+    (prBranchData.repos || []).forEach(function (r) { if (r && r.id) byId[r.id] = r; });
+    (prBranchData.branches || []).forEach(function (b) {
+      if (b && b.repoId && !byId[b.repoId]) byId[b.repoId] = { id: b.repoId, name: b.repo || b.repoId, project: b.project || '' };
+    });
+    (prBranchData.stagedBranches || []).forEach(function (b) {
+      if (b && b.repo && !byId[b.repo]) byId[b.repo] = { id: b.repo, name: b.repoName || b.repo, project: b.project || '' };
+    });
+    return Object.keys(byId).map(function (id) { return byId[id]; }).sort(function (a, b) { return String(a.name).localeCompare(String(b.name)); });
+  }
+  function populatePrBranches() {
+    var repoSel = document.getElementById('prCreateRepo');
+    var sourceSel = document.getElementById('prCreateSource');
+    var targetSel = document.getElementById('prCreateTarget');
+    if (!repoSel || !sourceSel || !targetSel) return;
+    var repoId = repoSel.value;
+    var branches = (prBranchData.branches || []).filter(function (b) { return b.repoId === repoId; }).map(function (b) { return b.name; });
+    var staged = (prBranchData.stagedBranches || []).filter(function (b) { return b.repo === repoId; }).map(function (b) { return b.branch; });
+    staged.forEach(function (name) { if (branches.indexOf(name) === -1) branches.push(name); });
+    branches.sort();
+    sourceSel.innerHTML = branches.length ? branches.map(function (name) { return '<option value="' + esc(name) + '">' + esc(name) + '</option>'; }).join('') : '<option value="">No branches found</option>';
+    var targets = branches.slice(); if (targets.indexOf('main') === -1) targets.unshift('main');
+    targetSel.innerHTML = targets.map(function (name) { return '<option value="' + esc(name) + '"' + (name === 'main' ? ' selected' : '') + '>' + esc(name) + '</option>'; }).join('');
+  }
+  function populatePrRepos() {
+    var sel = document.getElementById('prCreateRepo');
+    if (!sel) return;
+    var repos = prRepoOptions();
+    sel.innerHTML = repos.length ? repos.map(function (r) { return '<option value="' + esc(r.id) + '" data-name="' + esc(r.name || '') + '" data-project="' + esc(r.project || '') + '">' + esc(r.name || r.id) + '</option>'; }).join('') : '<option value="">No repositories found</option>';
+    populatePrBranches();
+  }
+  async function loadPrChoices() {
+    var project = document.getElementById('prCreateProject').value;
+    var status = document.getElementById('prCreateStatus');
+    status.textContent = 'Loading branches\u2026';
+    try {
+      var results = await Promise.all([
+        fetch('/api/v1/branches', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ project: project }) }).then(function (r) { return r.json(); }),
+        fetch('/api/v1/staged').then(function (r) { return r.json(); })
+      ]);
+      var remote = results[0] || {}, staged = results[1] || {};
+      if (remote.error && remote.error !== 'offline') { status.textContent = remote.error; return; }
+      prBranchData = { branches: remote.branches || [], repos: remote.repos || [], stagedBranches: staged.branches || [] };
+      populatePrRepos();
+      status.textContent = prRepoOptions().length ? '' : 'No repositories found for this project.';
+    } catch (e) { status.textContent = 'Failed: ' + e.message; }
+  }
+  function stagedPrCard(pr) {
+    var draft = pr.isDraft !== false ? '<span class="pr-draft">Draft</span>' : '';
+    return '<div class="pr-card pr-staged-card" data-project="' + esc(pr.project || '') + '" data-activity="authoring" data-status="' + (pr.isDraft !== false ? 'draft' : 'published') + '" data-search="' + esc(String(pr.title || '').toLowerCase()) + '">' +
+      '<div class="pr-top"><span class="br-staged-badge">staged only</span>' + draft + '<span class="pr-role pr-role-author">Authoring</span>' +
+      '<button class="br-staged-del pr-staged-del" data-repo="' + esc(pr.repo || '') + '" data-branch="' + esc(pr.branch || pr.sourceBranch || '') + '" title="Delete staged PR" aria-label="Delete staged PR">\uD83D\uDDD1</button></div>' +
+      '<div class="pr-title">' + esc(pr.title || '') + '</div>' +
+      '<div class="pr-meta">' + esc(pr.sourceBranch || pr.branch || '') + ' \u2192 ' + esc(pr.targetBranch || '') + ' \u00b7 ' + esc(pr.repoName || pr.repo || '') + ' \u00b7 ' + esc(pr.project || '') + '</div></div>';
+  }
+  async function refreshStagedPrs() {
+    var list = document.getElementById('qPrList');
+    if (!list) return;
+    try {
+      var r = await fetch('/api/v1/staged');
+      var d = await r.json();
+      list.querySelectorAll('.pr-staged-card').forEach(function (card) { card.remove(); });
+      if (d.prs && d.prs.length) {
+        var empty = list.querySelector('.empty'); if (empty) empty.remove();
+        list.insertAdjacentHTML('afterbegin', d.prs.map(stagedPrCard).join(''));
+        list.querySelectorAll('.pr-staged-del').forEach(function (b) {
+          b.addEventListener('click', function (ev) { ev.preventDefault(); ev.stopPropagation(); unstagePr(b.getAttribute('data-repo'), b.getAttribute('data-branch')); });
+        });
+      }
+    } catch (e) {}
+    // Mirror the Branches tab: refresh the top-row staged ticker / Push to remote.
+    if (window.__tpStagedRefresh) window.__tpStagedRefresh();
+  }
+  async function unstagePr(repo, branch) {
+    try { await fetch('/api/v1/pr/unstage', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ repo: repo, branch: branch }) }); } catch (e) {}
+    refreshStagedPrs();
+  }
+  // Clickstop 5: stage/unstage the publish (draft -> published) of a real PR
+  // from its queue card. Local until Push to remote, like every staged intent.
+  async function stagePrPublishFromCard(prId, project, repo, title) {
+    try { await fetch('/api/v1/pr/publish/stage', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ org: BR_ORG, project: project, repo: repo, repoName: repo, pullRequestId: Number(prId), title: title }) }); } catch (e) {}
+    markStagedPublishes();
+    if (window.__tpStagedRefresh) window.__tpStagedRefresh();
+  }
+  async function unstagePrPublishFromCard(prId) {
+    try { await fetch('/api/v1/pr/publish/unstage', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ pullRequestId: Number(prId) }) }); } catch (e) {}
+    markStagedPublishes();
+    if (window.__tpStagedRefresh) window.__tpStagedRefresh();
+  }
+  async function markStagedPublishes() {
+    var ids = {};
+    try { var d = await (await fetch('/api/v1/staged')).json(); (d.prPublishes || []).forEach(function (p) { ids[String(p.pullRequestId)] = true; }); } catch (e) {}
+    document.querySelectorAll('.pr-publish-btn').forEach(function (b) {
+      var staged = ids[String(b.getAttribute('data-pr-id'))];
+      b.textContent = staged ? 'Publish staged \u2713' : 'Publish';
+      b.classList.toggle('pr-publish-staged', !!staged);
+    });
+  }
+  function wireQueuePublish() {
+    var list = document.getElementById('qPrList');
+    if (!list || list.__pubWired) return;
+    list.__pubWired = true;
+    list.addEventListener('click', function (ev) {
+      var b = ev.target.closest && ev.target.closest('.pr-publish-btn');
+      if (!b) return;
+      ev.preventDefault(); ev.stopPropagation();
+      var id = b.getAttribute('data-pr-id');
+      if (b.classList.contains('pr-publish-staged')) unstagePrPublishFromCard(id);
+      else stagePrPublishFromCard(id, b.getAttribute('data-project'), b.getAttribute('data-repo'), b.getAttribute('data-title'));
+    });
+  }
+  async function stagePr() {
+    var repoSel = document.getElementById('prCreateRepo');
+    var repoOpt = repoSel && repoSel.options[repoSel.selectedIndex];
+    var workItemTitle = (document.getElementById('prCreateWorkItemTitle').value || '').trim();
+    var body = {
+      org: BR_ORG,
+      project: document.getElementById('prCreateProject').value,
+      repo: repoSel ? repoSel.value : '',
+      title: (document.getElementById('prCreateTitle').value || '').trim(),
+      description: (document.getElementById('prCreateDescription').value || '').trim(),
+      sourceBranch: document.getElementById('prCreateSource').value,
+      targetBranch: document.getElementById('prCreateTarget').value,
+      isDraft: document.getElementById('prCreateDraft').checked,
+      workItemTitle: workItemTitle || undefined,
+      workItemType: workItemTitle ? (document.getElementById('prCreateWorkItemType').value || '').trim() : undefined,
+      repoName: repoOpt ? (repoOpt.getAttribute('data-name') || '') : ''
+    };
+    var status = document.getElementById('prCreateStatus');
+    if (!body.repo || !body.sourceBranch || !body.targetBranch || !body.title) { status.textContent = 'Repository, source, target, and title are required.'; return; }
+    if (body.sourceBranch === body.targetBranch) { status.textContent = 'Source and target branches must be different.'; return; }
+    if (body.workItemTitle && !body.workItemType) { status.textContent = 'Work item type is required when a work item title is set.'; return; }
+    status.textContent = 'Staging\u2026';
+    try {
+      var r = await fetch('/api/v1/pr/stage', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+      var d = await r.json();
+      if (!d || !d.ok) { status.textContent = (d && d.error) || 'Stage failed.'; return; }
+      status.textContent = 'Pull request staged. Publish staged changes when ready.';
+      document.getElementById('prCreatePanel').hidden = true;
+      await refreshStagedPrs();
+    } catch (e) { status.textContent = 'Failed: ' + e.message; }
+  }
   function renderBranchCards(items, kind) {
     var out = document.getElementById('brResults');
     if (!items.length) { out.innerHTML = '<div class="empty">No branches found.</div>'; return; }
@@ -1854,6 +2027,7 @@ table.wi-results { width: 100%; table-layout: fixed; border-collapse: collapse; 
       var d = await r.json();
       if (d.error) { status.textContent = d.error; return; }
       var items = d.branches || [];
+      brCreateRepos = d.repos || [];
       status.textContent = items.length + ' branch' + (items.length === 1 ? '' : 'es');
       renderBranchCards(items, 'remote');
       populateCreateRepos();
@@ -1889,6 +2063,7 @@ table.wi-results { width: 100%; table-layout: fixed; border-collapse: collapse; 
     var sel = document.getElementById('brCreateRepo');
     if (!sel) return;
     var repos = brScanCards().repos;
+    if (!repos.length) repos = brCreateRepos;
     if (!repos.length) return;
     sel.innerHTML = repos.map(function (r) {
       return '<option value="' + esc(r.id) + '" data-name="' + esc(r.name) + '" data-project="' + esc(r.project) + '">' + esc(r.name) + '</option>';
@@ -1908,7 +2083,7 @@ table.wi-results { width: 100%; table-layout: fixed; border-collapse: collapse; 
     if (!name) { status.textContent = 'Enter a branch name.'; return; }
     status.textContent = 'Staging\u2026';
     try {
-      var r = await fetch('/api/v1/branches/stage', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ project: project, repo: repoId, repoName: repoName, branch: name, base: base || undefined }) });
+      var r = await fetch('/api/v1/branches/stage', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ org: BR_ORG, project: project, repo: repoId, repoName: repoName, branch: name, base: base || undefined }) });
       var d = await r.json();
       if (!d || !d.ok) { status.textContent = (d && d.error) || 'Stage failed.'; return; }
       document.getElementById('brCreateName').value = '';
@@ -2064,13 +2239,16 @@ table.wi-results { width: 100%; table-layout: fixed; border-collapse: collapse; 
   // All text goes through esc() (never raw HTML) so a path can't break out.
   function clTile(f) {
     var dir = f.dir ? '<div style="font-size:11px;color:var(--cp-text-muted);margin-bottom:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + esc(f.dir) + '</div>' : '';
+    var summary = f.summary ? '<div style="font-size:12px;color:var(--cp-text-muted);margin-top:3px;">' + esc(f.summary) + '</div>' : '';
+    var titlePrefix = f.pinned ? '\uD83D\uDCD8 ' : '';
+    var right = f.pinned
+      ? '<span title="Pinned \u2014 always available" style="flex:0 0 auto;font-size:11px;font-weight:600;color:var(--cp-accent);border:1px solid var(--cp-accent);border-radius:999px;padding:2px 10px;">Manual</span>'
+      : '<button class="cl-remove br-staged-del" data-path="' + esc(f.path) + '" title="Remove from list" aria-label="Remove from list">\uD83D\uDDD1</button>';
     return '<div class="pr-card" style="display:flex;align-items:center;gap:12px;">' +
       '<a href="' + esc(f.openHref) + '" style="flex:1 1 auto;min-width:0;text-decoration:none;color:inherit;">' +
-        dir + '<div class="pr-title">' + esc(f.name) + '</div>' +
+        dir + '<div class="pr-title">' + titlePrefix + esc(f.name) + '</div>' + summary +
       '</a>' +
-      '<button class="cl-remove" data-path="' + esc(f.path) + '" title="Remove from list" ' +
-        'style="flex:0 0 auto;border:1px solid var(--cp-border);background:var(--cp-surface);color:var(--cp-text-muted);' +
-        'width:28px;height:28px;border-radius:8px;cursor:pointer;font-size:16px;line-height:1;">\u00d7</button>' +
+      right +
     '</div>';
   }
   function renderCustomList(files) {
@@ -2190,6 +2368,13 @@ table.wi-results { width: 100%; table-layout: fixed; border-collapse: collapse; 
     var brCreate = document.getElementById('brCreateBtn'); if (brCreate) brCreate.addEventListener('click', stageBranch);
     var brNew = document.getElementById('brNewBtn'); if (brNew) brNew.addEventListener('click', function () { var p = document.getElementById('brCreatePanel'); if (!p) return; p.hidden = !p.hidden; if (!p.hidden) { populateCreateRepos(); var n = document.getElementById('brCreateName'); if (n) n.focus(); } });
     var brCreateRepoSel = document.getElementById('brCreateRepo'); if (brCreateRepoSel) brCreateRepoSel.addEventListener('change', populateBaseBranches);
+    var prNew = document.getElementById('prNewBtn'); if (prNew) prNew.addEventListener('click', function () { var p = document.getElementById('prCreatePanel'); if (!p) return; p.hidden = !p.hidden; if (!p.hidden) loadPrChoices(); });
+    var prProject = document.getElementById('prCreateProject'); if (prProject) prProject.addEventListener('change', loadPrChoices);
+    var prRepo = document.getElementById('prCreateRepo'); if (prRepo) prRepo.addEventListener('change', populatePrBranches);
+    var prStage = document.getElementById('prCreateBtn'); if (prStage) prStage.addEventListener('click', stagePr);
+    refreshStagedPrs();
+    wireQueuePublish();
+    markStagedPublishes();
     var brBrowse = document.getElementById('brBrowseBtn'); if (brBrowse) brBrowse.addEventListener('click', pickWorkspace);
     var ofBtn = document.getElementById('ofOpenBtn'); if (ofBtn) ofBtn.addEventListener('click', runAddFile);
     var ofBrowse = document.getElementById('ofBrowseBtn'); if (ofBrowse) ofBrowse.addEventListener('click', pickMdFile);
@@ -2256,13 +2441,39 @@ table.wi-results { width: 100%; table-layout: fixed; border-collapse: collapse; 
       <button class="tab" data-tab="queue" type="button">Review queue</button>
       <button class="tab" data-tab="workitems" type="button">Work items</button>
       <button class="tab" data-tab="branches" type="button">Branches</button>
-      <button class="tab" data-tab="openfile" type="button">My spec list</button>
+      <button class="tab" data-tab="openfile" type="button">Reading list</button>
     </div>
 
     <div class="pane" data-pane="queue">
       <div class="q-search"><input id="qSearch" type="search" placeholder="Filter by title or author\u2026"></div>
-      <div class="wi-actions"><span id="qStatus" class="wi-status"></span><button id="qSearchBtn" class="wi-search" type="button">Search</button></div>
-      <div class="pr-list">${rows || '<div class="empty">Nothing in your review queue.</div>'}</div>
+      <div class="wi-actions"><span id="qStatus" class="wi-status">${escHtml(discoveryError)}</span><button id="qSearchBtn" class="wi-search" type="button">Search</button></div>
+      <div class="br-new-row"><button id="prNewBtn" class="br-new-btn" type="button">\u002b New pull request</button></div>
+      <div class="pr-create-panel" id="prCreatePanel" hidden>
+        <div class="wi-row br-create-row">
+          <div class="br-field"><label>Project</label><select id="prCreateProject" class="wi-project">${projectOptions || `<option value="${escHtml(project || "")}">${escHtml(project || "(configured project)")}</option>`}</select></div>
+          <div class="br-field"><label>Repository</label><select id="prCreateRepo" class="wi-project"><option value="">Loading\u2026</option></select></div>
+        </div>
+        <div class="wi-row br-create-row">
+          <div class="br-field"><label>Source branch</label><select id="prCreateSource" class="wi-project"><option value="">Select a repository</option></select></div>
+          <div class="br-field"><label>Target branch</label><select id="prCreateTarget" class="wi-project"><option value="main">main</option></select></div>
+        </div>
+        <div class="wi-row br-create-row">
+          <div class="br-field"><label>Title</label><input id="prCreateTitle" class="br-create-input" type="text"></div>
+        </div>
+        <div class="wi-row br-create-row">
+          <div class="br-field"><label>Description</label><textarea id="prCreateDescription" class="br-create-input"></textarea></div>
+        </div>
+        <div class="wi-row br-create-row">
+          <div class="br-field"><label>Work item title (optional)</label><input id="prCreateWorkItemTitle" class="br-create-input" type="text"></div>
+          <div class="br-field"><label>Work item type</label><input id="prCreateWorkItemType" class="br-create-input" type="text" placeholder="Required when title is set"></div>
+        </div>
+        <div class="pr-create-actions">
+          <label class="pr-draft-toggle"><input id="prCreateDraft" type="checkbox" checked> Draft</label>
+          <span id="prCreateStatus" class="wi-status"></span>
+          <button id="prCreateBtn" class="wi-search" type="button">Stage PR</button>
+        </div>
+      </div>
+      <div class="pr-list" id="qPrList">${rows || '<div class="empty">Nothing in your review queue.</div>'}</div>
     </div>
 
     <div class="pane" data-pane="workitems">
@@ -2273,7 +2484,7 @@ table.wi-results { width: 100%; table-layout: fixed; border-collapse: collapse; 
       </div>
       <textarea id="wiQuery" class="wi-query" spellcheck="false">${escHtml(sampleWiql)}</textarea>
       <div class="wi-note" style="margin-top:8px">Enter a WIQL <code>SELECT</code> against <code>workitems</code>. Results open the item in Azure DevOps (\u2197).</div>
-      <div class="wi-actions"><span id="wiStatus" class="wi-status"></span><button id="wiSearchBtn" class="wi-search" type="button">Search</button></div>
+      <div class="wi-actions"><span id="wiStatus" class="wi-status">${escHtml(discoveryError)}</span><button id="wiSearchBtn" class="wi-search" type="button">Search</button></div>
       <div id="wiResults"></div>
     </div>
 
@@ -2286,7 +2497,7 @@ table.wi-results { width: 100%; table-layout: fixed; border-collapse: collapse; 
       <div class="sp-searchrow">
         <input id="spQuery" class="sp-query" type="search" spellcheck="false" placeholder="Keyword search on file name and content">
       </div>
-      <div class="wi-actions"><span id="spStatus" class="wi-status"></span><button id="spSearchBtn" class="wi-search" type="button">Search</button></div>
+      <div class="wi-actions"><span id="spStatus" class="wi-status">${escHtml(discoveryError)}</span><button id="spSearchBtn" class="wi-search" type="button">Search</button></div>
       <div id="spResults"></div>
       <div class="wi-note" style="margin-top:12px">Results are <code>.md</code> specs from Azure DevOps Code Search. Opening a result shows it read-only at <code>main</code> (\u2197 opens it read-only in Tippani).</div>
     </div>
@@ -2327,7 +2538,7 @@ table.wi-results { width: 100%; table-layout: fixed; border-collapse: collapse; 
             </div>
             <div class="br-field">
               <label>Branch name</label>
-              <input id="brCreateName" class="br-create-input" type="text" spellcheck="false" placeholder="dev/kayu/myspec">
+              <input id="brCreateName" class="br-create-input" type="text" spellcheck="false" placeholder="${escHtml(branchPlaceholder)}">
             </div>
             <div class="br-field">
               <label>Parent branch</label>
@@ -2556,8 +2767,8 @@ function buildBranchPage({ repoName, project, ref, rows, backHref, adoUrl, error
         // A row with no href renders as a plain card (the local file list is
         // display-only until the review step wires opening).
         return r.href
-          ? `<a class="${cls}" href="${escHtml(r.href)}"${r.isReadme ? ' hidden' : ""}>${inner}</a>`
-          : `<div class="${cls}"${r.isReadme ? ' hidden' : ""}>${inner}</div>`;
+          ? `<a class="${cls}" data-path="${escHtml(r.path)}" href="${escHtml(r.href)}"${r.isReadme ? ' hidden' : ""}>${inner}</a>`
+          : `<div class="${cls}" data-path="${escHtml(r.path)}"${r.isReadme ? ' hidden' : ""}>${inner}</div>`;
       }).join("") + `</div>`
     : "";
   const emptyHtml = error
@@ -2600,22 +2811,28 @@ body { font-family: "Segoe UI", Aptos, Calibri, -apple-system, sans-serif; backg
 .br-new-btn { font-family: inherit; font-size: 13px; font-weight: 600; color: var(--cp-accent); background: none; border: 1px dashed var(--cp-border); border-radius: 8px; padding: 6px 12px; cursor: pointer; }
 .br-new-btn:hover { border-color: var(--cp-accent); }
 .bp-newfile-panel { margin-bottom: 14px; }
-.bp-newfile-form { display: flex; flex-direction: column; align-items: stretch; gap: 12px; max-width: 560px; }
+.bp-newfile-form { display: flex; flex-direction: column; align-items: stretch; gap: 12px; }
 .bp-newfile-form .br-field { flex: 0 0 auto; }
-.bp-newfile-form .wi-search { align-self: flex-start; }
 .br-field { display: flex; flex-direction: column; gap: 4px; flex: 1 1 220px; min-width: 160px; }
 .br-field > label { font-size: 11px; font-weight: 600; color: var(--cp-text-muted); text-transform: uppercase; letter-spacing: 0.04em; }
 .br-field > input { width: 100%; box-sizing: border-box; height: 32px; font-family: inherit; font-size: 13px; padding: 6px 10px; border: 1px solid var(--cp-border); border-radius: 8px; background: var(--cp-surface); color: var(--cp-text); outline: none; }
 .wi-search { font-family: inherit; font-size: 13px; font-weight: 700; color: var(--cp-accent-fg); background: var(--cp-accent); border: none; border-radius: 8px; height: 32px; padding: 0 16px; cursor: pointer; }
 .wi-note { font-size: 12px; color: var(--cp-text-muted); margin-top: 6px; }
+.wi-note.is-error { color: #d13438; }
 .br-staged-badge { font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.03em; color: var(--cp-text-muted); background: var(--cp-border); padding: 1px 8px; border-radius: 99px; margin-left: 8px; }
 .bp-staged-file { display: flex; align-items: center; gap: 8px; opacity: 0.72; border-style: dashed; }
+.bp-file.bp-edited { border-color: var(--cp-accent); }
 .bp-staged-file .pr-title { font-size: 14px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .bp-staged-link { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; color: inherit; text-decoration: none; }
 .bp-staged-link:hover .pr-title { color: var(--cp-accent); text-decoration: underline; }
 .bp-folder-row { display: flex; gap: 8px; align-items: center; }
-.bp-folder-row > input { flex: 1 1 auto; }
-.bp-browse-btn { flex: 0 0 auto; font-family: inherit; font-size: 13px; font-weight: 600; color: var(--cp-accent); background: var(--cp-surface); border: 1px solid var(--cp-border); border-radius: 8px; height: 32px; padding: 0 14px; cursor: pointer; }
+.bp-title-row { display: flex; gap: 8px; align-items: center; }
+.bp-folder-row > input, .bp-title-row > input { flex: 1 1 auto; min-width: 0; box-sizing: border-box; height: 32px; font-family: inherit; font-size: 13px; padding: 6px 10px; border: 1px solid var(--cp-border); border-radius: 8px; background: var(--cp-surface); color: var(--cp-text); outline: none; }
+.bp-title-row > input[aria-invalid="true"] { border-color: #d13438; }
+.bp-form-action { flex: 0 0 82px; display: inline-flex; align-items: center; justify-content: center; width: 82px; height: 32px; box-sizing: border-box; padding: 0; border: 1px solid var(--cp-border); border-radius: 8px; font-family: inherit; font-size: 13px; font-weight: 600; line-height: 1; appearance: none; cursor: pointer; }
+.bp-form-action.wi-search { height: 28px; border-color: var(--cp-accent); border-radius: 4px; }
+.wi-search:disabled { opacity: 0.5; cursor: default; }
+.bp-browse-btn { color: var(--cp-accent); background: var(--cp-surface); }
 .bp-browse-btn:hover { border-color: var(--cp-accent); }
 .fp-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.45); z-index: 200; display: flex; align-items: center; justify-content: center; }
 .fp-overlay[hidden] { display: none; }
@@ -2689,11 +2906,15 @@ ${renderCrumbBar([{ label: "Home", href: "/discovery" }, { label: "Branch" }], {
       <div class="br-field bp-folder-field"><label>Folder</label>
         <div class="bp-folder-row">
           <input id="bpNewFileFolder" class="br-create-input" type="text" readonly placeholder="Choose a folder\u2026">
-          <button id="bpBrowseBtn" class="bp-browse-btn" type="button">Browse\u2026</button>
+          <button id="bpBrowseBtn" class="bp-form-action bp-browse-btn" type="button">Browse\u2026</button>
         </div>
       </div>
-      <div class="br-field"><label>Spec title</label><input id="bpNewFileTitle" class="br-create-input" type="text" spellcheck="false" placeholder="My New Spec"></div>
-      <button id="bpNewFileStage" class="wi-search" type="button">Stage</button>
+      <div class="br-field"><label>Spec title</label>
+        <div class="bp-title-row">
+          <input id="bpNewFileTitle" class="br-create-input" type="text" spellcheck="false" placeholder="My New Spec">
+          <button id="bpNewFileStage" class="bp-form-action wi-search" type="button" disabled>Stage</button>
+        </div>
+      </div>
     </div>
     <div id="bpNewFileStatus" class="wi-note"></div>
   </div>
@@ -2721,7 +2942,7 @@ ${renderCrumbBar([{ label: "Home", href: "/discovery" }, { label: "Branch" }], {
 <script>
 (function () {
   var params = new URLSearchParams(location.search);
-  var BP = { project: params.get('project')||'', repo: params.get('repo')||'', repoName: params.get('repoName')||'', branch: (params.get('ref')||'').replace('refs/heads/','') };
+  var BP = { org: ${jsonForScript(ADO_ORG)}, project: params.get('project')||'', repo: params.get('repo')||'', repoName: params.get('repoName')||'', branch: (params.get('ref')||'').replace('refs/heads/','') };
   function esch(s){ return String(s==null?'':s).replace(/[&<>"]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];}); }
   var IS_LOCAL = ${isLocal ? "true" : "false"};
   var fpFolderPicked = false, fpFolderValue = '';
@@ -2759,18 +2980,20 @@ ${renderCrumbBar([{ label: "Home", href: "/discovery" }, { label: "Branch" }], {
   async function stageNewFile(){
     var title = (titleInput.value||'').trim();
     if (!title) { statusEl.textContent = 'Enter a title.'; return; }
+    if (/\\.[^./\\\\]+$/.test(title) && !/\\.md$/i.test(title)) { titleInput.setAttribute('aria-invalid','true'); statusEl.classList.add('is-error'); statusEl.textContent = 'Only .md files can be added to a branch.'; return; }
     if (!fpFolderPicked) { statusEl.textContent = 'Choose a folder.'; return; }
     if (!BP.repo || !BP.branch) { statusEl.textContent = 'Missing branch context.'; return; }
     statusEl.textContent = 'Staging\u2026';
     try {
-      var r = await fetch('/api/v1/files/stage',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ project: BP.project, repo: BP.repo, repoName: BP.repoName, branch: BP.branch, title: title, folder: fpFolderValue })});
+      var r = await fetch('/api/v1/files/stage',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ org: BP.org, project: BP.project, repo: BP.repo, repoName: BP.repoName, branch: BP.branch, title: title, folder: fpFolderValue })});
       var d = await r.json();
       if (!d || !d.ok) { statusEl.textContent = (d && d.error) || 'Stage failed.'; return; }
-      titleInput.value=''; statusEl.textContent=''; if(panel) panel.hidden = true;
+      titleInput.value=''; statusEl.textContent=''; if(stageBtn) stageBtn.disabled = true; if(panel) panel.hidden = true;
       renderStagedFiles();
     } catch(e){ statusEl.textContent = 'Failed: '+e.message; }
   }
   if (stageBtn) stageBtn.addEventListener('click', stageNewFile);
+  if (stageBtn && titleInput) { var _syncStage = function(){ titleInput.removeAttribute('aria-invalid'); statusEl.classList.remove('is-error'); stageBtn.disabled = !titleInput.value.trim(); }; _syncStage(); titleInput.addEventListener('input', _syncStage); }
   // Folder picker dialog (remote/staged only): a lazy treeview over the branch's
   // folder tree (the parent branch's tree for a staged branch). Create / Rename /
   // Delete are right-click actions; each is a staged change that refreshes the
@@ -2913,7 +3136,7 @@ ${renderCrumbBar([{ label: "Home", href: "/discovery" }, { label: "Branch" }], {
         done = true;
         var full = row._path ? row._path + '/' + name : name;
         try {
-          var r = await fetch('/api/v1/branches/folders/create', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ repo: BP.repo, branch: BP.branch, path: full }) });
+          var r = await fetch('/api/v1/branches/folders/create', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ org: BP.org, project: BP.project, repo: BP.repo, branch: BP.branch, path: full }) });
           var d = await r.json();
           if (!d || !d.ok) { alert((d && d.error) || 'Create failed.'); editor.remove(); return; }
         } catch(e){ alert('Create failed: ' + e.message); editor.remove(); return; }
@@ -2982,13 +3205,16 @@ ${renderCrumbBar([{ label: "Home", href: "/discovery" }, { label: "Branch" }], {
     if(!host) return;
     var mine = [];
     try { var r = await fetch('/api/v1/staged'); if(r.ok){ var d = await r.json(); mine = (d.files||[]).filter(function(f){ return f.repo===BP.repo && f.branch===BP.branch; }); } } catch(e){}
+    var mineNew = mine.filter(function(f){ return !f.existing; });
+    var mineEdit = mine.filter(function(f){ return !!f.existing; });
     host.querySelectorAll('.bp-staged-file').forEach(function(c){ c.remove(); });
+    host.querySelectorAll('.bp-file.bp-edited').forEach(function(el){ el.classList.remove('bp-edited'); var b = el.querySelector('.br-edited-badge'); if (b) b.remove(); });
     var list = host.querySelector('.pr-list');
     var empty = host.querySelector('.bp-empty');
-    if (mine.length) {
+    if (mineNew.length) {
       if (empty) empty.style.display = 'none';
       if (!list) { host.insertAdjacentHTML('afterbegin','<div class="pr-list"></div>'); list = host.querySelector('.pr-list'); }
-      var html = mine.map(function(f){
+      var html = mineNew.map(function(f){
         var href = '/staged-file?project='+encodeURIComponent(BP.project)+'&repo='+encodeURIComponent(BP.repo)+'&repoName='+encodeURIComponent(BP.repoName)+'&branch='+encodeURIComponent(BP.branch)+'&path='+encodeURIComponent(f.path);
         var p = f.path || ''; var sl = p.lastIndexOf('/'); var dir = sl >= 0 ? p.slice(0, sl) : '';
         return '<div class="pr-card bp-staged-file"><a class="bp-staged-link" href="'+href+'">'+
@@ -2999,6 +3225,19 @@ ${renderCrumbBar([{ label: "Home", href: "/discovery" }, { label: "Branch" }], {
       list.insertAdjacentHTML('afterbegin', html);
       list.querySelectorAll('.bp-staged-del').forEach(function(b){ b.addEventListener('click', function(ev){ ev.preventDefault(); ev.stopPropagation(); unstageFile(b.getAttribute('data-path')); }); });
     } else if (empty) { empty.style.display = ''; }
+    if (mineEdit.length) {
+      var rows = host.querySelectorAll('.bp-file');
+      mineEdit.forEach(function(f){
+        for (var i = 0; i < rows.length; i++) {
+          if (rows[i].getAttribute('data-path') === f.path) {
+            rows[i].classList.add('bp-edited');
+            var t = rows[i].querySelector('.pr-title');
+            if (t && !t.querySelector('.br-edited-badge')) { var s = document.createElement('span'); s.className = 'br-staged-badge br-edited-badge'; s.textContent = 'edited'; t.appendChild(s); }
+            break;
+          }
+        }
+      });
+    }
     updateCount();
     if (window.__tpStagedRefresh) window.__tpStagedRefresh();
   }
@@ -3006,73 +3245,6 @@ ${renderCrumbBar([{ label: "Home", href: "/discovery" }, { label: "Branch" }], {
   if (!IS_LOCAL) renderStagedFiles();
 })();
 </script>
-${NAV_WATCHER}
-</body></html>`;
-}
-
-function buildStagedFilePage({ file, backHref }) {
-  const title = file.title || file.path;
-  const content = file.content || "";
-  const modeBadge = `<span class="ro-mode" style="background:var(--cp-border);color:var(--cp-text-muted)">Staged</span>`;
-  const metaJson = JSON.stringify({ repo: file.repo, branch: file.branch, path: file.path });
-  return `<!DOCTYPE html>
-<html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>${escHtml(title)} \u2014 Tippani</title>
-<style>
-${cssVariables()}
-* { margin: 0; padding: 0; box-sizing: border-box; }
-body { font-family: "Segoe UI", Aptos, Calibri, -apple-system, sans-serif; background: var(--cp-bg); color: var(--cp-text); }
-.ro-mode { flex: 0 0 auto; font-size: 11px; font-weight: 700; padding: 4px 12px; border-radius: 99px; text-transform: uppercase; letter-spacing: 0.4px; white-space: nowrap; background: var(--cp-accent-soft); color: var(--cp-accent); }
-.sf-wrap { max-width: 900px; margin: 0 auto; padding: 20px 20px 60px; }
-.sf-head { text-align: center; padding: 0 20px 14px; }
-.sf-head h1 { font-size: 19px; font-weight: 700; line-height: 1.3; word-break: break-all; }
-.sf-sub { font-size: 13px; color: var(--cp-text-muted); margin-top: 3px; word-break: break-all; }
-.sf-toolbar { display: flex; align-items: center; gap: 12px; margin-bottom: 10px; }
-.sf-status { font-size: 12px; color: var(--cp-text-muted); }
-.sf-save { margin-left: auto; font-family: inherit; font-size: 13px; font-weight: 700; color: var(--cp-accent-fg); background: var(--cp-accent); border: none; border-radius: 8px; height: 32px; padding: 0 18px; cursor: pointer; }
-.sf-save:disabled { opacity: 0.6; cursor: default; }
-.sf-editor { width: 100%; min-height: 60vh; box-sizing: border-box; font-family: Consolas, "Courier New", monospace; font-size: 14px; line-height: 1.6; padding: 16px 18px; border: 1px solid var(--cp-border); border-radius: 12px; background: var(--cp-surface); color: var(--cp-text); resize: vertical; outline: none; }
-.sf-editor:focus { border-color: var(--cp-accent); }
-</style>
-<script>
-  if (window.matchMedia('(prefers-color-scheme: dark)').matches) document.documentElement.dataset.theme = 'dark';
-<\/script></head>
-<body>
-${renderCrumbBar([{ label: "Home", href: "/discovery" }, { label: "Branch", href: backHref }, { label: title }], { right: modeBadge })}
-<div class="sf-wrap">
-  <div class="sf-head">
-    <h1>${escHtml(title)}</h1>
-    <div class="sf-sub">${escHtml(file.repoName || "")}${file.branch ? " \u00b7 " + escHtml(file.branch) : ""} \u00b7 ${escHtml(file.path)}</div>
-  </div>
-  <div class="sf-toolbar">
-    <span class="sf-status" id="sfStatus">Staged only \u2014 not yet pushed to remote.</span>
-    <button class="sf-save" id="sfSave" type="button">Save</button>
-  </div>
-  <textarea class="sf-editor" id="sfEditor" spellcheck="true" placeholder="Write your spec in Markdown\u2026">${escHtml(content)}</textarea>
-</div>
-<script>
-(function () {
-  var meta = ${metaJson};
-  var editor = document.getElementById('sfEditor');
-  var saveBtn = document.getElementById('sfSave');
-  var statusEl = document.getElementById('sfStatus');
-  var saved = editor.value;
-  async function save(){
-    if (editor.value === saved) { statusEl.textContent = 'No changes.'; return; }
-    saveBtn.disabled = true; statusEl.textContent = 'Saving\u2026';
-    try {
-      var r = await fetch('/api/v1/files/content', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ repo: meta.repo, branch: meta.branch, path: meta.path, content: editor.value }) });
-      var d = await r.json();
-      if (d && d.ok) { saved = editor.value; statusEl.textContent = 'Saved.'; }
-      else statusEl.textContent = (d && d.error) || 'Save failed.';
-    } catch (e) { statusEl.textContent = 'Save failed: ' + e.message; }
-    saveBtn.disabled = false;
-  }
-  saveBtn.addEventListener('click', save);
-  editor.addEventListener('input', function(){ if (editor.value !== saved) statusEl.textContent = 'Unsaved changes.'; });
-  document.addEventListener('keydown', function(e){ if ((e.ctrlKey || e.metaKey) && (e.key === 's' || e.key === 'S')) { e.preventDefault(); save(); } });
-})();
-<\/script>
 ${NAV_WATCHER}
 </body></html>`;
 }
@@ -3229,6 +3401,9 @@ body.show-markers .rh-marker { display: inline-flex; }
 .pc-card.pc-editing .pc-edit { display: none; }
 .pc-card.pc-resolved .rh-badge { text-decoration: line-through; color: var(--cp-text-muted); }
 .pc-text { width: 100%; min-height: 66px; font-family: inherit; font-size: 13px; padding: 8px; border: 1px solid var(--cp-border); border-radius: 6px; background: var(--cp-bg); color: var(--cp-text); resize: vertical; box-sizing: border-box; }
+.pc-reply-actions { display: flex; justify-content: flex-end; gap: 6px; margin-top: 6px; }
+.pc-reply-actions button { font-family: inherit; font-size: 12px; padding: 4px 9px; border: 1px solid var(--cp-border); border-radius: 5px; background: var(--cp-surface); color: var(--cp-text); cursor: pointer; }
+.pc-reply-actions .pc-reply-submit { border-color: var(--cp-accent); background: var(--cp-accent); color: var(--cp-accent-fg); }
 .mermaid-block { margin: 14px 0; text-align: center; overflow-x: auto; }
 .mermaid-block svg { max-width: 100%; height: auto; }
 .mermaid-block.mermaid-error { text-align: left; }
@@ -3258,7 +3433,7 @@ body.show-markers .rh-marker { display: inline-flex; }
       </div>
     </main>
     <aside class="ro-margin ${marginCollapsed}" id="roMargin">
-      <div class="ro-margin-head"><span class="ro-margin-title">${escHtml(paneTitle)}</span><button class="ro-toggle" data-target="roMargin" title="Hide">\u00bb</button></div>
+      <div class="ro-margin-head"><button class="ro-toggle" data-target="roMargin" title="Hide">\u00bb</button><span class="ro-margin-title">${escHtml(paneTitle)}</span></div>
       <button class="ro-rail" data-target="roMargin" title="Show ${escHtml(paneTitle.toLowerCase())}">\u00ab<span class="ro-rail-label">${escHtml(paneTitle)}</span></button>
       <div class="ro-margin-body" id="roMarginBody">${historyHtml}</div>
     </aside>
@@ -3462,7 +3637,7 @@ body.show-markers .rh-marker { display: inline-flex; }
         return fetch('/api/v1/personal-comments' + q).then(function (r) { return r.ok ? r.json() : null; }).then(function (d) {
           if (!d || !d.ok) return;
           // Don't clobber an in-progress draft/edit.
-          if (pcDraft || marginEl.querySelector('.pc-editing')) return;
+          if (pcDraft || marginEl.querySelector('.pc-editing, .pc-replying')) return;
           var body = pcBody(); if (body) body.innerHTML = '';
           (d.comments || []).forEach(function (c) { pcBody().appendChild(pcBuildCard(c, false)); });
           if (!(d.comments || []).length && body) body.innerHTML = '<div class="ro-empty">No personal comments yet.</div>';
@@ -3499,6 +3674,7 @@ body.show-markers .rh-marker { display: inline-flex; }
         if (c.id) card.setAttribute('data-id', c.id);
         card.__data = c;
         var resolveIco = isDraft ? '' : '<button type="button" class="pc-ico pc-resolve" title="' + (c.resolved ? 'Reopen' : 'Resolve') + '">' + (c.resolved ? '\u21ba' : '\u2713') + '</button>';
+        var replyIco = isDraft ? '' : '<button type="button" class="pc-ico pc-reply-btn" title="Reply">\u21a9</button>';
         var resTag = c.resolved ? '<span class="rh-res" title="Resolved">\u2713</span>' : '';
         var driftTag = c.anchorState === 'stale'
           ? '<span class="pc-drift pc-drift-stale" title="The block this note anchored to was edited away or removed \u2014 the position is approximate.">moved?</span>'
@@ -3509,6 +3685,7 @@ body.show-markers .rh-marker { display: inline-flex; }
           '<div class="rh-head"><span class="rh-badge">' + pcEsc(c.author || RO_USER) + ' \u00b7 ' + pcWhen(c.updatedAt || c.createdAt || new Date().toISOString()) + '</span>'
           + '<span class="rh-hline">' + (c.line != null ? ':' + c.line : '') + '</span>' + driftTag + resTag + '<span class="rh-count">1</span>'
           + '<button type="button" class="pc-ico pc-save" title="Save">\ue74e</button>'
+          + replyIco
           + resolveIco
           + '<button type="button" class="pc-ico pc-edit" title="Edit">\u270e</button>'
           + '<button type="button" class="pc-ico pc-del" title="Delete">\u{1f5d1}</button></div>'
@@ -3516,6 +3693,7 @@ body.show-markers .rh-marker { display: inline-flex; }
           + '<div class="rh-full">'
           + '<div class="pc-view"><div class="rh-body">' + (c.html || pcEsc(c.content)) + '</div>' + pcRepliesHtml(c) + '</div>'
           + '<div class="pc-editbox" hidden><textarea class="pc-text" placeholder="Add a comment\u2026 (saves when you click away)"></textarea></div>'
+          + '<div class="pc-replybox" hidden><textarea class="pc-text pc-reply-text" placeholder="Write a reply\u2026"></textarea><div class="pc-reply-actions"><button type="button" class="pc-reply-cancel">Cancel</button><button type="button" class="pc-reply-submit">Reply</button></div></div>'
           + '</div>';
         pcWireCard(card);
         return card;
@@ -3523,7 +3701,17 @@ body.show-markers .rh-marker { display: inline-flex; }
       function pcShowEdit(card, open) {
         card.querySelector('.pc-view').hidden = open;
         card.querySelector('.pc-editbox').hidden = !open;
+        card.querySelector('.pc-replybox').hidden = true;
         card.classList.toggle('pc-editing', open);
+        card.classList.remove('pc-replying');
+        card.classList.toggle('rh-expanded', true);
+      }
+      function pcShowReply(card, open) {
+        card.querySelector('.pc-view').hidden = false;
+        card.querySelector('.pc-editbox').hidden = true;
+        card.querySelector('.pc-replybox').hidden = !open;
+        card.classList.remove('pc-editing');
+        card.classList.toggle('pc-replying', open);
         card.classList.toggle('rh-expanded', true);
       }
       function pcApi(method, url, body) {
@@ -3574,6 +3762,23 @@ body.show-markers .rh-marker { display: inline-flex; }
         card.replaceWith(fresh);
         return fresh;
       }
+      function pcCommitReply(card) {
+        if (card.__replying || !card.isConnected) return;
+        var ta = card.querySelector('.pc-reply-text');
+        var text = ta ? ta.value.trim() : '';
+        if (!text) return;
+        card.__replying = true;
+        var payload = Object.assign({}, pcCoords(), { content: text });
+        pcApi('POST', '/api/v1/personal-comments/' + encodeURIComponent(card.getAttribute('data-id')) + '/reply', payload).then(function (d) {
+          card.__replying = false;
+          if (!d || !d.ok || !d.comment) return;
+          if (typeof d.dataSeq === 'number') pcLastDataSeq = d.dataSeq;
+          var block = card.__block;
+          card = pcReplace(card, d.comment);
+          if (block) card.__block = block;
+          pcRefresh();
+        });
+      }
       function pcRemoveCardDom(card) { card.remove(); pcRefresh(); }
       function pcDelete(card) {
         if (card.classList.contains('pc-draft')) { pcRemoveDraft(); return; }
@@ -3609,6 +3814,9 @@ body.show-markers .rh-marker { display: inline-flex; }
           focus(card, 'block'); pcReportSelected(card.getAttribute('data-id'));
         });
         var editBtn = card.querySelector('.pc-edit'); if (editBtn) editBtn.addEventListener('click', function (e) { e.stopPropagation(); var ta = card.querySelector('.pc-text'); ta.value = (card.__data && card.__data.content) || ''; pcShowEdit(card, true); ta.focus(); });
+        var replyBtn = card.querySelector('.pc-reply-btn'); if (replyBtn) replyBtn.addEventListener('click', function (e) { e.stopPropagation(); pcShowReply(card, true); var replyTa = card.querySelector('.pc-reply-text'); if (replyTa) replyTa.focus(); });
+        var replySubmit = card.querySelector('.pc-reply-submit'); if (replySubmit) replySubmit.addEventListener('click', function (e) { e.stopPropagation(); pcCommitReply(card); });
+        var replyCancel = card.querySelector('.pc-reply-cancel'); if (replyCancel) replyCancel.addEventListener('click', function (e) { e.stopPropagation(); var replyTa = card.querySelector('.pc-reply-text'); if (replyTa) replyTa.value = ''; pcShowReply(card, false); });
         var delBtn = card.querySelector('.pc-del'); if (delBtn) delBtn.addEventListener('click', function (e) { e.stopPropagation(); pcDelete(card); });
         var resBtn = card.querySelector('.pc-resolve'); if (resBtn) resBtn.addEventListener('click', function (e) { e.stopPropagation(); pcToggleResolved(card); });
         var saveBtn = card.querySelector('.pc-save'); if (saveBtn) saveBtn.addEventListener('click', function (e) { e.stopPropagation(); pcCommit(card); });
@@ -3620,6 +3828,8 @@ body.show-markers .rh-marker { display: inline-flex; }
           });
           ta.addEventListener('blur', function () { setTimeout(function () { var ae = document.activeElement; if (ae && card.contains(ae)) return; pcCommit(card); }, 150); });
         }
+        var replyTa = card.querySelector('.pc-reply-text');
+        if (replyTa) replyTa.addEventListener('keydown', function (e) { if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') { e.preventDefault(); pcCommitReply(card); } });
       }
       function pcCreateDraft(block, line) {
         if (pcDraft) { var ta0 = pcDraft.querySelector('.pc-text'); if (ta0 && ta0.value.trim()) { pcCommit(pcDraft); } else { pcRemoveDraft(); } }
@@ -3714,7 +3924,7 @@ ${NAV_WATCHER}
 }
 
 // --- Spec review page (3-column layout) ---
-function buildSpecPage(specHtml, toc, metadata, pr, threads, specPath, sourceMap, changedFiles, currentFileIndex, rawMarkdown, canEdit, baseObjectId, viewedMap = {}, viewedError = null, reviewing = false) {
+function buildSpecPage(specHtml, toc, metadata, pr, threads, specPath, sourceMap, changedFiles, currentFileIndex, rawMarkdown, canEdit, baseObjectId, viewedMap = {}, viewedError = null, reviewing = false, ctx = null) {
   const tocHtml = toc
     .map(
       (t) =>
@@ -3725,6 +3935,7 @@ function buildSpecPage(specHtml, toc, metadata, pr, threads, specPath, sourceMap
   const prTitle = escHtml(metadata.title || pr.title || "Spec Review");
   const author = escHtml(pr.createdBy?.displayName || "Unknown");
   const prId = pr.pullRequestId;
+  const _clipName = (s) => { const n = String(s || "").split("/").pop() || "File"; return n.length > 16 ? n.slice(0, 16) + "\u2026" : n; };
 
   // Split threads: active (status 1=active, 0=unknown) vs resolved (status 2=fixed, 4=closed etc.)
   const allThreads = (threads || []).filter((t) => t.comments?.length > 0);
@@ -3806,7 +4017,7 @@ function buildSpecPage(specHtml, toc, metadata, pr, threads, specPath, sourceMap
     })
     .join("\n");
 
-  // Header actions (view toggle + edit/pane buttons) now live in the top
+  // Header actions (view toggle + edit buttons) now live in the top
   // breadcrumb row's right slot; the old second header row is gone.
   const headerActions = `
     <div class="view-toggle" id="viewToggle" role="group" aria-label="View">
@@ -3815,11 +4026,6 @@ function buildSpecPage(specHtml, toc, metadata, pr, threads, specPath, sourceMap
       <button class="view-btn" data-view="proposed" onclick="tippani.setView('proposed')" title="Proposed version (clean)" disabled>Proposed</button>
     </div>
     <span class="dirty-dot" id="dirtyDot" style="display:none" title="Unsaved changes">●</span>
-    ${canEdit ? `<div class="edit-pane-controls" id="editPaneControls" aria-label="Edit layout controls">
-      <button class="pane-toggle" id="toggleTocPane" onclick="tippani.togglePane('left')" title="Minimize contents pane" aria-label="Minimize contents pane" aria-pressed="false">T</button>
-      <button class="pane-toggle" id="toggleCommentsPane" onclick="tippani.togglePane('right')" title="Minimize comments pane" aria-label="Minimize comments pane" aria-pressed="false">C</button>
-      <button class="pane-toggle" id="focusEditPane" onclick="tippani.toggleFocusEdit()" title="Focus editor" aria-label="Focus editor" aria-pressed="false">F</button>
-    </div>` : ""}
     ${canEdit ? `<button class="edit-toggle save-btn" id="saveBtn" onclick="tippani.save()" style="display:none" disabled>Save</button>` : ""}
     ${canEdit ? `<button class="edit-toggle" id="findBtn" onclick="tippani.search()" style="display:none" title="Find & Replace (Ctrl+F / Ctrl+H)">Find</button>` : ""}
     ${canEdit ? `<button class="edit-toggle" id="editToggle" onclick="tippani.toggle()" title="Toggle edit mode (${"⌘"}/Ctrl+E)">Edit</button>` : ""}
@@ -3851,11 +4057,6 @@ button:focus-visible { outline: 2px solid var(--cp-accent); outline-offset: 2px;
 .header-right { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
 .edit-toggle { font-family: inherit; font-size: 12px; font-weight: 600; padding: 4px 10px; border-radius: 6px; border: 1px solid var(--cp-border); background: var(--cp-bg); color: var(--cp-text); cursor: pointer; transition: background 0.12s, border-color 0.12s; }
 .edit-toggle:hover { background: var(--cp-surface-soft); border-color: var(--cp-border-strong); }
-.edit-pane-controls { display: none; align-items: center; gap: 4px; padding-right: 2px; border-right: 1px solid var(--cp-border); margin-right: 2px; }
-.edit-pane-controls.visible { display: flex; }
-.pane-toggle { width: 30px; height: 30px; display: inline-flex; align-items: center; justify-content: center; padding: 0; border-radius: 6px; border: 1px solid var(--cp-border); background: var(--cp-bg); color: var(--cp-text-muted); cursor: pointer; font-family: inherit; font-size: 12px; font-weight: 700; transition: background 0.12s, border-color 0.12s, color 0.12s; }
-.pane-toggle:hover { background: var(--cp-surface-soft); border-color: var(--cp-border-strong); color: var(--cp-text); }
-.pane-toggle.active { background: var(--cp-accent-soft); border-color: var(--cp-accent); color: var(--cp-accent); }
 /* Edit-mode visual distinction on the center column */
 .main-content.editing { box-shadow: inset 0 0 0 2px var(--cp-accent-soft); background: var(--cp-accent-soft); }
 .main-content.editing #spec-editor { background: var(--cp-bg); }
@@ -3914,10 +4115,6 @@ body.col-resizing * { cursor: col-resize !important; user-select: none !importan
 /* Left sidebar */
 .sidebar-left { width: 260px; flex-shrink: 0; display: flex; flex-direction: column; border-right: 1px solid var(--cp-border); background: var(--cp-bg-elevated); overflow: hidden; }
 .sidebar-left-scroll { flex: 1; overflow-y: auto; padding: 16px; }
-.layout.edit-mode.left-collapsed .sidebar-left { width: 42px !important; align-items: center; }
-.layout.edit-mode.left-collapsed .sidebar-left-scroll { display: none; }
-.layout.edit-mode.left-collapsed .sidebar-left::before { content: 'TOC'; writing-mode: vertical-rl; text-orientation: mixed; margin-top: 16px; font-size: 11px; font-weight: 700; letter-spacing: 0.08em; color: var(--cp-text-muted); }
-.layout.edit-mode.left-collapsed #resizeLeft { display: none; }
 .sidebar-section-label { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; color: var(--cp-text-muted); margin-bottom: 8px; margin-top: 16px; }
 .sidebar-section-label:first-child { margin-top: 0; }
 .sidebar-section-label:first-child { margin-top: 0; }
@@ -3933,6 +4130,7 @@ body.col-resizing * { cursor: col-resize !important; user-select: none !importan
 /* Main content */
 .main-content { flex: 1; min-width: 0; overflow-y: auto; padding: 0 40px 40px; background: var(--cp-bg); scroll-padding-top: 56px; }
 .spec { background: var(--cp-surface); border: 1px solid var(--cp-border); border-radius: 16px; padding: 20px 40px 40px; box-shadow: 0 1px 4px rgba(0,0,0,0.04); max-width: 820px; margin: 0 auto; }
+body.branch-mode .spec { background: transparent; border: none; box-shadow: none; padding: 8px 0 40px; }
 .spec > :first-child { margin-top: 0; }
 .spec h1 { font-size: 28px; font-weight: 700; margin: 1.5rem 0 0.75rem; padding-bottom: 0.5rem; border-bottom: 1px solid var(--cp-border); color: var(--cp-text); }
 .spec h1 a, .spec h2 a, .spec h3 a, .spec h4 a { color: inherit; text-decoration: none; }
@@ -3963,10 +4161,24 @@ body.col-resizing * { cursor: col-resize !important; user-select: none !importan
 
 /* Right sidebar — comments */
 .sidebar-right { width: 320px; flex-shrink: 0; border-left: 1px solid var(--cp-border); background: var(--cp-bg-elevated); overflow-y: auto; padding: 16px; }
-.layout.edit-mode.right-collapsed .sidebar-right { width: 42px !important; padding: 0; display: flex; align-items: center; justify-content: flex-start; overflow: hidden; }
-.layout.edit-mode.right-collapsed .sidebar-right > * { display: none; }
-.layout.edit-mode.right-collapsed .sidebar-right::before { content: 'Comments'; writing-mode: vertical-rl; text-orientation: mixed; margin-top: 16px; font-size: 11px; font-weight: 700; letter-spacing: 0.08em; color: var(--cp-text-muted); }
-.layout.edit-mode.right-collapsed #resizeRight { display: none; }
+/* Shared <<>> collapse rails for PR and staged-file panes in view and edit modes. */
+.tp-pane-head { display: flex; align-items: center; gap: 8px; }
+.tp-pane-head .sidebar-section-label { margin: 0 !important; flex: 1 1 auto; }
+.sidebar-right .tp-pane-head .sidebar-section-label { text-align: right; }
+.tp-collapse-btn { background: none; border: none; cursor: pointer; color: var(--cp-text-muted); font-size: 14px; line-height: 1; padding: 2px 5px; border-radius: 6px; }
+.tp-collapse-btn:hover { color: var(--cp-text); background: var(--cp-bg); }
+.tp-rail { display: none; }
+.tp-rail-label { writing-mode: vertical-rl; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; }
+.layout.bl-collapsed .sidebar-left { width: 38px !important; align-items: center; }
+.layout.bl-collapsed .sidebar-left .sidebar-left-scroll { display: none; }
+.layout.bl-collapsed .sidebar-left .tp-rail { display: flex; flex-direction: column; align-items: center; gap: 10px; padding-top: 12px; width: 38px; background: none; border: none; cursor: pointer; color: var(--cp-text-muted); font-size: 14px; }
+.layout.bl-collapsed .sidebar-left .tp-rail:hover { color: var(--cp-text); }
+.layout.bl-collapsed #resizeLeft { display: none; }
+.layout.br-collapsed .sidebar-right { width: 38px !important; padding: 12px 0 0; align-items: center; overflow: hidden; }
+.layout.br-collapsed .sidebar-right > *:not(.tp-rail) { display: none; }
+.layout.br-collapsed .sidebar-right .tp-rail { display: flex; flex-direction: column; align-items: center; gap: 10px; width: 38px; background: none; border: none; cursor: pointer; color: var(--cp-text-muted); font-size: 14px; }
+.layout.br-collapsed .sidebar-right .tp-rail:hover { color: var(--cp-text); }
+.layout.br-collapsed #resizeRight { display: none; }
 .empty-comments { font-size: 13px; color: var(--cp-text-muted); font-style: italic; padding: 12px 0; }
 .comment-thread { background: var(--cp-surface); border: 1px solid var(--cp-border); border-radius: 16px; padding: 16px; margin-bottom: 10px; font-size: 13px; transition: box-shadow 0.15s; overflow: hidden; min-width: 0; }
 /* Item 9: cap a thread's comment list so a long thread doesn't push the last
@@ -4017,6 +4229,73 @@ details[open] .resolved-summary::before { content: '▾ '; }
 .spec .section-focused { box-shadow: 0 0 0 2px #6d071a; border-radius: 6px; }
 [data-theme="dark"] .comment-thread.thread-focused { box-shadow: 0 0 0 2px #b23a58; border-color: #b23a58 !important; }
 [data-theme="dark"] .spec .section-focused { box-shadow: 0 0 0 2px #b23a58; }
+/* Task 2 (clickstop 2): Personal Comments margin — lifted verbatim from the
+   read-only review experience (buildReadonlySpecPage), scoped to branch mode so
+   the PR threads pane is untouched. Cards float beside their anchor block and the
+   pane scrolls in lockstep with #mainContent. */
+.pc-margin { position: relative; overflow: hidden !important; padding: 0 !important; }
+.pc-margin .tp-pane-head { position: sticky; top: 0; z-index: 6; background: var(--cp-bg-elevated); padding: 12px 14px; border-bottom: 1px solid var(--cp-border); }
+.pc-margin .tp-pane-head .sidebar-section-label { text-align: right; }
+.pc-margin-body { position: relative; }
+.ro-empty { font-size: 12px; color: var(--cp-text-muted); padding: 12px; }
+.rh-thread { position: absolute; left: 10px; right: 10px; padding: 8px 10px; border: 1px solid var(--cp-border); border-radius: 10px; background: var(--cp-surface); cursor: pointer; transition: box-shadow 0.15s, border-color 0.15s; }
+.rh-thread:hover { box-shadow: 0 2px 10px rgba(0,0,0,0.08); }
+.rh-thread.rh-focused { box-shadow: 0 0 0 2px #6d071a; border-color: #6d071a; z-index: 3; }
+[data-theme="dark"] .rh-thread.rh-focused { box-shadow: 0 0 0 2px #b23a58; border-color: #b23a58; }
+.rh-head { display: flex; align-items: center; gap: 6px; }
+.rh-badge { font-size: 10px; font-weight: 700; color: var(--cp-accent); white-space: nowrap; }
+.rh-hline { font-size: 10px; color: var(--cp-text-muted); }
+.rh-count { margin-left: auto; font-size: 10px; font-weight: 700; min-width: 16px; height: 16px; padding: 0 5px; border-radius: 8px; background: var(--cp-surface-soft); color: var(--cp-text-muted); display: inline-flex; align-items: center; justify-content: center; }
+.rh-res { color: #2f8f4e; font-size: 12px; }
+.pc-drift { font-size: 9px; font-weight: 700; text-transform: uppercase; letter-spacing: .03em; padding: 0 4px; border-radius: 6px; margin-left: 4px; cursor: help; }
+.pc-drift-stale { background: rgba(220, 38, 38, 0.12); color: var(--cp-danger); }
+.pc-drift-moved { background: rgba(245, 158, 11, 0.14); color: var(--cp-warning); }
+.rh-summary { font-size: 12px; color: var(--cp-text-muted); margin-top: 5px; line-height: 1.35; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.rh-thread.rh-expanded .rh-summary { display: none; }
+.rh-full { display: none; margin-top: 6px; }
+.rh-thread.rh-expanded .rh-full { display: block; }
+.pc-card .rh-summary { display: none; }
+.pc-card .rh-full { display: block; }
+.pc-card .pc-view .rh-body { max-height: calc(100vh - 160px); overflow-y: auto; }
+.pc-replies { margin-top: 8px; border-top: 1px dashed var(--cp-border); padding-top: 6px; }
+.pc-reply { margin-top: 6px; padding-left: 8px; border-left: 2px solid var(--cp-accent); }
+.pc-reply-meta { font-size: 10px; font-weight: 700; color: var(--cp-accent); margin-bottom: 2px; }
+.pc-reply .rh-body { font-size: 12px; }
+.rh-anchor { font-size: 11px; color: var(--cp-text-muted); margin-bottom: 6px; }
+.rh-comment { margin: 6px 0; }
+.rh-comment + .rh-comment { border-top: 1px dashed var(--cp-border); padding-top: 6px; }
+.rh-cmeta { display: flex; align-items: baseline; gap: 6px; }
+.rh-who { font-size: 12px; font-weight: 600; color: var(--cp-text); }
+.rh-when { font-size: 11px; color: var(--cp-text-muted); }
+.rh-body { font-size: 13px; margin-top: 2px; line-height: 1.45; overflow-wrap: anywhere; }
+.rh-body p { margin: 4px 0; }
+.rh-body code { font-family: var(--cp-mono, ui-monospace, monospace); font-size: 12px; background: var(--cp-surface-2, rgba(127,127,127,0.14)); padding: 1px 4px; border-radius: 4px; }
+.rh-body pre { background: var(--cp-surface-2, rgba(127,127,127,0.14)); padding: 8px 10px; border-radius: 6px; overflow-x: auto; }
+.rh-body pre code { background: none; padding: 0; }
+.rh-body ul, .rh-body ol { margin: 4px 0; padding-left: 18px; }
+.rh-body img { max-width: 100%; }
+.rh-marker { display: none; position: absolute; top: 2px; width: 20px; height: 20px; border-radius: 50%; align-items: center; justify-content: center; font-size: 10px; font-weight: 700; cursor: pointer; z-index: 4; border: none; font-family: inherit; transition: transform 0.12s; }
+.rh-marker:hover { transform: scale(1.15); }
+.rh-marker-active { background: var(--cp-accent); color: var(--cp-accent-fg); }
+.rh-marker-resolved { background: var(--cp-success); color: #fff; }
+body.show-markers .rh-marker { display: inline-flex; }
+.spec .ro-commentable.pc-hover, .spec .ro-commentable.pc-active { box-shadow: 0 0 0 2px var(--cp-accent); border-radius: 6px; }
+[data-theme="dark"] .spec .ro-commentable.pc-hover, [data-theme="dark"] .spec .ro-commentable.pc-active { box-shadow: 0 0 0 2px #b23a58; }
+.pc-add { position: absolute; top: 4px; right: 4px; width: 24px; height: 24px; border-radius: 50%; border: none; background: var(--cp-accent); color: #fff; font-size: 14px; font-weight: 700; line-height: 1; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; z-index: 6; box-shadow: 0 1px 5px rgba(0,0,0,0.25); }
+.pc-add:hover { transform: scale(1.12); }
+.pc-card .rh-count { display: none; }
+.pc-card .pc-ico { flex: 0 0 auto; margin-left: 4px; padding: 2px 4px; font-size: 13px; line-height: 1; border: none; background: none; color: var(--cp-text-muted); cursor: pointer; border-radius: 4px; }
+.pc-card .pc-ico:hover { color: var(--cp-accent); background: var(--cp-surface-soft); }
+.pc-card .pc-del:hover { color: #c0392b; }
+.pc-card .pc-resolve:hover { color: #2f8f4e; }
+.pc-card .pc-save { display: none; font-family: "Segoe MDL2 Assets", "Segoe Fluent Icons"; font-size: 14px; }
+.pc-card.pc-editing .pc-save { display: inline-flex; }
+.pc-card.pc-editing .pc-edit { display: none; }
+.pc-card.pc-resolved .rh-badge { text-decoration: line-through; color: var(--cp-text-muted); }
+.pc-text { width: 100%; min-height: 66px; font-family: inherit; font-size: 13px; padding: 8px; border: 1px solid var(--cp-border); border-radius: 6px; background: var(--cp-bg); color: var(--cp-text); resize: vertical; box-sizing: border-box; }
+.pc-reply-actions { display: flex; justify-content: flex-end; gap: 6px; margin-top: 6px; }
+.pc-reply-actions button { font-family: inherit; font-size: 12px; padding: 4px 9px; border: 1px solid var(--cp-border); border-radius: 5px; background: var(--cp-surface); color: var(--cp-text); cursor: pointer; }
+.pc-reply-actions .pc-reply-submit { border-color: var(--cp-accent); background: var(--cp-accent); color: var(--cp-accent-fg); }
 /* Phase 119: rendered Mermaid diagrams. */
 .mermaid-block { margin: 14px 0; text-align: center; overflow-x: auto; }
 .mermaid-block svg { max-width: 100%; height: auto; }
@@ -4121,26 +4400,27 @@ details[open] .resolved-summary::before { content: '▾ '; }
   if (window.matchMedia('(prefers-color-scheme: dark)').matches) document.documentElement.dataset.theme = 'dark';
 <\/script>
 </head>
-<body style="display:flex;flex-direction:column;">
-${renderCrumbBar([{ label: "Home", href: "/discovery" }, { label: `PR #${prId}`, href: "/" }, { label: (changedFiles[currentFileIndex]?.path || specPath || "").split("/").pop() || "File" }], { right: headerActions })}
+<body class="${ctx ? "branch-mode" : ""}" style="display:flex;flex-direction:column;">
+${ctx ? renderCrumbBar([{ label: "Home", href: "/discovery" }, { label: ctx.backLabel || "Branch", href: ctx.backHref || "/discovery" }, { label: _clipName(specPath) }], { right: headerActions }) : renderCrumbBar([{ label: "Home", href: "/discovery" }, { label: `PR #${prId}`, href: "/" }, { label: _clipName(changedFiles[currentFileIndex]?.path || specPath) }], { right: headerActions })}
 
 <div class="spec-head">
   <h1>${prTitle}</h1>
-  <div class="pr-meta">PR #${prId} by ${author}
+  <div class="pr-meta">${ctx ? `${escHtml(ctx.subtitle || "")} ${ctx.badge || ""}` : `PR #${prId} by ${author}
     <span class="hdr-sep">·</span>
     <span class="comment-count-active">${activeThreads.length} active</span>
-    ${resolvedThreads.length > 0 ? `<span class="comment-count-resolved">· ${resolvedThreads.length} resolved</span>` : ""}
+    ${resolvedThreads.length > 0 ? `<span class="comment-count-resolved">· ${resolvedThreads.length} resolved</span>` : ""}`}
   </div>
 </div>
 
 <div class="layout" id="layout">
   <nav class="sidebar-left" id="sidebarLeft">
     <div class="sidebar-left-scroll">
-      <div class="sidebar-section-label">Contents</div>
+      <div class="tp-pane-head"><span class="sidebar-section-label">Contents</span><button type="button" class="tp-collapse-btn" onclick="tpPaneCollapse('left')" title="Collapse" aria-label="Collapse contents">«</button></div>
       ${tocHtml}
-      <div class="sidebar-section-label" style="margin-top:24px;">Files in PR</div>
-      ${filesNavHtml}
+      ${ctx ? "" : `<div class="sidebar-section-label" style="margin-top:24px;">Files in PR</div>
+      ${filesNavHtml}`}
     </div>
+    <button type="button" class="tp-rail" onclick="tpPaneCollapse('left')" title="Expand contents" aria-label="Expand contents"><span>»</span><span class="tp-rail-label">Contents</span></button>
   </nav>
 
   <div class="resize-handle" id="resizeLeft"></div>
@@ -4180,6 +4460,7 @@ ${renderCrumbBar([{ label: "Home", href: "/discovery" }, { label: `PR #${prId}`,
       <span class="fmt-group">
         <button class="fmt-btn" id="fmtLink" title="Link (⌘K)" aria-label="Insert link" tabindex="-1">🔗</button>
         <button class="fmt-btn" id="fmtImage" title="Image" aria-label="Insert image" tabindex="-1">🖼</button>
+        ${ctx && ctx.pc ? '<button class="fmt-btn" id="fmtComment" title="Add personal comment at cursor" aria-label="Add personal comment at cursor" tabindex="-1">💬</button>' : ""}
       </span>
       <span class="fmt-sep" role="separator"></span>
       <span class="fmt-group">
@@ -4197,10 +4478,13 @@ ${renderCrumbBar([{ label: "Home", href: "/discovery" }, { label: `PR #${prId}`,
 
   <div class="resize-handle" id="resizeRight"></div>
 
-  <aside class="sidebar-right" id="sidebarRight">
-    <div class="sidebar-section-label">Comments <span class="comment-count-badge">${activeThreads.length} active</span></div>
-    <div class="kbd-hint"><kbd>J</kbd>/<kbd>K</kbd> next/prev · <kbd>R</kbd> reply · <kbd>S</kbd> skip · <kbd>⌘↵</kbd> post &amp; next</div>
-    ${threadsHtml}
+  <aside class="sidebar-right${ctx && ctx.pc ? " pc-margin" : ""}" id="sidebarRight">
+    <div class="tp-pane-head"><button type="button" class="tp-collapse-btn" onclick="tpPaneCollapse('right')" title="Collapse" aria-label="Collapse comments">»</button><span class="sidebar-section-label">${ctx && ctx.pc ? "Personal Comments" : `Comments <span class="comment-count-badge">${activeThreads.length} active</span>`}</span></div>
+    ${ctx && ctx.pc
+      ? `<div class="pc-margin-body" id="pcMarginBody"><div class="ro-empty">No personal comments yet.</div></div>`
+      : `<div class="kbd-hint"><kbd>J</kbd>/<kbd>K</kbd> next/prev · <kbd>R</kbd> reply · <kbd>S</kbd> skip · <kbd>⌘↵</kbd> post &amp; next</div>
+    ${threadsHtml}`}
+    <button type="button" class="tp-rail" onclick="tpPaneCollapse('right')" title="Expand comments" aria-label="Expand comments"><span>«</span><span class="tp-rail-label">${ctx && ctx.pc ? "Personal Comments" : "Comments"}</span></button>
   </aside>
 </div>
 
@@ -4268,21 +4552,26 @@ window.tippani = (function () {
   // Mutable baseline: updated after a successful save so the editor is no longer
   // dirty and the next diff is measured against the saved state.
   let RAW_MARKDOWN = ${jsonForScript(rawMarkdown || "")};
+  const CURRENT_MARKDOWN = ${jsonForScript(ctx && ctx.save && typeof ctx.save.currentMarkdown === "string" ? ctx.save.currentMarkdown : (rawMarkdown || ""))};
   const SPEC_FILE_PATH = ${jsonForScript(specPath)};
   const FILENAME = SPEC_FILE_PATH.split("/").pop();
   // Branch tip at load time — sent on save so ADO rejects a stale push (#49).
   const BASE_OBJECT_ID = ${jsonForScript(baseObjectId || null)};
+  // Branch (clickstop 2) staged-edit context. Null for real PRs → PR behavior
+  // is byte-unchanged. When set, Save stages the edit and the reading views
+  // source the original/proposed from the client buffer (stateless preview).
+  const BRANCH = ${jsonForScript(ctx && ctx.save ? ctx.save : null)};
+  window.__BRANCH = BRANCH;
+  // Personal Comments payload (branch mode). Null for PRs → the PR threads pane stays.
+  window.__PC = ${jsonForScript(ctx && ctx.pc ? ctx.pc : null)};
   const ORIG_TITLE = document.title;
   let editor = null;
   let editMode = false;
   let saving = false;
-  const paneState = {
-    left: localStorage.getItem("fsrp-edit-left-collapsed") === "1",
-    right: localStorage.getItem("fsrp-edit-right-collapsed") === "1",
-  };
 
   const el = (id) => document.getElementById(id);
   const isDirty = () => !!editor && editor.getMarkdown() !== RAW_MARKDOWN;
+  const comparisonOriginal = () => (BRANCH && BRANCH.pureStaged ? "" : CURRENT_MARKDOWN);
   const toast = (m, o) => window.showToast && window.showToast(m, o);
   const toastError = (m) => { if (window.showToast) window.showToast(m, { persist: true, error: true }); };
 
@@ -4348,6 +4637,24 @@ window.tippani = (function () {
       const btn = el(id);
       if (btn) btn.addEventListener("click", () => fmtCmd(cmd));
     }
+    const commentBtn = el("fmtComment");
+    if (commentBtn) commentBtn.addEventListener("click", () => {
+      if (!editor || typeof window.__tpPcCreateDraft !== "function") return;
+      const editLine = editor.view.state.doc.lineAt(editor.view.state.selection.main.head).number;
+      let currentLine = null, oldLine = 0, newLine = 0;
+      const diff = window.TippaniEditor.diffLines(comparisonOriginal(), editor.getMarkdown());
+      for (const part of diff) {
+        if (part.type === "ctx") {
+          oldLine++; newLine++;
+          if (newLine === editLine) { currentLine = oldLine; break; }
+        } else if (part.type === "del") oldLine++;
+        else if (part.type === "add") {
+          newLine++;
+          if (newLine === editLine) break;
+        }
+      }
+      window.__tpPcCreateDraft({ editLine, currentLine });
+    });
 
     // Heading dropdown.
     const headBtn = el("fmtHeading");
@@ -4412,60 +4719,6 @@ window.tippani = (function () {
   // Initialize toolbar wiring on first load.
   wireToolbar();
 
-  function updatePaneControls() {
-    const controls = el("editPaneControls");
-    if (controls) controls.classList.toggle("visible", editMode);
-    const toc = el("toggleTocPane");
-    const comments = el("toggleCommentsPane");
-    const focus = el("focusEditPane");
-    if (toc) {
-      toc.classList.toggle("active", paneState.left);
-      toc.setAttribute("aria-pressed", paneState.left ? "true" : "false");
-      toc.title = paneState.left ? "Restore contents pane" : "Minimize contents pane";
-      toc.setAttribute("aria-label", toc.title);
-    }
-    if (comments) {
-      comments.classList.toggle("active", paneState.right);
-      comments.setAttribute("aria-pressed", paneState.right ? "true" : "false");
-      comments.title = paneState.right ? "Restore comments pane" : "Minimize comments pane";
-      comments.setAttribute("aria-label", comments.title);
-    }
-    if (focus) {
-      const focused = paneState.left && paneState.right;
-      focus.classList.toggle("active", focused);
-      focus.setAttribute("aria-pressed", focused ? "true" : "false");
-      focus.title = focused ? "Restore edit panes" : "Focus editor";
-      focus.setAttribute("aria-label", focus.title);
-    }
-  }
-
-  function applyEditPaneState() {
-    const layout = el("layout");
-    if (!layout) return;
-    layout.classList.toggle("edit-mode", editMode);
-    layout.classList.toggle("left-collapsed", paneState.left);
-    layout.classList.toggle("right-collapsed", paneState.right);
-    updatePaneControls();
-  }
-
-  function setPaneCollapsed(side, collapsed, persist = true) {
-    paneState[side] = collapsed;
-    if (persist) localStorage.setItem("fsrp-edit-" + side + "-collapsed", collapsed ? "1" : "0");
-    applyEditPaneState();
-  }
-
-  function togglePane(side) {
-    if (!editMode) return;
-    setPaneCollapsed(side, !paneState[side]);
-  }
-
-  function toggleFocusEdit() {
-    if (!editMode) return;
-    const collapseBoth = !(paneState.left && paneState.right);
-    setPaneCollapsed("left", collapseBoth);
-    setPaneCollapsed("right", collapseBoth);
-  }
-
   function enterEdit() {
     if (!ensureEditor()) return;
     el("spec-content").style.display = "none";
@@ -4482,9 +4735,9 @@ window.tippani = (function () {
     updateSaveState();
     updateDirtyIndicator();
     editMode = true;
-    applyEditPaneState();
     maybeSeedProposal();
     editor.view.focus();
+    if (window.__tpPcRelayout) requestAnimationFrame(window.__tpPcRelayout);
   }
   function exitEdit(silent, targetView) {
     // Unsaved-changes prompt on an explicit mode switch (the View toggle). Edits
@@ -4503,7 +4756,7 @@ window.tippani = (function () {
     if (save) save.style.display = "none";
     { const find = el("findBtn"); if (find) find.style.display = "none"; }
     editMode = false;
-    applyEditPaneState();
+    if (window.__tpPcRelayout) requestAnimationFrame(window.__tpPcRelayout);
     // Land on the requested view, else the current one — but if you have unsaved
     // edits and were on Current (committed), switch to Proposed so your edit
     // stays visible instead of vanishing behind the committed text.
@@ -4579,11 +4832,45 @@ window.tippani = (function () {
     const msgInput = el("commitMsg");
     const defaultMsg = "tippani: update " + FILENAME;
     if (msgInput) msgInput.value = defaultMsg;
-    if (msgRow) msgRow.style.display = "flex";
+    if (msgRow) msgRow.style.display = BRANCH ? "none" : "flex";
     const ok = await showDiff(RAW_MARKDOWN, newMd);
     if (msgRow) msgRow.style.display = "none";
     if (!ok) return;
     const message = (msgInput && msgInput.value.trim()) || defaultMsg;
+
+    // Branch mode: stage the edit into the pending (not-yet-pushed) store and
+    // refresh the top-row staged-changes tag. No ADO commit.
+    if (BRANCH) {
+      saving = true;
+      const bbtn = el("saveBtn");
+      if (bbtn) bbtn.textContent = "Saving\u2026";
+      updateSaveState();
+      try {
+        const r = await fetch(BRANCH.url, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ org: BRANCH.org, project: BRANCH.project, repo: BRANCH.repo, repoName: BRANCH.repoName, branch: BRANCH.branch, path: BRANCH.path, content: newMd, baseObjectId: BRANCH.baseObjectId }),
+        });
+        const data = await r.json();
+        if (data && data.ok) {
+          RAW_MARKDOWN = newMd;
+          BRANCH.hasStagedEdit = !BRANCH.pureStaged;
+          if (typeof setViewButtonsEnabled === 'function') setViewButtonsEnabled();
+          toast("Staged");
+          if (window.__tpStagedRefresh) window.__tpStagedRefresh();
+        } else {
+          toastError("Stage failed: " + ((data && data.error) || "unknown") + " \u2014 your edits are kept");
+        }
+      } catch (e) {
+        toastError("Stage failed: " + e.message + " \u2014 your edits are kept");
+      } finally {
+        saving = false;
+        if (bbtn) bbtn.textContent = "Save";
+        updateSaveState();
+        updateDirtyIndicator();
+      }
+      return;
+    }
 
     saving = true;
     const btn = el("saveBtn");
@@ -4717,8 +5004,6 @@ window.tippani = (function () {
   }
   return {
     toggle,
-    togglePane,
-    toggleFocusEdit,
     enterEdit,
     exitEdit,
     isDirty,
@@ -4728,7 +5013,7 @@ window.tippani = (function () {
     updateDirtyIndicator,
     discardProposal,
     // Original (last-loaded) markdown — the baseline a save diffs against.
-    getOriginal: () => RAW_MARKDOWN,
+    getOriginal: comparisonOriginal,
     // For the write path (#48): current editor buffer (or the original if the
     // editor was never opened).
     getMarkdown: () => (editor ? editor.getMarkdown() : RAW_MARKDOWN),
@@ -4804,13 +5089,17 @@ function findNearestHeading(el) {
 let commentLine = 1;
 const commentableSelector = '.spec p, .spec li, .spec blockquote, .spec table, .spec pre';
 const commentableEls = [];
+// Branch Personal-Comments mode replaces the PR "+" affordance with the read-only
+// review margin's hover/add-dot; keep the block list + source-map alignment either way.
+const PC_MODE = !!window.__PC;
 document.querySelectorAll(commentableSelector).forEach((el, i) => {
-  if (el.closest('.commentable')) return;
+  if (el.closest('.commentable') || el.closest('.ro-commentable')) return;
   const blockIdx = commentableEls.length;
-  el.classList.add('commentable');
   el.style.position = 'relative';
   el.dataset.blockIdx = blockIdx;
   commentableEls.push(el);
+  if (PC_MODE) { el.classList.add('ro-commentable'); return; }
+  el.classList.add('commentable');
   const btn = document.createElement('button');
   btn.className = 'comment-btn';
   btn.textContent = '+';
@@ -4831,6 +5120,431 @@ document.querySelectorAll(commentableSelector).forEach((el, i) => {
   });
   el.prepend(btn);
 });
+
+// ---- Branch Personal Comments margin (task 2) ---------------------------------
+// A faithful port of the read-only review margin (buildReadonlySpecPage): the right
+// pane hosts floating cards anchored beside their block; the pane tracks #mainContent
+// scroll. Reuses commentableEls (index-aligned to SOURCE_MAP) as the anchor blocks.
+if (PC_MODE && window.__PC) (function () {
+  var RO_SOURCE_MAP = SOURCE_MAP || [];
+  var RO_REPO = window.__PC.repo || '';
+  var RO_BRANCH = window.__PC.branch || '';
+  var RO_PATH = window.__PC.path || '';
+  var RO_USER = window.__PC.user || 'You';
+  var RO_PERSONAL_COMMENTS = window.__PC.comments || [];
+  var RO_PC_DATASEQ = Number(window.__PC.dataSeq) || 0;
+  var marginEl = document.getElementById('sidebarRight');
+  var bodyEl = document.getElementById('pcMarginBody');
+  var docEl = document.getElementById('spec-content');
+  var scrollEl = document.getElementById('mainContent');
+  var layoutEl = document.getElementById('layout');
+  if (!marginEl || !bodyEl || !docEl || !scrollEl) return;
+  var blocks = commentableEls;
+  var cards = [];
+  function editing() { return !!(scrollEl && scrollEl.classList.contains('editing')); }
+  function marginCollapsed() { return !!(layoutEl && layoutEl.classList.contains('br-collapsed')); }
+  function revealMargin() { if (layoutEl) layoutEl.classList.remove('br-collapsed'); }
+  function blockForLine(line) {
+    var bestKey = null, bestDist = Infinity;
+    for (var k = 0; k < RO_SOURCE_MAP.length; k++) {
+      var sm = RO_SOURCE_MAP[k];
+      if (!sm) continue;
+      if (line >= sm.startLine && line <= sm.endLine) return blocks[k] || null;
+      var dist = line < sm.startLine ? sm.startLine - line : line - sm.endLine;
+      if (dist < bestDist) { bestDist = dist; bestKey = k; }
+    }
+    return bestKey != null ? (blocks[bestKey] || null) : null;
+  }
+  function cardLine(card) {
+    var value = editing() ? card.getAttribute('data-edit-line') : card.getAttribute('data-line');
+    if (value == null && editing()) value = card.getAttribute('data-line');
+    var line = parseInt(value, 10);
+    return Number.isFinite(line) ? line : null;
+  }
+  function editorTopForLine(line, bodyTop) {
+    var ed = window.tippani && window.tippani.getEditor && window.tippani.getEditor();
+    var view = ed && ed.view;
+    if (!view || !Number.isFinite(line)) return null;
+    try {
+      var n = Math.max(1, Math.min(line, view.state.doc.lines));
+      var pos = view.state.doc.line(n).from;
+      return view.contentDOM.getBoundingClientRect().top + view.lineBlockAt(pos).top - bodyTop;
+    } catch (e) { return null; }
+  }
+  // Viewport-relative layout: position each card beside its anchor block's current
+  // on-screen position; stack downward to avoid overlap. Recomputed on scroll so the
+  // cards track their blocks as #mainContent scrolls (overflow:hidden clips off-screen).
+  function layout() {
+    var bt = bodyEl.getBoundingClientRect().top;
+    var items = cards.filter(function (c) { return !c.hidden; }).map(function (card) {
+      var line = cardLine(card);
+      var b = !editing() && line != null ? blockForLine(line) : null;
+      var editorY = editing() ? editorTopForLine(line, bt) : null;
+      var y = editorY != null ? editorY : b ? (b.getBoundingClientRect().top - bt) : 8;
+      var hline = card.querySelector('.rh-hline'); if (hline) hline.textContent = line != null ? ':' + line : '';
+      return { card: card, y: y };
+    });
+    items.sort(function (a, b) { return a.y - b.y; });
+    var cursor = -1e9;
+    items.forEach(function (it) {
+      var top = Math.max(it.y, cursor);
+      it.card.style.top = top + 'px';
+      cursor = top + it.card.offsetHeight + 8;
+    });
+  }
+  var _raf = 0;
+  function relayout() { if (_raf) return; _raf = requestAnimationFrame(function () { _raf = 0; layout(); }); }
+  function clearFocus() {
+    cards.forEach(function (c) { c.classList.remove('rh-focused', 'rh-expanded'); });
+    docEl.querySelectorAll('.section-focused').forEach(function (e) { e.classList.remove('section-focused'); });
+  }
+  function focus(card, scrollTo) {
+    clearFocus();
+    card.classList.add('rh-focused', 'rh-expanded');
+    var line = cardLine(card);
+    var b = !editing() && line != null ? blockForLine(line) : null;
+    if (b) b.classList.add('section-focused');
+    layout();
+    if (editing() && line != null) { scrollEditorToLine(line); return; }
+    var dest = b || card;
+    if (dest && dest.scrollIntoView) dest.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  }
+  function makeMarkers() {
+    if (editing()) return;
+    cards.forEach(function (card) {
+      var line = parseInt(card.getAttribute('data-line'), 10);
+      if (!Number.isFinite(line)) return;
+      var b = blockForLine(line);
+      if (!b) return;
+      b.style.position = 'relative';
+      var n = b.__mk || 0; b.__mk = n + 1;
+      var mk = document.createElement('button');
+      mk.type = 'button';
+      mk.className = 'rh-marker ' + (card.querySelector('.rh-res') ? 'rh-marker-resolved' : 'rh-marker-active');
+      var cnt = card.querySelector('.rh-count');
+      mk.textContent = cnt ? cnt.textContent : '';
+      mk.title = 'Personal comment \u2014 jump to note';
+      mk.style.right = (-10 - n * 22) + 'px';
+      mk.addEventListener('click', function (e) { e.stopPropagation(); focus(card, 'card'); });
+      b.appendChild(mk);
+    });
+  }
+  var pcBody = function () { return document.getElementById('pcMarginBody'); };
+  var pcDraft = null;
+  var pcShowResolvedState = true;
+  var pcLastDataSeq = RO_PC_DATASEQ;
+  var pcLastCmdSeq = 0;
+  var pcPollInit = false;
+  function pcEsc(s) { return String(s == null ? '' : s).replace(/[&<>"]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; }); }
+  function pcWhen(iso) { try { return new Date(iso).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }); } catch (e) { return ''; } }
+  function pcSnippet(t) {
+    var s = String(t || ''), out = '', prevWs = false;
+    var TAB = String.fromCharCode(9), LF = String.fromCharCode(10), CR = String.fromCharCode(13), FF = String.fromCharCode(12), VT = String.fromCharCode(11);
+    for (var i = 0; i < s.length; i++) {
+      var ch = s.charAt(i);
+      if (ch === ' ' || ch === TAB || ch === LF || ch === CR || ch === FF || ch === VT) { if (!prevWs && out) out += ' '; prevWs = true; }
+      else { out += ch; prevWs = false; }
+    }
+    return pcEsc(out.replace(/^ +| +$/g, '').slice(0, 90));
+  }
+  function pcLineForBlock(b) { var i = blocks.indexOf(b); var sm = RO_SOURCE_MAP[i]; return sm ? sm.startLine : null; }
+  function clearMarkers() { docEl.querySelectorAll('.rh-marker').forEach(function (m) { m.remove(); }); blocks.forEach(function (b) { b.__mk = 0; }); }
+  function pcRefresh() {
+    cards = [].slice.call(marginEl.querySelectorAll('.pc-card'));
+    if (!cards.length) { var b = pcBody(); if (b && !b.querySelector('.ro-empty')) b.innerHTML = '<div class="ro-empty">No personal comments yet.</div>'; }
+    clearMarkers();
+    makeMarkers();
+    cards.forEach(function (card) { if (card.classList.contains('pc-resolved')) card.hidden = !pcShowResolvedState; });
+    if (!pcShowResolvedState) docEl.querySelectorAll('.rh-marker-resolved').forEach(function (m) { m.style.display = 'none'; });
+    document.body.classList.toggle('show-markers', !marginCollapsed() && cards.length > 0);
+    layout(); setTimeout(layout, 60);
+  }
+  function pcApplyShowResolved(show) { pcShowResolvedState = (show !== false); pcRefresh(); }
+  function pcReportSelected(id) { pcApi('POST', '/api/v1/personal-comments/select', { id: id || '' }); }
+  function pcFocusById(id) {
+    for (var i = 0; i < cards.length; i++) {
+      if (cards[i].getAttribute('data-id') === id) {
+        revealMargin();
+        if (cards[i].hidden) { pcShowResolvedState = true; cards[i].hidden = false; }
+        focus(cards[i], 'card');
+        return true;
+      }
+    }
+    return false;
+  }
+  function pcReloadComments() {
+    var q = '?repo=' + encodeURIComponent(RO_REPO) + '&branch=' + encodeURIComponent(RO_BRANCH) + '&path=' + encodeURIComponent(RO_PATH);
+    return fetch('/api/v1/personal-comments' + q).then(function (r) { return r.ok ? r.json() : null; }).then(function (d) {
+      if (!d || !d.ok) return;
+      if (pcDraft || marginEl.querySelector('.pc-editing, .pc-replying')) return;
+      var body = pcBody(); if (body) body.innerHTML = '';
+      (d.comments || []).forEach(function (c) { pcBody().appendChild(pcBuildCard(c, false)); });
+      if (!(d.comments || []).length && body) body.innerHTML = '<div class="ro-empty">No personal comments yet.</div>';
+      pcRefresh();
+    }).catch(function () {});
+  }
+  function pcPoll() {
+    fetch('/api/v1/state').then(function (r) { return r.ok ? r.json() : null; }).then(function (s) {
+      if (!s) return;
+      if (!pcPollInit) { pcPollInit = true; if (typeof s.pcCommandSeq === 'number') pcLastCmdSeq = s.pcCommandSeq; if (typeof s.pcDataSeq === 'number') pcLastDataSeq = Math.max(pcLastDataSeq, s.pcDataSeq); return; }
+      if (typeof s.pcDataSeq === 'number' && s.pcDataSeq > pcLastDataSeq) { pcLastDataSeq = s.pcDataSeq; pcReloadComments(); }
+      if (typeof s.pcCommandSeq === 'number' && s.pcCommandSeq > pcLastCmdSeq) {
+        pcLastCmdSeq = s.pcCommandSeq;
+        var cmd = s.pcCommand;
+        if (cmd && cmd.type === 'focus' && cmd.id) { if (!pcFocusById(cmd.id)) { pcReloadComments().then(function () { pcFocusById(cmd.id); }); } }
+        else if (cmd && cmd.type === 'showResolved') pcApplyShowResolved(cmd.show !== false);
+        else if (cmd && cmd.type === 'reload') location.reload();
+      }
+    }).catch(function () {});
+  }
+  function pcRepliesHtml(c) {
+    var reps = (c && c.replies) || [];
+    if (!reps.length) return '';
+    var items = reps.map(function (r) {
+      return '<div class="pc-reply"><div class="pc-reply-meta">' + pcEsc(r.author || '') + ' \u00b7 ' + pcWhen(r.createdAt || new Date().toISOString()) + '</div>'
+        + '<div class="rh-body">' + (r.html || pcEsc(r.content || '')) + '</div></div>';
+    }).join('');
+    return '<div class="pc-replies">' + items + '</div>';
+  }
+  function pcBuildCard(c, isDraft) {
+    var card = document.createElement('div');
+    card.className = 'rh-thread pc-card' + (isDraft ? ' pc-draft' : '') + (c.resolved ? ' pc-resolved' : '') + (c.anchorState === 'stale' ? ' pc-stale' : c.anchorState === 'moved' ? ' pc-moved' : '');
+    if (c.line != null) card.setAttribute('data-line', c.line);
+    if (c.editLine != null) card.setAttribute('data-edit-line', c.editLine);
+    if (c.id) card.setAttribute('data-id', c.id);
+    card.__data = c;
+    var resolveIco = isDraft ? '' : '<button type="button" class="pc-ico pc-resolve" title="' + (c.resolved ? 'Reopen' : 'Resolve') + '">' + (c.resolved ? '\u21ba' : '\u2713') + '</button>';
+    var replyIco = isDraft ? '' : '<button type="button" class="pc-ico pc-reply-btn" title="Reply">\u21a9</button>';
+    var resTag = c.resolved ? '<span class="rh-res" title="Resolved">\u2713</span>' : '';
+    var driftTag = c.anchorState === 'stale'
+      ? '<span class="pc-drift pc-drift-stale" title="The block this note anchored to was edited away or removed \u2014 the position is approximate.">moved?</span>'
+      : c.anchorState === 'moved'
+      ? '<span class="pc-drift pc-drift-moved" title="The block text changed; tracked to its heading section.">tracked</span>'
+      : '';
+    card.innerHTML =
+      '<div class="rh-head"><span class="rh-badge">' + pcEsc(c.author || RO_USER) + ' \u00b7 ' + pcWhen(c.updatedAt || c.createdAt || new Date().toISOString()) + '</span>'
+      + '<span class="rh-hline">' + (c.line != null ? ':' + c.line : '') + '</span>' + driftTag + resTag + '<span class="rh-count">1</span>'
+      + '<button type="button" class="pc-ico pc-save" title="Save">\ue74e</button>'
+      + replyIco
+      + resolveIco
+      + '<button type="button" class="pc-ico pc-edit" title="Edit">\u270e</button>'
+      + '<button type="button" class="pc-ico pc-del" title="Delete">\u{1f5d1}</button></div>'
+      + '<div class="rh-summary"><span class="rh-who"></span> ' + pcSnippet(c.content) + '</div>'
+      + '<div class="rh-full">'
+      + '<div class="pc-view"><div class="rh-body">' + (c.html || pcEsc(c.content)) + '</div>' + pcRepliesHtml(c) + '</div>'
+      + '<div class="pc-editbox" hidden><textarea class="pc-text" placeholder="Add a comment\u2026 (saves when you click away)"></textarea></div>'
+      + '<div class="pc-replybox" hidden><textarea class="pc-text pc-reply-text" placeholder="Write a reply\u2026"></textarea><div class="pc-reply-actions"><button type="button" class="pc-reply-cancel">Cancel</button><button type="button" class="pc-reply-submit">Reply</button></div></div>'
+      + '</div>';
+    pcWireCard(card);
+    return card;
+  }
+  function pcShowEdit(card, open) {
+    card.querySelector('.pc-view').hidden = open;
+    card.querySelector('.pc-editbox').hidden = !open;
+    card.querySelector('.pc-replybox').hidden = true;
+    card.classList.toggle('pc-editing', open);
+    card.classList.remove('pc-replying');
+    card.classList.toggle('rh-expanded', true);
+  }
+  function pcShowReply(card, open) {
+    card.querySelector('.pc-view').hidden = false;
+    card.querySelector('.pc-editbox').hidden = true;
+    card.querySelector('.pc-replybox').hidden = !open;
+    card.classList.remove('pc-editing');
+    card.classList.toggle('pc-replying', open);
+    card.classList.toggle('rh-expanded', true);
+  }
+  function pcApi(method, url, body) {
+    return fetch(url, { method: method, headers: { 'Content-Type': 'application/json' }, body: body ? JSON.stringify(body) : undefined }).then(function (r) { return r.json().catch(function () { return {}; }); });
+  }
+  function pcCoords() { return { repo: RO_REPO, branch: RO_BRANCH, path: RO_PATH }; }
+  function pcRemoveDraft() {
+    if (!pcDraft) return;
+    var b = pcDraft.__block; if (b) b.classList.remove('pc-active');
+    pcDraft.remove(); pcDraft = null; pcRefresh();
+  }
+  function pcCommit(card) {
+    if (card.__saving || !card.isConnected) return;
+    var ta = card.querySelector('.pc-text'); if (!ta) return;
+    var text = ta.value.trim();
+    var isDraft = card.classList.contains('pc-draft');
+    var orig = (card.__data && card.__data.content) || '';
+    if (isDraft) {
+      if (!text) { pcRemoveDraft(); return; }
+      card.__saving = true;
+      var payload = Object.assign({}, pcCoords(), { line: card.__data.line, editLine: card.__data.editLine, content: text });
+      pcApi('POST', '/api/v1/personal-comments', payload).then(function (d) {
+        card.__saving = false;
+        if (!d || !d.ok || !d.comment) { return; }
+        if (typeof d.dataSeq === 'number') pcLastDataSeq = d.dataSeq;
+        card.classList.remove('pc-draft');
+        var b = card.__block; if (b) b.classList.remove('pc-active');
+        var nb = card.__block; card = pcReplace(card, d.comment); if (nb) card.__block = nb;
+        pcDraft = null; pcRefresh();
+      });
+    } else {
+      if (text === orig) { pcShowEdit(card, false); return; }
+      card.__saving = true;
+      var pl = Object.assign({}, pcCoords(), { content: text });
+      pcApi('PUT', '/api/v1/personal-comments/' + encodeURIComponent(card.getAttribute('data-id')), pl).then(function (d) {
+        card.__saving = false;
+        if (!d || !d.ok) return;
+        if (typeof d.dataSeq === 'number') pcLastDataSeq = d.dataSeq;
+        if (d.deleted) { pcRemoveCardDom(card); return; }
+        pcReplace(card, d.comment); pcRefresh();
+      });
+    }
+  }
+  function pcReplace(card, c) { var fresh = pcBuildCard(c, false); card.replaceWith(fresh); return fresh; }
+  function pcCommitReply(card) {
+    if (card.__replying || !card.isConnected) return;
+    var ta = card.querySelector('.pc-reply-text');
+    var text = ta ? ta.value.trim() : '';
+    if (!text) return;
+    card.__replying = true;
+    var payload = Object.assign({}, pcCoords(), { content: text });
+    pcApi('POST', '/api/v1/personal-comments/' + encodeURIComponent(card.getAttribute('data-id')) + '/reply', payload).then(function (d) {
+      card.__replying = false;
+      if (!d || !d.ok || !d.comment) return;
+      if (typeof d.dataSeq === 'number') pcLastDataSeq = d.dataSeq;
+      var block = card.__block;
+      card = pcReplace(card, d.comment);
+      if (block) card.__block = block;
+      pcRefresh();
+    });
+  }
+  function pcRemoveCardDom(card) { card.remove(); pcRefresh(); }
+  function pcDelete(card) {
+    if (card.classList.contains('pc-draft')) { pcRemoveDraft(); return; }
+    var id = card.getAttribute('data-id');
+    pcApi('DELETE', '/api/v1/personal-comments/' + encodeURIComponent(id), pcCoords()).then(function (d) { if (d && typeof d.dataSeq === 'number') pcLastDataSeq = d.dataSeq; pcRemoveCardDom(card); });
+  }
+  function pcToggleResolved(card) {
+    if (card.classList.contains('pc-draft') || card.__resolving) return;
+    var id = card.getAttribute('data-id'); if (!id) return;
+    var next = !(card.__data && card.__data.resolved);
+    card.__resolving = true;
+    pcApi('POST', '/api/v1/personal-comments/' + encodeURIComponent(id) + '/resolve', Object.assign({}, pcCoords(), { resolved: next })).then(function (d) {
+      card.__resolving = false;
+      if (!d || !d.ok || !d.comment) return;
+      if (typeof d.dataSeq === 'number') pcLastDataSeq = d.dataSeq;
+      card.__data = d.comment;
+      card.classList.toggle('pc-resolved', !!d.comment.resolved);
+      var resBtn = card.querySelector('.pc-resolve');
+      if (resBtn) { resBtn.textContent = d.comment.resolved ? '\u21ba' : '\u2713'; resBtn.title = d.comment.resolved ? 'Reopen' : 'Resolve'; }
+      var head = card.querySelector('.rh-head');
+      var res = head.querySelector('.rh-res');
+      if (d.comment.resolved && !res) { var span = document.createElement('span'); span.className = 'rh-res'; span.title = 'Resolved'; span.textContent = '\u2713'; head.insertBefore(span, head.querySelector('.rh-count')); }
+      else if (!d.comment.resolved && res) { res.remove(); }
+      pcRefresh();
+    });
+  }
+  function pcWireCard(card) {
+    card.addEventListener('click', function (e) {
+      if (e.target.closest && e.target.closest('button, textarea, a')) return;
+      if (card.classList.contains('rh-expanded')) { clearFocus(); layout(); pcReportSelected(null); return; }
+      focus(card, 'block'); pcReportSelected(card.getAttribute('data-id'));
+    });
+    var editBtn = card.querySelector('.pc-edit'); if (editBtn) editBtn.addEventListener('click', function (e) { e.stopPropagation(); var ta = card.querySelector('.pc-text'); ta.value = (card.__data && card.__data.content) || ''; pcShowEdit(card, true); ta.focus(); });
+    var replyBtn = card.querySelector('.pc-reply-btn'); if (replyBtn) replyBtn.addEventListener('click', function (e) { e.stopPropagation(); pcShowReply(card, true); var replyTa = card.querySelector('.pc-reply-text'); if (replyTa) replyTa.focus(); });
+    var replySubmit = card.querySelector('.pc-reply-submit'); if (replySubmit) replySubmit.addEventListener('click', function (e) { e.stopPropagation(); pcCommitReply(card); });
+    var replyCancel = card.querySelector('.pc-reply-cancel'); if (replyCancel) replyCancel.addEventListener('click', function (e) { e.stopPropagation(); var replyTa = card.querySelector('.pc-reply-text'); if (replyTa) replyTa.value = ''; pcShowReply(card, false); });
+    var delBtn = card.querySelector('.pc-del'); if (delBtn) delBtn.addEventListener('click', function (e) { e.stopPropagation(); pcDelete(card); });
+    var resBtn = card.querySelector('.pc-resolve'); if (resBtn) resBtn.addEventListener('click', function (e) { e.stopPropagation(); pcToggleResolved(card); });
+    var saveBtn = card.querySelector('.pc-save'); if (saveBtn) saveBtn.addEventListener('click', function (e) { e.stopPropagation(); pcCommit(card); });
+    var ta = card.querySelector('.pc-text');
+    if (ta) {
+      ta.addEventListener('keydown', function (e) { if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') { e.preventDefault(); ta.blur(); } });
+      ta.addEventListener('blur', function () { setTimeout(function () { var ae = document.activeElement; if (ae && card.contains(ae)) return; pcCommit(card); }, 150); });
+    }
+    var replyTa = card.querySelector('.pc-reply-text');
+    if (replyTa) replyTa.addEventListener('keydown', function (e) { if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') { e.preventDefault(); pcCommitReply(card); } });
+  }
+  function pcCreateDraft(block, line, editLine) {
+    if (pcDraft) { var ta0 = pcDraft.querySelector('.pc-text'); if (ta0 && ta0.value.trim()) { pcCommit(pcDraft); } else { pcRemoveDraft(); } }
+    revealMargin();
+    var empty = pcBody().querySelector('.ro-empty'); if (empty) empty.remove();
+    var c = { id: '', line: line, editLine: editLine, author: RO_USER, content: '', createdAt: new Date().toISOString() };
+    var card = pcBuildCard(c, true);
+    card.__block = block;
+    pcBody().appendChild(card);
+    pcDraft = card;
+    if (block) block.classList.add('pc-active');
+    pcShowEdit(card, true);
+    pcRefresh();
+    var ta = card.querySelector('.pc-text'); if (ta) ta.focus();
+    focus(card, 'card');
+  }
+  function pcAddDot(block) {
+    if (block.querySelector('.pc-add')) return;
+    block.style.position = 'relative';
+    var dot = document.createElement('button');
+    dot.type = 'button'; dot.className = 'pc-add'; dot.textContent = '\uff0b';
+    dot.title = 'Add personal comment';
+    dot.addEventListener('click', function (e) { e.stopPropagation(); pcCreateDraft(block, pcLineForBlock(block)); });
+    block.appendChild(dot);
+  }
+  function pcWireHover() {
+    blocks.forEach(function (b) {
+      b.addEventListener('mouseenter', function () { b.classList.add('pc-hover'); pcAddDot(b); });
+      b.addEventListener('mouseleave', function () {
+        b.classList.remove('pc-hover');
+        var dot = b.querySelector('.pc-add'); if (dot) dot.remove();
+        if (pcDraft && pcDraft.__block === b) {
+          var ta = pcDraft.querySelector('.pc-text');
+          if (ta && !ta.value.trim() && document.activeElement !== ta) pcRemoveDraft();
+        }
+      });
+    });
+  }
+  function pcCardForBlock(block) {
+    var line = pcLineForBlock(block);
+    if (line == null) return null;
+    for (var i = 0; i < cards.length; i++) { if (parseInt(cards[i].getAttribute('data-line'), 10) === line) return cards[i]; }
+    return null;
+  }
+  function pcWireContentClicks() {
+    docEl.addEventListener('click', function (e) {
+      if (e.target.closest('.pc-add, .rh-marker, a, button, textarea, input')) return;
+      var focusedBlock = docEl.querySelector('.section-focused');
+      var block = e.target.closest('.ro-commentable');
+      if (block && block === focusedBlock) return;
+      var card = block ? pcCardForBlock(block) : null;
+      if (card) { focus(card, 'card'); pcReportSelected(card.getAttribute('data-id')); }
+      else if (focusedBlock) { clearFocus(); layout(); pcReportSelected(null); }
+    });
+  }
+  window.__tpPcCreateDraft = function (anchor) {
+    var editLine = Number(anchor && anchor.editLine);
+    var currentLine = anchor && anchor.currentLine != null ? Number(anchor.currentLine) : null;
+    var block = Number.isFinite(currentLine) ? blockForLine(currentLine) : null;
+    pcCreateDraft(block, Number.isFinite(currentLine) ? currentLine : null, Number.isFinite(editLine) ? editLine : null);
+  };
+  window.__tpPcRelayout = function () { pcRefresh(); };
+  function pcLoad() {
+    var body = pcBody();
+    if (body) body.innerHTML = '';
+    (RO_PERSONAL_COMMENTS || []).forEach(function (c) { pcBody().appendChild(pcBuildCard(c, false)); });
+    if (!(RO_PERSONAL_COMMENTS || []).length && body) body.innerHTML = '<div class="ro-empty">No personal comments yet.</div>';
+    pcWireHover();
+    pcWireContentClicks();
+    pcRefresh();
+    setInterval(pcPoll, 1200); pcPoll();
+  }
+  // Track #mainContent scroll so cards stay beside their anchor blocks; relayout on
+  // resize and whenever the margin is revealed (cards have no height while collapsed).
+  scrollEl.addEventListener('scroll', relayout, { passive: true });
+  var rt; window.addEventListener('resize', function () { clearTimeout(rt); rt = setTimeout(layout, 150); });
+  if (layoutEl) {
+    var mo = new MutationObserver(function () {
+      var shown = !marginCollapsed();
+      document.body.classList.toggle('show-markers', shown && cards.length > 0);
+      if (shown) { layout(); setTimeout(layout, 60); }
+    });
+    mo.observe(layoutEl, { attributes: true, attributeFilter: ['class'] });
+  }
+  pcLoad();
+})();
 
 // Place inline comment bubbles on content blocks that have threads
 THREADS_DATA.forEach(td => {
@@ -4899,7 +5613,8 @@ async function applyDiffOverlay(opts) {
   try {
     let data;
     if (personal) {
-      const r = await fetch('/api/v1/specs/' + CURRENT_FILE_INDEX + '/preview', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ original: window.tippani.getOriginal(), proposed: window.tippani.getMarkdown() }) });
+      const previewUrl = window.__BRANCH ? '/api/v1/spec-preview' : '/api/v1/specs/' + CURRENT_FILE_INDEX + '/preview';
+      const r = await fetch(previewUrl, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ original: window.tippani.getOriginal(), proposed: window.tippani.getMarkdown() }) });
       if (!r.ok) return;
       data = await r.json();
     } else {
@@ -5040,7 +5755,7 @@ async function applyView(view) {
   const content = document.getElementById('spec-content');
   const current = document.getElementById('spec-current');
   const editing = !!(document.getElementById('mainContent') && document.getElementById('mainContent').classList.contains('editing'));
-  const personal = !!(window.tippani && window.tippani.isDirty && window.tippani.isDirty());
+  const personal = !!(window.tippani && ((window.tippani.isDirty && window.tippani.isDirty()) || (window.__BRANCH && ((window.__BRANCH.pureStaged && window.tippani.getMarkdown && window.tippani.getMarkdown()) || window.__BRANCH.hasStagedEdit))));
   // Always clear any prior diff overlay first — switching to Proposed/Current
   // must not leave the Diff boxes lingering. The 'diff' branch re-applies it.
   clearDiffOverlay();
@@ -5048,7 +5763,8 @@ async function applyView(view) {
     try {
       let d = null;
       if (personal) {
-        const r = await fetch('/api/v1/specs/' + CURRENT_FILE_INDEX + '/preview', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ original: window.tippani.getOriginal(), proposed: window.tippani.getMarkdown() }) });
+        const previewUrl = window.__BRANCH ? '/api/v1/spec-preview' : '/api/v1/specs/' + CURRENT_FILE_INDEX + '/preview';
+        const r = await fetch(previewUrl, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ original: window.tippani.getOriginal(), proposed: window.tippani.getMarkdown() }) });
         if (r.ok) d = await r.json();
       } else {
         const r = await fetch('/api/v1/specs/' + CURRENT_FILE_INDEX + '/render?draft=1');
@@ -5080,11 +5796,12 @@ function highlightSectionForThread(threadId) {
   const dest = target && (target._diffDest || target);
   if (dest && dest.classList) dest.classList.add('section-focused');
 }
-// Enable Diff/Proposed only when a staged proposal exists for this file (else
-// they're greyed). Current is always available.
+// Enable Diff/Proposed when a staged proposal, unsaved edit, or saved new staged
+// file provides content to compare. Current is always available.
 function setViewButtonsEnabled(hasDraft) {
   if (typeof hasDraft === 'boolean') _hasAgentDraft = hasDraft;
-  const avail = _hasAgentDraft || !!(window.tippani && window.tippani.isDirty && window.tippani.isDirty());
+  const branchProposal = !!(window.__BRANCH && (window.__BRANCH.hasStagedEdit || (window.__BRANCH.pureStaged && window.tippani && window.tippani.getMarkdown && window.tippani.getMarkdown())));
+  const avail = _hasAgentDraft || branchProposal || !!(window.tippani && window.tippani.isDirty && window.tippani.isDirty());
   document.querySelectorAll('.view-btn').forEach((b) => {
     if (b.dataset.view === 'diff' || b.dataset.view === 'proposed') {
       b.disabled = !avail;
@@ -5095,11 +5812,33 @@ function setViewButtonsEnabled(hasDraft) {
 }
 applyView('current');
 (async () => {
-  try {
-    const r = await fetch('/api/v1/specs/' + CURRENT_FILE_INDEX + '/draft');
-    if (r.ok) { const d = await r.json(); setViewButtonsEnabled(!!(d && d.draft && d.draft.content)); }
-  } catch {}
+  // Branch mode has no PR draft store — skip the probe; dirtiness drives Diff/Proposed.
+  if (!window.__BRANCH) {
+    try {
+      const r = await fetch('/api/v1/specs/' + CURRENT_FILE_INDEX + '/draft');
+      if (r.ok) { const d = await r.json(); setViewButtonsEnabled(!!(d && d.draft && d.draft.content)); }
+    } catch {}
+  }
   setViewButtonsEnabled();
+})();
+
+// Shared <<>> collapse for the TOC and comments panes in PR and staged views.
+function tpPaneCollapse(side) {
+  const layout = document.getElementById('layout');
+  if (!layout) return;
+  const cls = side === 'left' ? 'bl-collapsed' : 'br-collapsed';
+  const on = layout.classList.toggle(cls);
+  try { localStorage.setItem('tp-pane-' + side + '-collapsed', on ? '1' : '0'); } catch {}
+}
+(function () {
+  const layout = document.getElementById('layout');
+  if (!layout) return;
+  try {
+    const left = localStorage.getItem('tp-pane-left-collapsed') ?? localStorage.getItem('tp-branch-left-collapsed');
+    const right = localStorage.getItem('tp-pane-right-collapsed') ?? localStorage.getItem('tp-branch-right-collapsed');
+    if (left === '1') layout.classList.add('bl-collapsed');
+    if (right === '1') layout.classList.add('br-collapsed');
+  } catch {}
 })();
 
 // open_file deep-link: /file/<idx>?line=N scrolls to that line once the view settles.
@@ -5903,30 +6642,50 @@ async function mcpCreateBranch({ org, project, repo, branch, base } = {}) {
 // the intent (name + base) without touching ADO; pushing creates them all via
 // mcpCreateBranch and clears the staged set.
 let _stagedBranches = [];
-function stageBranch({ project, repo, repoName, branch, base } = {}) {
+function stageBranch({ org, project, repo, repoName, branch, base } = {}) {
   const name = String(branch || "").trim();
   if (!name) return { ok: false, error: "branch name is required" };
   if (!repo) return { ok: false, error: "repo is required" };
   if (_stagedBranches.some((s) => s.repo === repo && s.branch === name)) return { ok: false, error: "that branch is already staged" };
-  _stagedBranches.push({ project: project || ADO_PROJECT, repo, repoName: repoName || "", branch: name, base: String(base || "").trim() });
+  _stagedBranches.push({ org, project, repo, repoName: repoName || "", branch: name, base: String(base || "").trim() });
   return { ok: true, count: _stagedBranches.length, branches: _stagedBranches };
 }
 let _stagedFiles = [];
-function stagedTotal() { return _stagedBranches.length + _stagedFiles.length + _stagedFolders.length; }
+let _stagedPrs = [];
+let _stagedPrPublishes = [];
+function stagedTotal() { return _stagedBranches.length + _stagedFiles.length + _stagedFolders.length + _stagedPrs.length + _stagedPrPublishes.length; }
 function listStagedBranches() {
-  return { ok: true, count: stagedTotal(), branches: _stagedBranches, files: _stagedFiles, folders: _stagedFolders };
+  return { ok: true, count: stagedTotal(), branches: _stagedBranches, files: _stagedFiles, folders: _stagedFolders, prs: _stagedPrs, prPublishes: _stagedPrPublishes };
 }
-function stageFile({ project, repo, repoName, branch, title, folder, path } = {}) {
+function stageSpecPr({ org, project, repo, repoName, title, sourceBranch, targetBranch, description, isDraft, workItemTitle, workItemType } = {}) {
+  const branch = String(sourceBranch || "").replace(/^refs\/heads\//, "").trim();
+  if (!org || !project || !repo || !title || !branch || !targetBranch) return { ok: false, error: "org, project, repo, title, sourceBranch and targetBranch are required" };
+  if (workItemTitle && !workItemType) return { ok: false, error: "workItemType is required when workItemTitle is set" };
+  if (_stagedPrs.some((pr) => pr.repo === repo && pr.branch === branch)) return { ok: false, error: "that branch already has a staged PR intent" };
+  _stagedPrs.push({ org, project, repo, repoName: repoName || "", branch, title, sourceBranch: branch, targetBranch, description, isDraft: isDraft !== false, workItemTitle, workItemType });
+  return { ok: true, count: stagedTotal(), prs: _stagedPrs };
+}
+function stageFile({ org, project, repo, repoName, branch, title, folder, path } = {}) {
   const t = String(title || "").trim();
   const fdr = _normFolder(folder);
-  const filePath = String(path || "").trim() || (t ? (fdr ? fdr + "/" : "") + t + ".md" : "");
+  let name = t;
+  if (name && /\.[^./\\]+$/.test(name) && !/\.md$/i.test(name)) return { ok: false, error: "only .md files can be added to a branch" };
+  if (name && !/\.md$/i.test(name)) name += ".md";
+  const filePath = String(path || "").trim() || (name ? (fdr ? fdr + "/" : "") + name : "");
   if (!filePath) return { ok: false, error: "title is required" };
+  if (!/\.md$/i.test(filePath)) return { ok: false, error: "only .md files can be added to a branch" };
   if (!repo || !branch) return { ok: false, error: "repo and branch are required" };
   if (_stagedFiles.some((f) => f.repo === repo && f.branch === branch && f.path === filePath)) return { ok: false, error: "that file is already staged" };
-  _stagedFiles.push({ project: project || ADO_PROJECT, repo, repoName: repoName || "", branch, title: t || filePath, path: filePath, content: "" });
+  _stagedFiles.push({ org, project, repo, repoName: repoName || "", branch, title: name || filePath, path: filePath, content: "", personalComments: [] });
   return { ok: true, count: stagedTotal(), files: _stagedFiles.filter((f) => f.repo === repo && f.branch === branch) };
 }
 function unstageFile({ repo, branch, path } = {}) {
+  const removing = _stagedFiles.filter((f) => !f.existing && f.repo === repo && f.branch === branch && f.path === path);
+  try {
+    for (const file of removing) pcStoreDelete(PERSONAL_COMMENTS_DIR, file.repo, file.branch, file.path);
+  } catch (e) {
+    return { ok: false, error: `could not remove personal comments: ${e.code || e.message}` };
+  }
   const before = _stagedFiles.length;
   _stagedFiles = _stagedFiles.filter((f) => !(f.repo === repo && f.branch === branch && f.path === path));
   return { ok: true, removed: before - _stagedFiles.length, count: stagedTotal() };
@@ -5937,23 +6696,141 @@ function updateStagedFileContent({ repo, branch, path, content } = {}) {
   f.content = String(content == null ? "" : content);
   return { ok: true };
 }
+// Staged edit to an EXISTING (already-pushed) ADO file: upsert an entry flagged
+// existing:true so it counts as a staged change and diffs against the original,
+// without a direct commit. Pushed later with the rest.
+function saveExistingEdit({ org, project, repo, repoName, branch, path, content, baseObjectId } = {}) {
+  if (!repo || !branch || !path) return { ok: false, error: "repo, branch and path are required" };
+  const body = String(content == null ? "" : content);
+  const f = _stagedFiles.find((x) => x.repo === repo && x.branch === branch && x.path === path);
+  if (f) { f.content = body; f.existing = true; f.baseObjectId = f.baseObjectId || baseObjectId || null; return { ok: true, count: stagedTotal(), files: _stagedFiles.filter((x) => x.repo === repo && x.branch === branch) }; }
+  const title = String(path).split("/").pop().replace(/\.md$/i, "");
+  _stagedFiles.push({ org, project, repo, repoName: repoName || "", branch, title, path, content: body, existing: true, baseObjectId: baseObjectId || null });
+  return { ok: true, count: stagedTotal(), files: _stagedFiles.filter((x) => x.repo === repo && x.branch === branch) };
+}
 async function pushStagedBranches() {
   const results = [];
-  const remaining = [];
-  for (const s of _stagedBranches) {
-    let r;
-    try { r = await mcpCreateBranch({ project: s.project, repo: s.repo, branch: s.branch, base: s.base || undefined }); }
-    catch (e) { r = { ok: false, error: e?.message || String(e) }; }
-    if (r && r.ok) results.push({ branch: s.branch, ok: true, created: r.created });
-    else { remaining.push(s); results.push({ branch: s.branch, ok: false, error: (r && r.error) || "failed" }); }
+  const groups = planStagedPushes({ branches: _stagedBranches, files: _stagedFiles, folders: _stagedFolders, prs: _stagedPrs });
+  const sameTarget = (item, group) =>
+    String(item.org || "").replace(/\/+$/, "") === group.org &&
+    item.project === group.project && item.repo === group.repo &&
+    String(item.branch || "").replace(/^refs\/heads\//, "") === group.branch;
+  for (const group of groups) {
+    if (group.errors.length) {
+      results.push({ project: group.project, repo: group.repo, branch: group.branch, ok: false, error: group.errors.join("; ") });
+      continue;
+    }
+    let created = false;
+    if (group.stagedBranch) {
+      let branchResult;
+      try {
+        branchResult = await mcpCreateBranch({ org: group.org, project: group.project, repo: group.repo, branch: group.branch, base: group.stagedBranch.base || undefined });
+      } catch (e) {
+        branchResult = { ok: false, error: e?.message || String(e) };
+      }
+      if (!branchResult || !branchResult.ok) {
+        results.push({ project: group.project, repo: group.repo, branch: group.branch, ok: false, error: branchResult?.error || "branch creation failed" });
+        continue;
+      }
+      created = !!branchResult.created;
+    }
+    let target;
+    try { target = await resolveTarget(group); }
+    catch (e) {
+      results.push({ project: group.project, repo: group.repo, branch: group.branch, ok: false, error: e.message });
+      continue;
+    }
+    const branchRef = normalizeBranchRef(group.branch);
+    let currentTip;
+    try { currentTip = await getBranchTip(target.conn, branchRef, target.repoId, target.project); }
+    catch (e) {
+      results.push({ project: group.project, repo: group.repo, branch: group.branch, ok: false, error: "failed to read branch tip: " + (e?.message || e) });
+      continue;
+    }
+    if (group.expectedOldObjectId && group.expectedOldObjectId !== currentTip) {
+      results.push({ project: group.project, repo: group.repo, branch: group.branch, ok: false, conflict: true, error: "branch moved; reload and re-stage updates" });
+      continue;
+    }
+    let commitId = null;
+    if (group.adds.length || group.edits.length) {
+      try {
+        const push = buildPushChangeSet({
+          adds: group.adds,
+          edits: group.edits,
+          message: `Tippani: publish ${group.branch}`,
+          branchRef,
+          oldObjectId: currentTip,
+        });
+        const gitApi = await target.conn.getGitApi();
+        const pushResult = await adoCall(() => gitApi.createPush(push, target.repoId, target.project), { label: "push staged content" });
+        commitId = pushResult?.commits?.[0]?.commitId || pushResult?.refUpdates?.[0]?.newObjectId || null;
+      } catch (e) {
+        results.push({ project: group.project, repo: group.repo, branch: group.branch, ok: false, error: "content push failed: " + (e?.message || e) });
+        continue;
+      }
+    }
+    _stagedBranches = _stagedBranches.filter((item) => !sameTarget(item, group));
+    _stagedFiles = _stagedFiles.filter((item) => !sameTarget(item, group));
+    _stagedFolders = _stagedFolders.filter((item) => !sameTarget(item, group));
+    let prResult = null;
+    if (group.prs.length) {
+      try { prResult = await openPr(group.prs[0]); }
+      catch (e) { prResult = { ok: false, error: e?.message || String(e) }; }
+      if (!prResult || !prResult.ok) {
+        results.push({ project: group.project, repo: group.repo, branch: group.branch, ok: false, created, commitId, error: prResult?.error || "PR creation failed" });
+        continue;
+      }
+      _stagedPrs = _stagedPrs.filter((item) => !sameTarget(item, group));
+    }
+    results.push({
+      project: group.project, repo: group.repo, branch: group.branch, ok: true, created, commitId,
+      pushedFiles: group.adds.length + group.edits.length, pullRequestId: prResult?.pullRequestId || null,
+    });
   }
-  _stagedBranches = remaining;
-  return { ok: remaining.length === 0, count: _stagedBranches.length, results };
+  return { ok: results.every((result) => result.ok), count: stagedTotal(), results };
 }
 function unstageBranch({ repo, branch } = {}) {
   const before = _stagedBranches.length;
   _stagedBranches = _stagedBranches.filter((s) => !(s.repo === repo && s.branch === branch));
   return { ok: true, removed: before - _stagedBranches.length, count: _stagedBranches.length, branches: _stagedBranches };
+}
+function unstageSpecPr({ repo, branch } = {}) {
+  const before = _stagedPrs.length;
+  _stagedPrs = _stagedPrs.filter((pr) => !(pr.repo === repo && pr.branch === branch));
+  return { ok: true, removed: before - _stagedPrs.length, count: stagedTotal(), prs: _stagedPrs };
+}
+// Clickstop 5: stage the PUBLISH (draft -> published) of an existing PR. Like
+// every other staged intent it is local until push_staged_changes; the ADO
+// updatePullRequest({isDraft:false}) call happens only at the push boundary.
+function stagePrPublish({ org, project, repo, repoName, pullRequestId, title } = {}) {
+  const id = Number(pullRequestId);
+  if (!org || !project || !repo || !Number.isFinite(id)) return { ok: false, error: "org, project, repo and pullRequestId are required" };
+  if (_stagedPrPublishes.some((p) => p.pullRequestId === id)) return { ok: false, error: "that PR is already staged to publish" };
+  _stagedPrPublishes.push({ org, project, repo, repoName: repoName || "", pullRequestId: id, title: title || "" });
+  return { ok: true, count: stagedTotal(), prPublishes: _stagedPrPublishes };
+}
+function unstagePrPublish({ pullRequestId } = {}) {
+  const id = Number(pullRequestId);
+  const before = _stagedPrPublishes.length;
+  _stagedPrPublishes = _stagedPrPublishes.filter((p) => p.pullRequestId !== id);
+  return { ok: true, removed: before - _stagedPrPublishes.length, count: stagedTotal(), prPublishes: _stagedPrPublishes };
+}
+async function publishStagedPrs() {
+  const results = [];
+  const remaining = [];
+  for (const item of _stagedPrPublishes) {
+    try {
+      const target = await resolveTarget({ org: item.org, project: item.project, repo: item.repo });
+      const gitApi = await target.conn.getGitApi();
+      await adoCall(() => gitApi.updatePullRequest({ isDraft: false }, target.repoId, item.pullRequestId, target.project), { label: "publish PR" });
+      results.push({ pullRequestId: item.pullRequestId, ok: true });
+    } catch (e) {
+      results.push({ pullRequestId: item.pullRequestId, ok: false, error: e?.message || String(e) });
+      remaining.push(item);
+    }
+  }
+  _stagedPrPublishes = remaining;
+  return { ok: results.every((r) => r.ok), count: stagedTotal(), results };
 }
 
 // Clickstop 2: folder picker. Real ADO folders always contain committed files
@@ -6030,14 +6907,14 @@ async function listBranchFolders({ project, repo, branch, scope } = {}) {
   folders.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: "base" }));
   return { ok: true, scope: scopeN, effectiveBranch: eff, folders, adoError };
 }
-function createStagedFolder({ repo, branch, path } = {}) {
+function createStagedFolder({ org, project, repo, branch, path } = {}) {
   const pn = _normFolder(path);
   if (!pn) return { ok: false, error: "folder name is required" };
   if (!repo || !branch) return { ok: false, error: "repo and branch are required" };
   const name = pn.split("/").pop();
   if (/[\\/:*?"<>|]/.test(name)) return { ok: false, error: "invalid folder name" };
   if (_stagedFolders.some((f) => f.repo === repo && f.branch === branch && _normFolder(f.path) === pn)) return { ok: false, error: "folder already exists" };
-  _stagedFolders.push({ repo, branch, path: pn });
+  _stagedFolders.push({ org, project, repo, branch, path: pn });
   return { ok: true, path: pn };
 }
 function deleteStagedFolder({ repo, branch, path } = {}) {
@@ -6378,7 +7255,8 @@ async function main() {
       try {
         const d = await doListPrs({ role: "queue" });
         const projects = _conn ? await listAdoProjects(_conn) : [ADO_PROJECT];
-        return res.type("html").send(buildHomePage(d.prs || [], _adoProjectDisplayName || ADO_PROJECT, projects));
+        const placeholder = branchNamePlaceholder(identityFromAdoToken(_adoToken));
+        return res.type("html").send(buildHomePage(d.prs || [], _adoProjectDisplayName || ADO_PROJECT, projects, placeholder));
       } catch (e) {
         console.error("Home (review queue) error:", e.message);
         return res.status(500).send("Error loading the Discovery home.");
@@ -6475,7 +7353,8 @@ async function main() {
       // the same clickable launchpad (never the legacy PR-list).
       const d = await doListPrs({ role: "queue" });
       const projects = _conn ? await listAdoProjects(_conn) : [ADO_PROJECT];
-      res.type("html").send(buildHomePage(d.prs || [], _adoProjectDisplayName || ADO_PROJECT, projects));
+      const placeholder = branchNamePlaceholder(identityFromAdoToken(_adoToken));
+      res.type("html").send(buildHomePage(d.prs || [], _adoProjectDisplayName || ADO_PROJECT, projects, placeholder, d.error || ""));
     }
     catch (e) { res.status(500).send("Error loading Discovery. Check the server console."); console.error("Discovery page error:", e.message); }
   });
@@ -6616,18 +7495,61 @@ async function main() {
   // Clickstop 2 (staged authoring): open a staged (not-yet-pushed) .md file in a
   // lightweight Markdown editor. Content lives in the in-memory staged store until
   // the branch is pushed to ADO. No ADO round-trip.
-  app.get("/staged-file", (req, res) => {
+  app.get("/staged-file", async (req, res) => {
     const repo = String(req.query.repo || "").trim();
     const branch = String(req.query.branch || "").trim().replace(/^refs\/heads\//, "");
     const filePath = String(req.query.path || "").trim();
-    const file = _stagedFiles.find((f) => f.repo === repo && f.branch === branch && f.path === filePath);
-    if (!file) return res.redirect("/discovery?tab=branches");
-    // Only force the staged (pre-push, empty) branch view when the branch itself is
-    // staged. For a real remote branch, link back without staged=1 so its existing
-    // files load (the staged file is layered on client-side).
+    const project = String(req.query.project || "").trim();
+    const repoName = String(req.query.repoName || "").trim();
+    if (!repo || !filePath) return res.redirect("/discovery?tab=branches");
+    let file = _stagedFiles.find((f) => f.repo === repo && f.branch === branch && f.path === filePath);
+    let kind, hasStagedEdit = false;
+    if (file) { kind = file.existing ? "existing" : "staged-new"; hasStagedEdit = true; }
+    else {
+      if (_isOffline || !_conn) return res.redirect("/discovery?tab=branches");
+      let content = null;
+      try { content = await getSpecContentAt(_conn, repo, filePath, branch); } catch (e) { content = null; }
+      if (content == null) return res.redirect("/discovery?tab=branches");
+      kind = "existing"; hasStagedEdit = false;
+      let baseObjectId = null;
+      try { baseObjectId = await getBranchTip(_conn, normalizeBranchRef(branch), repo, project); } catch { /* save will reject a missing base */ }
+      file = { org: ADO_ORG, project, repo, repoName, branch, path: filePath, title: filePath.split("/").pop().replace(/\.md$/i, ""), content, baseObjectId };
+    }
     const isStagedBranch = _stagedBranches.some((s) => s.repo === file.repo && s.branch === file.branch);
-    const backHref = "/branch?project=" + encodeURIComponent(file.project || "") + "&repo=" + encodeURIComponent(file.repo) + "&repoName=" + encodeURIComponent(file.repoName || "") + "&ref=" + encodeURIComponent(file.branch) + (isStagedBranch ? "&staged=1" : "");
-    res.type("html").send(buildStagedFilePage({ file, backHref }));
+    const backHref = "/branch?project=" + encodeURIComponent(file.project || project || "") + "&repo=" + encodeURIComponent(file.repo) + "&repoName=" + encodeURIComponent(file.repoName || repoName || "") + "&ref=" + encodeURIComponent(file.branch) + (isStagedBranch ? "&staged=1" : "");
+    try {
+      let remoteContent = "";
+      if (kind === "existing" && hasStagedEdit) {
+        remoteContent = await getSpecContentAt(_conn, repo, filePath, branch);
+        if (remoteContent == null) return res.status(502).send("Could not load the remote file for comparison.");
+      }
+      const comparison = stagedFileComparison({ content: file.content, existing: kind === "existing", hasStagedEdit, remoteContent });
+      const { metadata, body } = stripFrontmatter(comparison.current);
+      const { toc } = buildSourceMap(body);
+      const { html: specHtml, ranges: sourceMap } = await renderSpecBody(body, specSanitizeSchema, { includeHeadings: true });
+      const badgeText = kind === "existing" ? (hasStagedEdit ? "Edited" : "Remote") : "Staged";
+      const badge = `<span style="font-size:11px;font-weight:700;padding:2px 10px;border-radius:99px;text-transform:uppercase;letter-spacing:0.4px;background:var(--cp-border);color:var(--cp-text-muted);">${badgeText}</span>`;
+      const subtitle = filePath.replace(/^\/+/, "");
+      const pr = { title: file.title || filePath.split("/").pop(), createdBy: { displayName: "" }, pullRequestId: null, isDraft: true };
+      const pureStaged = comparison.pureStaged;
+      const save = { url: pureStaged ? "/api/v1/files/content" : "/api/v1/files/edit", org: file.org || ADO_ORG, project: file.project || project || "", repo: file.repo, repoName: file.repoName || repoName || "", branch: file.branch, path: filePath, baseObjectId: file.baseObjectId || null, pureStaged, hasStagedEdit: comparison.hasStagedEdit, currentMarkdown: comparison.current };
+      // Personal Comments (file/branch scoped) — the right pane mirrors the
+      // read-only review margin. Load existing notes + the signed-in user, and
+      // register this file as the focused PC context for the param-less MCP tools.
+      let pcComments = [];
+      try { pcComments = (await listPersonalComments({ repo: file.repo, branch: file.branch, path: filePath, rawText: body, sourceMap })).comments || []; } catch { pcComments = []; }
+      let pcUser = "You";
+      try { const me = await getMe(); if (me && me.displayName) pcUser = me.displayName; } catch { /* offline → "You" */ }
+      try { _focus.setPcContext({ repo: file.repo, branch: file.branch, path: filePath }); } catch { /* best-effort */ }
+      let pcDataSeq = 0;
+      try { pcDataSeq = _focus.get().pcDataSeq || 0; } catch { pcDataSeq = 0; }
+      const pc = { repo: file.repo, branch: file.branch, path: filePath, user: pcUser, comments: pcComments, dataSeq: pcDataSeq };
+      const ctx = { backHref, backLabel: "Branch", subtitle, badge, save, pc };
+      res.type("html").send(buildSpecPage(specHtml, toc, metadata, pr, [], filePath, sourceMap, [{ path: filePath }], 0, comparison.proposed, true, null, {}, null, false, ctx));
+    } catch (e) {
+      console.error("staged-file render error:", e.message);
+      res.status(500).send("Error rendering the file editor.");
+    }
   });
 
   // Fully-local branch page: list a local branch's changed markdown files (vs.
@@ -6945,7 +7867,9 @@ async function main() {
   async function doListPrs(query = {}) {
     if (_isOffline || !_conn) return { prs: [], error: "offline" };
     let currentUserId = null;
-    try { const cd = await _conn.connect(); currentUserId = cd && cd.authenticatedUser && cd.authenticatedUser.id; } catch { /* fall back to no creator filter */ }
+    let identityError = null;
+    try { const cd = await _conn.connect(); currentUserId = cd && cd.authenticatedUser && cd.authenticatedUser.id; }
+    catch (e) { identityError = friendlyAdoError(e, "Review queue"); }
     const top = Number.isFinite(query.top) ? query.top : 50;
 
     // Review queue (Discovery home): specs I'm authoring + specs I'm reviewing,
@@ -6955,7 +7879,7 @@ async function main() {
       // Without a resolved identity, "creator = me" silently drops its filter and
       // listOrgPullRequests returns EVERY active PR in the org, all mis-tagged
       // "authoring". Fail closed rather than leak the whole org into the queue.
-      if (!currentUserId) return { prs: [], role: "queue", project: ADO_PROJECT, error: "identity" };
+      if (!currentUserId) return { prs: [], role: "queue", project: ADO_PROJECT, error: identityError || "Could not resolve the signed-in ADO identity." };
       const status = query.status || "active";
       const authoredCrit = buildPrCriteria({ status, creator: "me" }, { currentUserId });
       const reviewingCrit = buildPrCriteria({ status, creator: "any", reviewer: currentUserId }, { currentUserId });
@@ -6980,26 +7904,26 @@ async function main() {
     if (_isOffline || !_conn) return { workItems: [], error: "offline" };
     if (!isReadOnlyWiql(wiql)) return { workItems: [], error: "WIQL must be a read-only SELECT query." };
     const proj = (project && String(project).trim()) || ADO_PROJECT;
-    const witApi = await _conn.getWorkItemTrackingApi();
-    let queryResult;
     try {
-      queryResult = await witApi.queryByWiql({ query: wiql }, { project: proj });
-    } catch (e) {
-      console.error("Work-item search failed:", friendlyAdoError(e, "Work-item search"));
-      return { workItems: [], project: proj, error: "Work-item search failed. Check the server console." };
-    }
-    const ids = (queryResult.workItems || []).map((w) => w.id).filter((n) => Number.isFinite(n)).slice(0, 100);
-    if (ids.length === 0) return { workItems: [], project: proj, count: 0 };
-    const rows = [];
-    // ADO getWorkItems caps at 200 ids per call.
-    for (let i = 0; i < ids.length; i += 200) {
-      const chunk = ids.slice(i, i + 200);
-      const items = await witApi.getWorkItems(chunk, WORK_ITEM_FIELDS, undefined, undefined, undefined, proj);
-      for (const it of items || []) {
-        rows.push(summarizeWorkItem(it, buildWorkItemUrl(ADO_ORG, proj, it.id)));
+      const witApi = await _conn.getWorkItemTrackingApi();
+      const queryResult = await witApi.queryByWiql({ query: wiql }, { project: proj });
+      const ids = (queryResult.workItems || []).map((w) => w.id).filter((n) => Number.isFinite(n)).slice(0, 100);
+      if (ids.length === 0) return { workItems: [], project: proj, count: 0 };
+      const rows = [];
+      // ADO getWorkItems caps at 200 ids per call.
+      for (let i = 0; i < ids.length; i += 200) {
+        const chunk = ids.slice(i, i + 200);
+        const items = await witApi.getWorkItems(chunk, WORK_ITEM_FIELDS, undefined, undefined, undefined, proj);
+        for (const it of items || []) {
+          rows.push(summarizeWorkItem(it, buildWorkItemUrl(ADO_ORG, proj, it.id)));
+        }
       }
+      return { workItems: rows, project: proj, count: rows.length };
+    } catch (e) {
+      const detail = friendlyAdoError(e, "Work-item search");
+      console.error("Work-item search failed:", detail);
+      return { workItems: [], project: proj, error: detail };
     }
-    return { workItems: rows, project: proj, count: rows.length };
   }
 
   // Discovery spec search: full-text over specs via ADO Code Search (almssearch).
@@ -7139,7 +8063,8 @@ async function main() {
   // Discovery Branches tab: list the signed-in user's branches across the repos
   // in a project. ADO's getRefs(includeMyBranches=true) returns the caller's
   // own/favorited branches (+ default) per repo; branchesForRepo drops the
-  // default and shapes rows. Repos are queried with bounded concurrency.
+  // default and shapes rows. When none remain, fall back to main branches; if
+  // no repo has main, return every repo for the New branch picker.
   async function listMyBranches({ project } = {}) {
     if (_isOffline || !_conn) return { branches: [], error: "offline" };
     const proj = (project && String(project).trim()) || ADO_PROJECT;
@@ -7148,8 +8073,9 @@ async function main() {
     try {
       repos = await gitApi.getRepositories(proj);
     } catch (e) {
-      console.error("List repositories failed:", friendlyAdoError(e, "List repositories"));
-      return { branches: [], project: proj, error: "Could not list repositories. Check the server console." };
+      const error = friendlyAdoError(e, "List repositories");
+      console.error("List repositories failed:", error);
+      return { branches: [], project: proj, error };
     }
     const list = (repos || []).filter((r) => r && r.id);
     const all = [];
@@ -7170,7 +8096,29 @@ async function main() {
     };
     await Promise.all(Array.from({ length: Math.min(8, list.length) }, worker));
     const branches = sortBranches(all);
-    return { branches, project: proj, count: branches.length };
+    if (branches.length) return { branches, project: proj, count: branches.length };
+
+    const mains = [];
+    cursor = 0;
+    const mainWorker = async () => {
+      for (;;) {
+        const i = cursor++;
+        if (i >= list.length) break;
+        const repo = list[i];
+        try {
+          const refs = await gitApi.getRefs(repo.id, proj, "heads/main", false, false, false);
+          const main = (refs || []).find((ref) => ref && ref.name === "refs/heads/main");
+          const row = summarizeBranchRef(main, repo, ADO_ORG);
+          if (row) mains.push(row);
+        } catch (e) {
+          console.error(`main ref lookup failed for ${repo.name}:`, friendlyAdoError(e, "List branches"));
+        }
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(8, list.length) }, mainWorker));
+    const mainBranches = sortBranches(mains);
+    if (mainBranches.length) return { branches: mainBranches, project: proj, count: mainBranches.length };
+    return { branches: [], repos: repoOptions(list), project: proj, count: 0 };
   }
 
   // Personal Comments (read-only spec page, file-reviewing mode): the signed-in
@@ -7182,8 +8130,12 @@ async function main() {
     if (_isOffline || !_conn) return { displayName: "You", id: null };
     try {
       const cd = await _conn.connect();
-      _me = { displayName: (cd && cd.authenticatedUser && cd.authenticatedUser.displayName) || "You", id: (cd && cd.authenticatedUser && cd.authenticatedUser.id) || null };
-    } catch { _me = { displayName: "You", id: null }; }
+      _me = {
+        displayName: (cd && cd.authenticatedUser && cd.authenticatedUser.displayName) || "You",
+        uniqueName: (cd && cd.authenticatedUser && cd.authenticatedUser.uniqueName) || null,
+        id: (cd && cd.authenticatedUser && cd.authenticatedUser.id) || null,
+      };
+    } catch { _me = { displayName: "You", uniqueName: null, id: null }; }
     return _me;
   }
   async function _pcWithHtml(comment) {
@@ -7226,13 +8178,13 @@ async function main() {
     for (const c of list) comments.push(await _pcWithHtml(c));
     return { ok: true, comments };
   }
-  async function createPersonalComment({ repo, branch, path: filePath, line, content } = {}) {
+  async function createPersonalComment({ repo, branch, path: filePath, line, editLine, content } = {}) {
     if (!_pcTargetOk(repo, branch, filePath)) return { ok: false, error: "Missing repo/branch/path." };
     const text = String(content == null ? "" : content).trim();
     if (!text) return { ok: false, error: "Empty comment." };
     const me = await getMe();
     const id = Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
-    const c = pcNew({ id, line, author: me.displayName, content: text, now: new Date().toISOString() });
+    const c = pcNew({ id, line, editLine, author: me.displayName, content: text, now: new Date().toISOString() });
     try {
       savePersonalComments(repo, branch, filePath, pcAdd(loadPersonalComments(repo, branch, filePath), c));
     } catch (e) {
@@ -7285,7 +8237,8 @@ async function main() {
     try {
       const cur = loadPersonalComments(repo, branch, filePath);
       if (!pcFind(cur, id)) return { ok: false, error: "Not found." };
-      const list = pcAddReply(cur, id, { author: author || "You", content: text, now: new Date().toISOString() });
+      const replyAuthor = author || (await getMe()).displayName;
+      const list = pcAddReply(cur, id, { author: replyAuthor, content: text, now: new Date().toISOString() });
       savePersonalComments(repo, branch, filePath, list);
       return { ok: true, comment: await _pcWithHtml(pcFind(list, id)), dataSeq: _focus.bumpPcData() };
     } catch (e) {
@@ -8076,14 +9029,36 @@ if ($path) { [Console]::Out.Write($path) }
   });
 
   // Sync pending actions to ADO
-  app.post("/api/sync", async (req, res) => {
+  async function syncPendingChanges({ includeDrafts = false } = {}) {
     if (_isOffline || !_conn) {
-      return res.json({ ok: false, message: "Cannot sync in offline mode" });
+      return { ok: false, synced: 0, failed: 0, message: "Cannot sync in offline mode" };
     }
     const pending = loadPending(_prId);
     const unsynced = pending.filter(p => !p.synced);
     let synced = 0, failed = 0;
     const errors = [];
+
+    if (includeDrafts) {
+      for (const [threadId, draft] of Object.entries(_drafts.list())) {
+        try {
+          await replyToThread(_conn, _prId, Number(threadId), draft.content);
+          _drafts.delete(Number(threadId));
+          synced++;
+        } catch (e) {
+          failed++;
+          errors.push({ threadId: Number(threadId), type: "reply", error: e.message });
+        }
+      }
+      for (const [fileIndex, draft] of Object.entries(_specDrafts.list())) {
+        const result = await doCommitSpec(Number(fileIndex), draft.content);
+        if (result.ok && result.body?.synced) {
+          synced++;
+        } else {
+          failed++;
+          errors.push({ fileIndex: Number(fileIndex), type: "save", error: result.body?.error || "spec edit did not sync" });
+        }
+      }
+    }
 
     for (const action of unsynced) {
       try {
@@ -8113,7 +9088,18 @@ if ($path) { [Console]::Out.Write($path) }
       saveCache(_prId, _cache);
     } catch {}
 
-    res.json({ ok: true, synced, failed, total: unsynced.length, errors });
+    return { ok: failed === 0, synced, failed, total: unsynced.length, errors };
+  }
+
+  async function pushAllStagedChanges() {
+    const review = await syncPendingChanges({ includeDrafts: true });
+    const authoring = await pushStagedBranches();
+    const publishes = await publishStagedPrs();
+    return { ok: review.ok && authoring.ok && publishes.ok, review, publishes, ...authoring };
+  }
+
+  app.post("/api/sync", async (_req, res) => {
+    res.json(await syncPendingChanges());
   });
 
   // Get pending count for status bar
@@ -8194,33 +9180,30 @@ if ($path) { [Console]::Out.Write($path) }
     // add/remove entries. Add validates a readable .md (no containment gate — the
     // add IS the approval); the file's folder then becomes an approved root via
     // the custom-roots union, so opening it (and the open_file MCP tool) passes.
-    customFilesList: () => _customFiles.list().map((e) => ({
-      path: e.path,
-      dir: path.dirname(e.path),
-      name: path.basename(e.path),
-      addedAt: e.addedAt,
-      openHref: `/open-file-view?path=${encodeURIComponent(e.path)}`,
-    })),
+    customFilesList: () => buildReadingList({ entries: _customFiles.list(), readmePath: README_PATH, fs, path }),
     customFileAdd: ({ path: p } = {}) => {
       const cls = classifyAddFile(p, { fs, path });
       if (!cls.ok) return cls;
       _customFiles.add(cls.realpath);
       return {
         ok: true,
-        files: _customFiles.list().map((e) => ({
-          path: e.path, dir: path.dirname(e.path), name: path.basename(e.path),
-          addedAt: e.addedAt, openHref: `/open-file-view?path=${encodeURIComponent(e.path)}`,
-        })),
+        files: buildReadingList({ entries: _customFiles.list(), readmePath: README_PATH, fs, path }),
       };
     },
     customFileRemove: ({ path: p } = {}) => {
-      _customFiles.remove(String(p || "").trim());
+      const target = String(p || "").trim();
+      // The pinned user manual can never be removed.
+      if (isPinnedManual(target, { readmePath: README_PATH, fs, path })) {
+        return {
+          ok: false,
+          error: "The user manual is pinned and cannot be removed.",
+          files: buildReadingList({ entries: _customFiles.list(), readmePath: README_PATH, fs, path }),
+        };
+      }
+      _customFiles.remove(target);
       return {
         ok: true,
-        files: _customFiles.list().map((e) => ({
-          path: e.path, dir: path.dirname(e.path), name: path.basename(e.path),
-          addedAt: e.addedAt, openHref: `/open-file-view?path=${encodeURIComponent(e.path)}`,
-        })),
+        files: buildReadingList({ entries: _customFiles.list(), readmePath: README_PATH, fs, path }),
       };
     },
     remoteSpecDrafts: _remoteSpecDrafts,
@@ -8230,8 +9213,12 @@ if ($path) { [Console]::Out.Write($path) }
     mcpCreateBranch,
     stageBranch,
     listStagedBranches,
-    pushStagedBranches,
+    pushStagedBranches: pushAllStagedChanges,
+    stageSpecPr,
     unstageBranch,
+    unstageSpecPr,
+    stagePrPublish,
+    unstagePrPublish,
     stageFile,
     unstageFile,
     updateStagedFileContent,
@@ -8239,6 +9226,8 @@ if ($path) { [Console]::Out.Write($path) }
     createStagedFolder,
     deleteStagedFolder,
     renameStagedFolder,
+    renderMarkdown,
+    saveExistingEdit,
     listPersonalComments,
     createPersonalComment,
     editPersonalComment,

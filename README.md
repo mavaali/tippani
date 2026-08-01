@@ -158,11 +158,11 @@ Tippani exposes a [Model Context Protocol](https://modelcontextprotocol.io) serv
 }
 ```
 
-**Tools (19):**
+**Tools (40):**
 
 - **Portal & navigation** — `open_pr` (call first), `open_file`, `open_thread`, `show_feedback` (cross-PR triage page).
 - **Reading** — `list_threads`, `get_thread`, `get_spec`, `get_spec_draft`, `triage_summary`; focus with `focus_thread`.
-- **Stage-then-review** — stage locally with `stage_draft`, `stage_spec_edit`, `stage_resolve_thread`; nothing reaches Azure DevOps until you finalize with `post_reply`, `commit_spec`, or `resolve_thread`. `commit_spec` requires explicit content — a staged proposal is review-only and never committed implicitly, so it can't overwrite your own edits. Also `clear_draft`, `clear_spec_edit`, and `mark_viewed` (acknowledge a thread without resolving it).
+- **Stage-then-push** — stage review work with `stage_draft`, `edit_spec`, and `stage_resolve_thread`; stage authoring work with `stage_branch`, `stage_spec`, and `stage_spec_pr`. Nothing staged by MCP reaches Azure DevOps until one explicit `push_staged_changes` call. Also `clear_draft` and `clear_spec_edit`.
 
 Staged whole-file edits show up in the portal as a GitHub-style Current/Proposed diff you can accept-and-refine in the editor before committing.
 

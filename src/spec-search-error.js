@@ -9,7 +9,7 @@
 // error so the message is both TRUE and ACTIONABLE, never a generic
 // "check the server console".
 
-// "https://dev.azure.com/SQLBI4WA" -> "SQLBI4WA"; falls back to the raw value.
+// "https://dev.azure.com/contoso" -> "contoso"; falls back to the raw value.
 export function orgLabel(org) {
   const s = String(org || "").replace(/\/+$/, "");
   const seg = s.split("/").pop();

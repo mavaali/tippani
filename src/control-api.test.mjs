@@ -95,6 +95,25 @@ app.use(express.json());
 // Clickstop 2: Custom-list fake store shared by the injected deps below.
 const customListStore = [];
 const shapeCl = (p) => ({ path: p, dir: p.replace(/\/[^/]*$/, ""), name: p.split("/").pop(), addedAt: "T", openHref: "/open-file-view?path=" + encodeURIComponent(p) });
+const stagedFilePaths = [];
+let lastStagedPrArgs = null;
+let lastPersonalReplyArgs = null;
+const replyPersonalComment = async (args) => {
+  lastPersonalReplyArgs = args;
+  if (args.content === "reject") return { ok: false, error: "Empty reply." };
+  return { ok: true, comment: { id: args.id, replies: [{ author: "Kay", content: args.content }] }, dataSeq: 7 };
+};
+const stageFile = ({ repo, branch, title, folder, path } = {}) => {
+  const trimmedTitle = String(title || "").trim();
+  if (trimmedTitle && /\.[^./\\]+$/.test(trimmedTitle) && !/\.md$/i.test(trimmedTitle)) return { ok: false, error: "only .md files can be added to a branch" };
+  const name = trimmedTitle && !/\.md$/i.test(trimmedTitle) ? trimmedTitle + ".md" : trimmedTitle;
+  const filePath = String(path || "").trim() || (folder ? folder + "/" : "") + name;
+  if (!filePath) return { ok: false, error: "title is required" };
+  if (!/\.md$/i.test(filePath)) return { ok: false, error: "only .md files can be added to a branch" };
+  if (!repo || !branch) return { ok: false, error: "repo and branch are required" };
+  stagedFilePaths.push(filePath);
+  return { ok: true, files: stagedFilePaths.map((stagedPath) => ({ title: stagedPath === filePath ? name || stagedPath : stagedPath, path: stagedPath })) };
+};
 
 registerControlApi(app, {
   port: PORT_FOR_PREFIXES,
@@ -136,6 +155,9 @@ registerControlApi(app, {
   remoteSpecLocks,
   pushRemoteSpec,
   openPr,
+  replyPersonalComment,
+  stageFile,
+  stageSpecPr: (args) => { lastStagedPrArgs = args; return { ok: true, prs: [args] }; },
 });
 
 const server = await new Promise((resolve) => {
@@ -158,6 +180,31 @@ async function call(path, opts = {}) {
 const authHeaders = { Authorization: `Bearer ${SESSION_TOKEN}` };
 
 try {
+  // --- POST /api/v1/pr/stage ---
+  {
+    const body = { org: "https://dev.azure.com/o", project: "P", repo: "R", title: "Review", sourceBranch: "spec/x", targetBranch: "main" };
+    const r = await call("/api/v1/pr/stage", { method: "POST", headers: authHeaders, body });
+    check("PR stage: authenticated request stages without opening", r.status === 200 && r.body.ok === true && lastStagedPrArgs.title === "Review");
+  }
+
+  // --- POST /api/v1/files/stage ---
+  {
+    const r = await call("/api/v1/files/stage", { method: "POST", headers: authHeaders, body: { repo: "r", branch: "b", title: "Spec title" } });
+    check("file stage: extensionless title and path get .md", r.status === 200 && r.body.ok === true && r.body.files.at(-1).title === "Spec title.md" && r.body.files.at(-1).path === "Spec title.md");
+  }
+  {
+    const r = await call("/api/v1/files/stage", { method: "POST", headers: authHeaders, body: { repo: "r", branch: "b", title: "Spec.MD" } });
+    check("file stage: uppercase .MD is preserved", r.status === 200 && r.body.ok === true && r.body.files.at(-1).path === "Spec.MD");
+  }
+  {
+    const r = await call("/api/v1/files/stage", { method: "POST", headers: authHeaders, body: { repo: "r", branch: "b", title: "Spec.txt" } });
+    check("file stage: non-md title is rejected", r.status === 200 && r.body.ok === false && /only \.md/i.test(r.body.error));
+  }
+  {
+    const r = await call("/api/v1/files/stage", { method: "POST", headers: authHeaders, body: { repo: "r", branch: "b", path: "Spec.txt" } });
+    check("file stage: explicit non-md path is rejected", r.status === 200 && r.body.ok === false && /only \.md/i.test(r.body.error));
+  }
+
   // --- Auth guards ---
   {
     const r = await fetch(BASE + "/api/v1/threads");
@@ -226,6 +273,14 @@ try {
   {
     const r = await call("/api/v1/specs/99/preview", { method: "POST", body: { original: "a", proposed: "b" } });
     check("preview: out-of-range index -> 404", r.status === 404);
+  }
+  {
+    const denied = await fetch(BASE + "/api/v1/spec-preview", {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ original: "", proposed: "new" }),
+    });
+    check("generic preview: missing X-Tippani-Client -> 403", denied.status === 403);
+    const r = await call("/api/v1/spec-preview", { method: "POST", body: { original: "", proposed: "new" } });
+    check("generic preview: pure-staged empty baseline renders proposed", r.status === 200 && r.body.html.includes("new") && r.body.hunks.length === 1);
   }
 
   // --- GET /api/v1/threads ---
@@ -565,6 +620,30 @@ try {
   {
     const r = await call("/api/v1/custom-files", { method: "DELETE", headers: authHeaders, body: { path: "/x/a.md" } });
     check("custom-files remove: ok + empty", r.status === 200 && r.body.ok === true && r.body.files.length === 0);
+  }
+
+  // --- Personal Comments: human reply ---
+  {
+    const r = await fetch(BASE + "/api/v1/personal-comments/c1/reply", { method: "POST" });
+    check("personal reply: missing X-Tippani-Client -> 403", r.status === 403);
+  }
+  {
+    const r = await fetch(BASE + "/api/v1/personal-comments/c1/reply", {
+      method: "POST",
+      headers: { "X-Tippani-Client": "test", "Content-Type": "application/json" },
+      body: JSON.stringify({ repo: "Repo", branch: "main", path: "/docs/spec.md", content: "Response" }),
+    });
+    check("personal reply: mutation without bearer -> 401", r.status === 401);
+  }
+  {
+    const body = { repo: "Repo", branch: "main", path: "/docs/spec.md", content: "Response" };
+    const r = await call("/api/v1/personal-comments/c1/reply", { method: "POST", headers: authHeaders, body });
+    check("personal reply: success returns updated comment", r.status === 200 && r.body.ok === true && r.body.comment.replies[0].content === "Response" && r.body.dataSeq === 7);
+    check("personal reply: forwards coordinates, id, and content", lastPersonalReplyArgs.repo === "Repo" && lastPersonalReplyArgs.branch === "main" && lastPersonalReplyArgs.path === "/docs/spec.md" && lastPersonalReplyArgs.id === "c1" && lastPersonalReplyArgs.content === "Response");
+  }
+  {
+    const r = await call("/api/v1/personal-comments/c1/reply", { method: "POST", headers: authHeaders, body: { repo: "Repo", branch: "main", path: "/docs/spec.md", content: "reject" } });
+    check("personal reply: service rejection -> 400", r.status === 400 && r.body.ok === false);
   }
 
   // --- Remote (pre-PR) spec authoring (clickstop 2, step 11) ---

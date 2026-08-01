@@ -4,17 +4,17 @@ import { specSearchUnavailableMessage, orgLabel } from "./spec-search-error.js";
 let pass = 0, fail = 0;
 function ok(name, cond) { if (cond) pass++; else { fail++; console.error("  FAIL: " + name); } }
 
-const ORG = "https://dev.azure.com/SQLBI4WA";
+const ORG = "https://dev.azure.com/contoso";
 
 // orgLabel extracts the org segment, tolerant of trailing slash.
-ok("orgLabel from url", orgLabel(ORG) === "SQLBI4WA");
+ok("orgLabel from url", orgLabel(ORG) === "contoso");
 ok("orgLabel trims trailing slash", orgLabel("https://dev.azure.com/Foo/") === "Foo");
 ok("orgLabel falls back on empty", orgLabel("") === "the organization");
 
 // The Code Search hint leads for a 404 (missing extension) and carries the detail.
 const m404 = specSearchUnavailableMessage('Not found (404). Check --project and --repo names.', ORG);
 ok("404 mentions Code Search", /Code Search is not enabled/.test(m404));
-ok("404 names the org", /SQLBI4WA/.test(m404));
+ok("404 names the org", /contoso/.test(m404));
 ok("404 keeps the underlying detail", /Not found \(404\)/.test(m404));
 ok("404 suggests an actionable alternative", /open_branch_file/.test(m404));
 

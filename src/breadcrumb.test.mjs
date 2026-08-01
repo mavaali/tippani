@@ -54,13 +54,20 @@ check("undefined → ''", renderCrumbs(undefined) === "");
   check("brand: empty sub → no middot span", !renderBrand("").includes("\u00b7"));
 }
 
-// renderCrumbBar right-content: brand pushed to the right of the top row
+// renderCrumbBar right-content: staged hint stays centered until right content needs space
 {
   const bar = renderCrumbBar([{ label: "Home" }], { right: renderBrand("discovery") });
   check("bar right: contains brand", bar.includes(">Tippani</span>"));
-  check("bar right: right block is margin-left:auto", bar.includes("margin-left:auto"));
+  check("bar right: right block owns flexible spacer", bar.includes('class="tp-topbar-right" style="margin-left:auto'));
+  check("bar right: center starts at true center", bar.includes('class="tp-topbar-center" id="tpStaged" style="position:absolute;left:50%'));
+  check("bar right: center clamps against measured right edge", bar.includes("Math.min(centered,clearOfRight)"));
+  check("bar right: layout observes control width changes", bar.includes("new ResizeObserver(layout)"));
   check("bar right: crumb still present", bar.includes(">Home</span>"));
-  check("bar no-right: no right block", !renderCrumbBar([{ label: "Home" }]).includes("margin-left:auto"));
+  check("bar no-right: no right block", !renderCrumbBar([{ label: "Home" }]).includes('class="tp-topbar-right"'));
+  check("push success invalidates remote branch cache", bar.includes("sessionStorage.removeItem('tippani.brCache.remote')"));
+  check("push cache invalidation precedes reload", bar.indexOf("sessionStorage.removeItem('tippani.brCache.remote')") < bar.indexOf("location.reload()"));
+  check("push success persists Current view", bar.includes("JSON.stringify({view:'current'})"));
+  check("Current view reset precedes reload", bar.indexOf("JSON.stringify({view:'current'})") < bar.indexOf("location.reload()"));
 }
 
 console.log(`\nbreadcrumb.test: ${pass} passed, ${fail} failed`);

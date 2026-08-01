@@ -10,12 +10,12 @@ ok("rule forbids raw git", /raw git/.test(NEVER_RAW_RULE));
 ok("rule forbids the ADO MCP", /Azure DevOps MCP/.test(NEVER_RAW_RULE));
 
 // Each write tool has a next-step chain.
-ok("create_branch -> stage_spec", /stage_spec/.test(nextStep("create_branch")));
-ok("stage_spec -> push_spec", /push_spec/.test(nextStep("stage_spec")));
-ok("push_spec -> create_spec_pr", /create_spec_pr/.test(nextStep("push_spec")));
-ok("create_spec_pr -> review", /review/i.test(nextStep("create_spec_pr")));
+ok("stage_branch -> push", /push_staged_changes/.test(nextStep("stage_branch")));
+ok("stage_spec -> push", /push_staged_changes/.test(nextStep("stage_spec")));
+ok("stage_spec_pr -> push", /push_staged_changes/.test(nextStep("stage_spec_pr")));
+ok("push -> results", /results/i.test(nextStep("push_staged_changes")));
 ok("unknown tool -> null", nextStep("nope") === null);
-ok("every write tool is covered", ["create_branch", "stage_spec", "push_spec", "create_spec_pr"].every((t) => typeof NEXT_STEP_HINTS[t] === "string"));
+ok("every write tool is covered", ["stage_branch", "stage_spec", "stage_spec_pr", "push_staged_changes"].every((t) => typeof NEXT_STEP_HINTS[t] === "string"));
 
 // Context echo normalises missing fields to null.
 eq("echoContext fills nulls", echoContext({ repo: "R" }), { repo: "R", branch: null, path: null });
@@ -25,7 +25,7 @@ eq("echoContext empty", echoContext(), { repo: null, branch: null, path: null })
 const r = withHints("stage_spec", { ok: true, staged: 1 }, { repo: "R", branch: "spec/x", path: "docs/spec.md" });
 ok("withHints keeps the result", r.ok === true && r.staged === 1);
 eq("withHints echoes context", r.context, { repo: "R", branch: "spec/x", path: "docs/spec.md" });
-ok("withHints carries the next step", /push_spec/.test(r.nextStep));
+ok("withHints carries the next step", /push_staged_changes/.test(r.nextStep));
 
 console.log(`tool-hints: ${pass} passed, ${fail} failed`);
 if (fail > 0) process.exit(1);

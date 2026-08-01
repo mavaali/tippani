@@ -13,10 +13,10 @@ export const NEVER_RAW_RULE =
 
 // The next step after each write tool succeeds.
 export const NEXT_STEP_HINTS = {
-  create_branch: "Branch ready. Stage the spec with stage_spec, then push_spec to commit.",
-  stage_spec: "Staged (not yet pushed). Call push_spec to commit the staged file(s) to the branch, then create_spec_pr to open the review PR.",
-  push_spec: "Committed. Call create_spec_pr to open a PR and link a Spec review work item.",
-  create_spec_pr: "PR open. Share the portal URL with the user so they can review.",
+  stage_branch: "Branch staged locally. Stage files and an optional PR intent, then call push_staged_changes when ready.",
+  stage_spec: "File staged locally. Stage more changes or call push_staged_changes when ready.",
+  stage_spec_pr: "PR intent staged locally. Call push_staged_changes when the branch and files are ready.",
+  push_staged_changes: "Staged changes published. Review the per-target results and retry only failures.",
 };
 
 export function nextStep(tool) {
