@@ -30,7 +30,7 @@ required.
 
 | Tool | Purpose | Parameters |
 |---|---|---|
-| `open_pr` | Open a spec PR in the review portal and load its threads and changed files. Call this **first**; pass only `prId` — the signed-in account supplies org/project. Returns a `portalUrl`. | `prId*`, `org`, `project`, `repo`, `refresh`, `headless` |
+| `open_pr` | Open a spec PR in the review portal and load its threads and changed files. The entry point for reviewing a PR; the PR reading/comment tools act on the PR it opens (you can also start from `list_prs` / `search_specs` or a branch). Pass only `prId` — the account supplies org/project. Returns a `portalUrl`. | `prId*`, `org`, `project`, `repo`, `refresh`, `headless` |
 | `list_prs` | List PRs to review and open the Discovery page. Defaults to your open PRs; widen with `creator:'any'` or filter by status/reviewer/target. | `status`, `creator`, `reviewer`, `target`, `top` |
 | `list_threads` | List every comment thread on the open PR with status, file, line, and comment count. | — |
 | `get_thread` | Get the full content of one thread — every comment plus any staged draft. | `threadId` |

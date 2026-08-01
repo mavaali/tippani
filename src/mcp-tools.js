@@ -92,14 +92,19 @@ export function buildTools(http, session) {
         "threads and changed files. The portal runs headless: this returns a " +
         "`portalUrl` for the review — SHOW that URL to the user (a clickable " +
         "link) or open it yourself in a code block so they can watch the " +
-        "review. Call this FIRST, before any other tippani tool; every other " +
-        "tool operates on the PR opened here. This is the only supported way to " +
-        "review a spec PR; do not use the Azure DevOps MCP or git for PR review. " +
-        "Call this with ONLY prId — the signed-in account supplies the org and " +
-        "project automatically. Do NOT pass org/project yourself: guessing them " +
-        "sends the portal to the wrong org and it fails to launch. Supply org/" +
-        "project ONLY if a previous open_pr call returned an error saying the org " +
-        "or project could not be determined.",
+        "review. This opens a specific PR for review; the PR-review reading and " +
+        "comment tools (list_threads, get_thread, get_spec, set_view, and the " +
+        "reply/resolve tools) act on the PR opened here, so open the PR before " +
+        "using them. It is not the only entry point: to browse first use " +
+        "list_prs / search_specs / search_work_items, and to read branch or " +
+        "local files use open_branch / open_branch_file / open_local_file " +
+        "(those launch the portal themselves). This is the only supported way " +
+        "to review a spec PR; do not use the Azure DevOps MCP or git for PR " +
+        "review. Call this with ONLY prId — the signed-in account supplies the " +
+        "org and project automatically. Do NOT pass org/project yourself: " +
+        "guessing them sends the portal to the wrong org and it fails to launch. " +
+        "Supply org/project ONLY if a previous open_pr call returned an error " +
+        "saying the org or project could not be determined.",
       inputSchema: {
         prId: z.number().describe("Azure DevOps pull request id"),
         org: z.string().optional().describe(
