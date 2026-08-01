@@ -97,22 +97,22 @@ npx tippani <PR_ID> --refresh
 
 ### All flags
 
-| Flag | Meaning |
-|---|---|
-| `--org=<url>` | The address of the service that hosts your repositories, e.g. `https://dev.azure.com/myorg`. |
-| `--project=<name>` | The project that contains your repositories. |
-| `--repo=<name>` | The repository name (optional — detected from the pull request). |
-| `--browse` | Open the home screen instead of a single pull request. |
-| `--file=<path>` | Open a specific file directly. |
-| `--offline` | Work from a local cache, with no connection. |
-| `--refresh` | Fetch fresh data, ignoring the cache. |
-| `--save-config` | Remember `--org/--project/--repo` in `~/.tippani/config.json`. |
-| `--port=<n>` | Serve on a specific port (default `3847`). |
-| `--headless` | Don't open a browser — for assistant-only sessions. |
-| `--ado-token=<t>` | Sign in with an access token instead of an interactive login. |
-| `--local-repo=<path>` | Work from a local clone on disk, with no server round-trip. |
+| Flag | Meaning | Environment variable |
+|---|---|---|
+| `--org=<url>` | The address of the service that hosts your repositories, e.g. `https://dev.azure.com/myorg`. | `TIPPANI_ORG` |
+| `--project=<name>` | The project that contains your repositories. | `TIPPANI_PROJECT` |
+| `--repo=<name>` | The repository name (optional — detected from the pull request). | `TIPPANI_REPO` |
+| `--browse` | Open the home screen instead of a single pull request. | — |
+| `--file=<path>` | Open a specific file directly. | — |
+| `--offline` | Work from a local cache, with no connection. | — |
+| `--refresh` | Fetch fresh data, ignoring the cache. | — |
+| `--save-config` | Remember `--org/--project/--repo` in `~/.tippani/config.json`. | — |
+| `--port=<n>` | Serve on a specific port (default `3847`). | `TIPPANI_PORT` |
+| `--headless` | Don't open a browser — for assistant-only sessions. | `TIPPANI_HEADLESS` |
+| `--ado-token=<t>` | Sign in with an access token instead of an interactive login. | `TIPPANI_ADO_TOKEN` |
+| `--local-repo=<path>` | Work from a local clone on disk, with no server round-trip. | `TIPPANI_LOCAL_REPO` |
 
-Environment equivalents: `TIPPANI_ORG`, `TIPPANI_PROJECT`, `TIPPANI_REPO`, `TIPPANI_PORT`, `TIPPANI_HEADLESS`, `TIPPANI_ADO_TOKEN`, `TIPPANI_LOCAL_REPO`. Precedence: **CLI flags > env vars > config file**.
+Precedence: **CLI flags > env vars > config file**.
 
 ## Configuration
 
