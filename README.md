@@ -205,7 +205,7 @@ Tippani exposes a [Model Context Protocol](https://modelcontextprotocol.io) serv
 
 **Tools (40):**
 
-- **Portal & navigation** — `open_pr` (call first), `open_file`, `open_thread`, `show_feedback` (cross-PR triage page).
+- **Portal & navigation** — `open_pr` (**call this first**: it opens the pull request and starts the review session that every other tool then works on), `open_file`, `open_thread`, `show_feedback` (cross-PR triage page).
 - **Reading** — `list_threads`, `get_thread`, `get_spec`, `get_spec_draft`, `triage_summary`; focus with `focus_thread`.
 - **Stage-then-push** — stage review work with `stage_draft`, `edit_spec`, and `stage_resolve_thread`; stage authoring work with `stage_branch`, `stage_spec`, and `stage_spec_pr`. Nothing staged by MCP reaches your repository host until one explicit `push_staged_changes` call. Also `clear_draft` and `clear_spec_edit`.
 
