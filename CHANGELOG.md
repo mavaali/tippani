@@ -13,9 +13,11 @@ publish the whole set with one `push_staged_changes`. From branch `clickstop-2`.
   into Azure DevOps. Staged PR cards can be deleted before publishing.
 - **Shared staged-changes ticker** refreshed from both Branches and the Review
   queue.
-- **Links open externally** — clicking a link inside a rendered spec now opens
-  it in your OS default browser (`/open-external`) instead of navigating the
-  portal, so relative doc links like `docs/x.md` no longer 404. Only links in
+- **Links behave sensibly** — clicking a link inside a rendered spec opens a
+  Markdown file that lives under the current file's root folder **in Tippani**
+  (the read-only reviewing view), and everything else — external URLs,
+  non-Markdown files, and files outside that root — in your **OS default
+  browser**. Relative doc links like `docs/x.md` no longer 404. Only links in
   rendered content are intercepted; breadcrumbs, the contents rail, and in-page
   anchors are unaffected.
 - **MCP** — exactly 40 tools; the four authoring tools are `stage_branch`,

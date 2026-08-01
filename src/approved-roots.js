@@ -63,5 +63,21 @@ export function createApprovedRoots({ fs = fsDefault, path = pathDefault, rootsF
     return isContained(real);
   }
 
-  return { approveLocalRoot, isApprovedRoot, isContained, roots };
+  // The most specific approved root that contains `abs` (already realpath'd), or
+  // null. Lets a caller decide whether a link stays within the current file's
+  // own root folder (open in-app) versus outside it (open externally).
+  function containingRoot(abs) {
+    if (!abs) return null;
+    let best = null;
+    const consider = (root) => {
+      if (root && (abs === root || abs.startsWith(root + path.sep))) {
+        if (!best || root.length > best.length) best = root;
+      }
+    };
+    for (const root of roots) consider(root);
+    for (const root of getExtraRoots()) consider(root);
+    return best;
+  }
+
+  return { approveLocalRoot, isApprovedRoot, isContained, containingRoot, roots };
 }

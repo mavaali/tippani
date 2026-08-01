@@ -41,7 +41,7 @@ import { buildPrCriteria, summarizePr, mergeRolePrs, prStatusLabel } from "./pr-
 import { navSkipsBarePathClobber, navShouldNavigate, navTarget } from "./nav-guard.js";
 import { createApprovedRoots } from "./approved-roots.js";
 import { classifyOpenFilePath, classifyAddFile } from "./open-file-path.js";
-import { resolveExternalLinkTarget } from "./open-external.js";
+import { resolveLinkAction } from "./open-external.js";
 import { createCustomFiles } from "./custom-files.js";
 import { buildReadingList, isPinnedManual, manualRoot } from "./reading-list.js";
 import { fileReviewContext } from "./comment-key.js";
@@ -254,7 +254,7 @@ try {
 // check used by the open-a-file validator to distinguish a symlink escape.
 // `extraRoots` unions in the Custom-list folders (kept separate from persisted
 // local-clone roots so the two provenances never cross-revoke).
-const { approveLocalRoot, isApprovedRoot, isContained } = createApprovedRoots({
+const { approveLocalRoot, isApprovedRoot, isContained, containingRoot } = createApprovedRoots({
   fs, path, rootsFile: LOCAL_ROOTS_FILE, configDir: CONFIG_DIR,
   extraRoots: () => {
     const roots = _customFiles.customRoots();
@@ -7263,7 +7263,7 @@ async function main() {
     "if(/^(javascript|data|vbscript):/i.test(href))return;" +
     "if(!a.closest('.ro-doc,.spec,.fb-comment-body,.rh-body,.tc-body,.pc-body'))return;" +
     "ev.preventDefault();" +
-    "fetch('/open-external?href='+encodeURIComponent(href)+'&base='+encodeURIComponent(ofp())).catch(function(){});" +
+    "fetch('/open-external?href='+encodeURIComponent(href)+'&base='+encodeURIComponent(ofp())).then(function(r){return r.json();}).then(function(d){if(d&&d.action==='tippani'&&d.href){location.href=d.href;}}).catch(function(){});" +
     "},true);})();</script>";
   app.use((req, res, next) => {
     const origSend = res.send.bind(res);
@@ -7284,12 +7284,17 @@ async function main() {
   // must stay inside that document's folder tree (or an approved root) before it
   // is handed to the OS opener. Loopback-only (the host guard already ran).
   app.get("/open-external", async (req, res) => {
-    const r = resolveExternalLinkTarget(req.query.href, req.query.base, { isContained, fs, path });
-    if (!r.ok) return res.status(r.status || 400).json({ error: r.error });
+    const r = resolveLinkAction(req.query.href, req.query.base, { isContained, containingRoot, fs, path });
+    if (r.error) return res.status(r.status || 400).json({ error: r.error });
+    // A markdown file under the current file's root folder opens inside Tippani
+    // (the read-only reviewing view); anything else opens in the OS browser.
+    if (r.action === "tippani") {
+      return res.json({ action: "tippani", href: "/open-file-view?path=" + encodeURIComponent(r.path) });
+    }
     try {
       const openPkg = (await import("open")).default;
       await openPkg(r.target);
-      return res.json({ ok: true, opened: r.target });
+      return res.json({ action: "external", ok: true, opened: r.target });
     } catch (e) {
       return res.status(500).json({ error: String((e && e.message) || e) });
     }
