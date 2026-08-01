@@ -139,7 +139,7 @@ Tippani signs in with **your own** credentials and keeps them **on your machine*
 
 1. **Already signed in on this machine?** If your host has a command-line tool and you've signed in with it, Tippani picks that up automatically and never prompts.
 2. **Prefer a token?** Provide an access token with **Code (read & write)** permission via `--ado-token` (or the `TIPPANI_ADO_TOKEN` environment variable). This is how the assistant integration connects.
-3. **Neither?** Tippani asks you for a token once and saves it locally (under `~/.tippani/`, on this machine only), so you aren't asked again.
+3. **Neither?** Tippani asks you for a token once and saves it locally in the conventional safe way (owner read/write only, under `~/.tippani/`, on this machine only), so you aren't asked again.
 
 You only do this the first time; after that, Tippani connects on its own.
 
