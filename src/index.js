@@ -41,6 +41,7 @@ import { buildPrCriteria, summarizePr, mergeRolePrs, prStatusLabel } from "./pr-
 import { navSkipsBarePathClobber, navShouldNavigate, navTarget } from "./nav-guard.js";
 import { createApprovedRoots } from "./approved-roots.js";
 import { classifyOpenFilePath, classifyAddFile } from "./open-file-path.js";
+import { resolveExternalLinkTarget } from "./open-external.js";
 import { createCustomFiles } from "./custom-files.js";
 import { buildReadingList, isPinnedManual, manualRoot } from "./reading-list.js";
 import { fileReviewContext } from "./comment-key.js";
@@ -7245,6 +7246,53 @@ async function main() {
     res.type("application/javascript")
        .set("Cache-Control", "public, max-age=31536000, immutable")
        .send(MERMAID_JS);
+  });
+
+  // Rendered-markdown links open in the OS default browser instead of navigating
+  // the portal (a relative doc link like docs/x.md would otherwise 404 and
+  // replace the reader). A single delegated interceptor is injected into every
+  // HTML page; it fires ONLY for links inside rendered content (.ro-doc / .spec /
+  // comment bodies), so app navigation (breadcrumbs, TOC, cards) and in-page
+  // #anchors are untouched.
+  const LINK_OPENER_SCRIPT =
+    "<script>(function(){if(window.__tpLinkOpener)return;window.__tpLinkOpener=true;" +
+    "function ofp(){try{return new URLSearchParams(location.search).get('path')||'';}catch(e){return '';}}" +
+    "document.addEventListener('click',function(ev){if(ev.defaultPrevented||ev.button!==0)return;" +
+    "var a=ev.target&&ev.target.closest?ev.target.closest('a[href]'):null;if(!a)return;" +
+    "var href=a.getAttribute('href')||'';if(!href||href.charAt(0)==='#')return;" +
+    "if(/^(javascript|data|vbscript):/i.test(href))return;" +
+    "if(!a.closest('.ro-doc,.spec,.fb-comment-body,.rh-body,.tc-body,.pc-body'))return;" +
+    "ev.preventDefault();" +
+    "fetch('/open-external?href='+encodeURIComponent(href)+'&base='+encodeURIComponent(ofp())).catch(function(){});" +
+    "},true);})();</script>";
+  app.use((req, res, next) => {
+    const origSend = res.send.bind(res);
+    res.send = (body) => {
+      try {
+        const ct = res.get("Content-Type") || "";
+        if (typeof body === "string" && ct.includes("text/html") && body.includes("</body>")) {
+          body = body.replace("</body>", LINK_OPENER_SCRIPT + "</body>");
+        }
+      } catch { /* never block a response on injection failure */ }
+      return origSend(body);
+    };
+    next();
+  });
+
+  // Open a link from rendered markdown in the OS default browser. http(s)/mailto
+  // open as-is; a relative link resolves against the open file's directory and
+  // must stay inside that document's folder tree (or an approved root) before it
+  // is handed to the OS opener. Loopback-only (the host guard already ran).
+  app.get("/open-external", async (req, res) => {
+    const r = resolveExternalLinkTarget(req.query.href, req.query.base, { isContained, fs, path });
+    if (!r.ok) return res.status(r.status || 400).json({ error: r.error });
+    try {
+      const openPkg = (await import("open")).default;
+      await openPkg(r.target);
+      return res.json({ ok: true, opened: r.target });
+    } catch (e) {
+      return res.status(500).json({ error: String((e && e.message) || e) });
+    }
   });
 
   // Home. In browse mode (no PR bound) this is the Discovery home — the review
