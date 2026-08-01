@@ -112,7 +112,7 @@ npx tippani <PR_ID> --refresh
 | `--ado-token=<t>` | Sign in with an access token instead of an interactive login. | `TIPPANI_ADO_TOKEN` |
 | `--local-repo=<path>` | Work from a local clone on disk, with no server round-trip. | `TIPPANI_LOCAL_REPO` |
 
-Precedence: **CLI flags > env vars > config file**.
+**When the same setting is provided in more than one place**, Tippani uses the first place it finds it, in this order: a command-line flag overrides an environment variable, which overrides a value saved in `~/.tippani/config.json`. In short, a flag always wins, and the config file is the fallback when you pass nothing.
 
 ## Configuration
 
@@ -135,11 +135,11 @@ Priority: CLI flags > env vars > config file.
 
 ## Connecting to your repositories
 
-Tippani reads and writes using **your own** credentials — it never stores a shared secret. The one place connection details matter is signing in to the service that hosts your repositories:
+Tippani signs in with **your own** credentials and keeps them **on your machine** — it never ships a shared secret and never sends your credentials anywhere except to the service that hosts your repositories. That host is the one place connection details matter:
 
 1. **Already signed in on this machine?** If your host has a command-line tool and you've signed in with it, Tippani picks that up automatically and never prompts.
 2. **Prefer a token?** Provide an access token with **Code (read & write)** permission via `--ado-token` (or the `TIPPANI_ADO_TOKEN` environment variable). This is how the assistant integration connects.
-3. **Neither?** Tippani asks you for a token once and remembers it.
+3. **Neither?** Tippani asks you for a token once and saves it locally (under `~/.tippani/`, on this machine only), so you aren't asked again.
 
 You only do this the first time; after that, Tippani connects on its own.
 
