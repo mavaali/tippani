@@ -1,5 +1,24 @@
 # Changelog
 
+## Unreleased — Remote spec authoring + Discovery + docs
+
+End-to-end **remote authoring** with no working tree: stage a branch, add or
+edit `.md` files, stage a PR (with an optional Spec-review work-item link), and
+publish the whole set with one `push_staged_changes`. From branch `clickstop-2`.
+
+- **Discovery home** — Specs (ADO Code Search), Review queue, Work items (WIQL),
+  Branches (remote + local), and a personal Reading list, all in one screen.
+- **Staged everywhere** — replies, resolutions, file adds/edits, PR intents, and
+  draft→published promotions are staged locally; one **Push to remote** crosses
+  into Azure DevOps. Staged PR cards can be deleted before publishing.
+- **Shared staged-changes ticker** refreshed from both Branches and the Review
+  queue.
+- **MCP** — exactly 40 tools; the four authoring tools are `stage_branch`,
+  `stage_spec`, `stage_spec_pr`, and `push_staged_changes`.
+- **Docs** — rewritten [README](README.md) (User Manual + hub), a full
+  [User Guide](docs/user-guide.md) with screenshots of every screen, and a
+  complete [MCP & API Reference](docs/mcp-api.md).
+
 ## Unreleased — Personal comments + local (ADO-less) review
 
 File/branch-scoped **personal comments** on a draft spec (no PR), and a
