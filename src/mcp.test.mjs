@@ -75,6 +75,7 @@ const stagedBranches = [];
 const stagedFiles = [];
 const stagedPrs = [];
 let aggregatePushCalls = 0;
+const setAdoTokenCalls = [];
 async function fakeSetViewed(threadId, commentId) {
   viewedCalls.push({ threadId, commentId });
   return { ok: true, status: 200, body: { ok: true, viewedCommentId: commentId == null ? null : String(commentId) } };
@@ -92,6 +93,7 @@ registerControlApi(app, {
   resolveThread: fakeResolve,
   stageResolve: (threadId) => { stageResolveCalls.push(threadId); return { ok: true, status: 200, body: { ok: true, staged: true, synced: false } }; },
   setViewed: fakeSetViewed,
+  setAdoToken: (token) => { setAdoTokenCalls.push(token); return token !== "bad-token"; },
   specDrafts,
   listPrs: async (q) => ({ prs: [{ id: 7, title: "Demo PR", author: "Kay" }], mine: q.creator !== "any", status: 1 }),
   // Clickstop 2: open_local_file forwards here.
@@ -145,7 +147,7 @@ const byName = Object.fromEntries(tools.map((t) => [t.name, t]));
 try {
   // --- Surface checks ---
   const expected = [
-    "open_pr",
+    "open_pr", "refresh_ado_token",
     "list_threads", "triage_summary", "show_feedback",
     "open_thread", "open_file", "get_thread", "focus_thread",
     "stage_draft", "clear_draft", "stage_resolve_thread", "get_spec",
@@ -158,7 +160,7 @@ try {
       "show_resolved_annotations", "open_branch", "open_branch_file", "open_local_file", "refresh_spec",
     "stage_branch", "stage_spec", "stage_spec_pr", "push_staged_changes",
   ];
-  check("tools: exactly 40 registered", tools.length === 40);
+  check("tools: exactly 41 registered", tools.length === 41);
   for (const n of expected) {
     check(`tools: includes ${n}`, !!byName[n]);
     check(`tools: ${n} has description`, typeof byName[n].description === "string" && byName[n].description.length > 20);
@@ -197,6 +199,17 @@ try {
     const r = await byName.list_threads.handler({});
     check("list_threads: returns both threads", r.threads.length === 2);
     check("list_threads: focus reported", r.focus.focusedThreadId === null);
+  }
+
+  // --- refresh_ado_token ---
+  {
+    const r = await byName.refresh_ado_token.handler({ token: "fresh-token" });
+    check("refresh_ado_token: forwards token to setAdoToken", setAdoTokenCalls.includes("fresh-token"));
+    check("refresh_ado_token: reports ok on accepted token", r && r.ok === true);
+    let rejected = false, rejStatus = 0;
+    try { await byName.refresh_ado_token.handler({ token: "bad-token" }); }
+    catch (e) { rejected = true; rejStatus = e.status; }
+    check("refresh_ado_token: rejected token surfaces as a 400 throw", rejected && rejStatus === 400);
   }
 
   // --- open_file (single-tab default: steers the open tab via /api/v1/nav) ---

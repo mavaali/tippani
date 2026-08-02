@@ -21,7 +21,7 @@ Start it as an MCP stdio server:
 tippani-mcp
 ```
 
-It registers **40 tools**. `open_pr` (or a Discovery tool like `list_prs` /
+It registers **41 tools**. `open_pr` (or a Discovery tool like `list_prs` /
 `search_specs`) launches a headless portal and returns a `portalUrl`; every
 other tool then operates on that open session. A parameter marked `*` is
 required.

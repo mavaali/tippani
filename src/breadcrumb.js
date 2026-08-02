@@ -60,17 +60,25 @@ const STAGED_HINT_SCRIPT = `<script>(function(){
     var centered=br.width/2; var clearOfRight=rr.left-br.left-er.width/2-12;
     e.style.left=Math.min(centered,clearOfRight)+'px';
   }
+  async function fetchCount(url){
+    try {
+      var r = await fetch(url); if (!r.ok) return 0;
+      var d = await r.json(); return (d && d.count) || 0;
+    } catch (x) { return 0; }
+  }
   async function refresh(){
     var e = el(); if (!e) return;
-    try {
-      var r = await fetch('/api/v1/staged'); if (!r.ok) { e.innerHTML=''; return; }
-      var d = await r.json(); var n = (d && d.count) || 0;
-      if (n > 0) {
-        e.innerHTML = 'You have <strong style="color:var(--cp-text,#e6edf3)">'+n+'</strong> staged change'+(n===1?'':'s')+' \u00b7 <a href="#" id="tpPush" style="color:var(--cp-accent,#316dca);text-decoration:none;font-weight:600">Push to remote</a>';
-        var p = document.getElementById('tpPush'); if (p) p.addEventListener('click', push);
-      } else { e.innerHTML=''; }
-      layout();
-    } catch (x) {}
+    // Sum BOTH staging systems: authoring intents (branches/files/PRs, staged
+    // via /api/v1/staged) and PR-mode review replies/resolves staged while
+    // reviewing an already-open PR (via /api/pending) — the latter is invisible
+    // here without this, even though pushing already syncs both (branches/push).
+    var counts = await Promise.all([fetchCount('/api/v1/staged'), fetchCount('/api/pending')]);
+    var n = counts[0] + counts[1];
+    if (n > 0) {
+      e.innerHTML = 'You have <strong style="color:var(--cp-text,#e6edf3)">'+n+'</strong> staged change'+(n===1?'':'s')+' \u00b7 <a href="#" id="tpPush" style="color:var(--cp-accent,#316dca);text-decoration:none;font-weight:600">Push to remote</a>';
+      var p = document.getElementById('tpPush'); if (p) p.addEventListener('click', push);
+    } else { e.innerHTML=''; }
+    layout();
   }
   async function push(ev){
     ev.preventDefault(); var e=el(); if(e) e.textContent='Pushing\u2026';

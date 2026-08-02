@@ -166,6 +166,21 @@ export function buildTools(http, session) {
       },
     },
     {
+      name: "refresh_ado_token",
+      description:
+        "Push a freshly-minted Azure DevOps bearer token to the ALREADY-RUNNING " +
+        "tippani portal so it never makes an ADO call with an expired token. Use " +
+        "this instead of calling open_pr again when a session is already open and " +
+        "the token just needs refreshing — open_pr relaunches/rebinds the portal, " +
+        "which this avoids. Only takes effect when tippani was launched with a " +
+        "host-supplied token (--ado-token / TIPPANI_ADO_TOKEN); it never switches " +
+        "to a different identity (PAT / az CLI).",
+      inputSchema: {
+        token: z.string().describe("Freshly-minted ADO bearer token (e.g. an Entra access token)"),
+      },
+      handler: ({ token }) => http.post("/api/v1/ado-token", { token }),
+    },
+    {
       name: "list_threads",
       description:
         "List every comment thread on the open PR with status, file, line, " +

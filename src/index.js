@@ -1378,7 +1378,7 @@ function buildHomePage(
       ? `/open/${pr.id}?owner=${encodeURIComponent(pr.project || project || "")}&repo=${encodeURIComponent(pr.repo || "")}`
       : `/open/${pr.id}`;
     return `<a class="pr-card" href="${escHtml(openHref)}" data-author="${escHtml(pr.author || "")}" data-project="${escHtml(pr.project || "(none)")}" data-activity="${activity}" data-status="${status}" data-search="${escHtml(((pr.title || "") + " " + (pr.author || "")).toLowerCase())}">
-      <div class="pr-top"><span class="pr-id">#${pr.id}</span><span class="pr-status">${statusLabel(pr.status)}</span>${pr.isDraft ? '<span class="pr-draft">Draft</span>' : ""}${roleBadge(pr.roles)}${pr.isDraft ? `<button type="button" class="pr-publish-btn" data-pr-id="${pr.id}" data-project="${escHtml(pr.project || "")}" data-repo="${escHtml(pr.repo || "")}" data-title="${escHtml(pr.title || "")}">Publish</button>` : ""}</div>
+      <div class="pr-top"><span class="pr-id">#${pr.id}</span><span class="pr-status">${statusLabel(pr.status)}</span>${pr.isDraft ? '<span class="pr-draft">Draft</span>' : ""}${roleBadge(pr.roles)}${pr.isDraft ? `<button type="button" class="pr-publish-btn" data-pr-id="${pr.id}" data-project="${escHtml(pr.project || "")}" data-repo="${escHtml(pr.repo || "")}" data-title="${escHtml(pr.title || "")}">Publish PR</button>` : ""}</div>
       <div class="pr-title">${escHtml(pr.title || "")}</div>
       <div class="pr-meta">${escHtml(pr.author || "")} \u00b7 ${escHtml(pr.source || "")} \u2192 ${escHtml(pr.target || "")}${pr.repo ? " \u00b7 " + escHtml(pr.repo) : ""}${pr.project ? " \u00b7 " + escHtml(pr.project) : ""}</div>
     </a>`;
@@ -1946,7 +1946,7 @@ table.wi-results { width: 100%; table-layout: fixed; border-collapse: collapse; 
     try { var d = await (await fetch('/api/v1/staged')).json(); (d.prPublishes || []).forEach(function (p) { ids[prPublishKey(p.project, p.repo, p.pullRequestId)] = true; }); } catch (e) {}
     document.querySelectorAll('.pr-publish-btn').forEach(function (b) {
       var staged = ids[prPublishKey(b.getAttribute('data-project'), b.getAttribute('data-repo'), b.getAttribute('data-pr-id'))];
-      b.textContent = staged ? 'Publish staged \u2713' : 'Publish';
+      b.textContent = staged ? 'Publish PR staged \u2713' : 'Publish PR';
       b.classList.toggle('pr-publish-staged', !!staged);
     });
   }
@@ -3339,7 +3339,7 @@ body { font-family: "Segoe UI", Aptos, Calibri, -apple-system, sans-serif; backg
    page's vertical space. */
 .pc-card .rh-summary { display: none; }
 .pc-card .rh-full { display: block; }
-.pc-card .pc-view .rh-body { max-height: calc(100vh - 160px); overflow-y: auto; }
+.pc-card .pc-view .rh-body { max-height: calc(100vh - 160px); overflow-y: auto; resize: vertical; }
 /* Replies (follow-up notes, e.g. the assistant recording how it addressed the comment). */
 .pc-replies { margin-top: 8px; border-top: 1px dashed var(--cp-border); padding-top: 6px; }
 .pc-reply { margin-top: 6px; padding-left: 8px; border-left: 2px solid var(--cp-accent); }
@@ -4190,7 +4190,7 @@ body.branch-mode .spec { background: transparent; border: none; box-shadow: none
 /* Item 9: cap a thread's comment list so a long thread doesn't push the last
    reply + reply box off-screen — older comments scroll internally; the latest
    comment stays visible. Scrollbar only appears when the list exceeds the cap. */
-.thread-comments { max-height: 42vh; overflow-y: auto; overflow-x: hidden; }
+.thread-comments { max-height: 42vh; overflow-y: auto; overflow-x: hidden; resize: vertical; }
 .comment-thread:hover { box-shadow: 0 4px 16px rgba(0,0,0,0.08); }
 .thread-active { border-left: 3px solid var(--cp-accent); }
 .thread-resolved { border-left: 3px solid var(--cp-success); opacity: 0.7; }
@@ -4262,7 +4262,7 @@ details[open] .resolved-summary::before { content: '▾ '; }
 .rh-thread.rh-expanded .rh-full { display: block; }
 .pc-card .rh-summary { display: none; }
 .pc-card .rh-full { display: block; }
-.pc-card .pc-view .rh-body { max-height: calc(100vh - 160px); overflow-y: auto; }
+.pc-card .pc-view .rh-body { max-height: calc(100vh - 160px); overflow-y: auto; resize: vertical; }
 .pc-replies { margin-top: 8px; border-top: 1px dashed var(--cp-border); padding-top: 6px; }
 .pc-reply { margin-top: 6px; padding-left: 8px; border-left: 2px solid var(--cp-accent); }
 .pc-reply-meta { font-size: 10px; font-weight: 700; color: var(--cp-accent); margin-bottom: 2px; }
@@ -5552,58 +5552,85 @@ if (PC_MODE && window.__PC) (function () {
   pcLoad();
 })();
 
-// Place inline comment bubbles on content blocks that have threads
-THREADS_DATA.forEach(td => {
-  if (!td.line) return;
-  const threadEl = document.querySelector('.comment-thread[data-thread-id="' + td.id + '"]');
-  const header = threadEl ? (threadEl.querySelector('.comment-anchor') || threadEl) : null;
+// Collect the outermost commentable blocks under 'container' in document
+// order, skipping a match already covered by an ancestor match (e.g. a 'pre'
+// nested inside a 'blockquote') — mirrors the dedup commentableEls applies via
+// its '.commentable'/'.ro-commentable' class check, without needing to mark up
+// content that isn't the primary #spec-content (e.g. a Proposed-view render).
+function collectCommentableBlocks(container) {
+  const blocks = [];
+  container.querySelectorAll(commentableSelector).forEach((el) => {
+    if (blocks.some((b) => b.contains(el))) return;
+    blocks.push(el);
+  });
+  return blocks;
+}
 
-  // Thread on another file: header navigates to that file (and focuses the thread).
-  const sameFile = !td.file || !SPEC_PATH || td.file === SPEC_PATH;
-  if (!sameFile) {
-    if (header) {
-      header.style.cursor = 'pointer';
-      header.title = 'Open this file and thread';
-      header.addEventListener('click', () => { location.href = '/goto/thread/' + td.id; });
+// Place inline comment bubbles for every reviewer thread onto 'blocks', using
+// 'rangeMap' (a SOURCE_MAP-shaped {blockIdx: {startLine,endLine}}) to find each
+// thread's target block. Reusable so the bubbles can be re-placed against the
+// Proposed view's own freshly-rendered blocks/ranges (#spec-current), not just
+// the initially-rendered #spec-content — otherwise Proposed view shows no
+// reviewer-comment anchors at all, since the initial placement's bubbles are
+// children of #spec-content, which stays hidden while Proposed is active.
+function placeInlineBubbles(blocks, rangeMap) {
+  THREADS_DATA.forEach(td => {
+    if (!td.line) return;
+    const threadEl = document.querySelector('.comment-thread[data-thread-id="' + td.id + '"]');
+    const header = threadEl ? (threadEl.querySelector('.comment-anchor') || threadEl) : null;
+
+    // Thread on another file: header navigates to that file (and focuses the thread).
+    const sameFile = !td.file || !SPEC_PATH || td.file === SPEC_PATH;
+    if (!sameFile) {
+      if (header && !header._inlineBubbleWired) {
+        header._inlineBubbleWired = true;
+        header.style.cursor = 'pointer';
+        header.title = 'Open this file and thread';
+        header.addEventListener('click', () => { location.href = '/goto/thread/' + td.id; });
+      }
+      return;
     }
-    return;
-  }
 
-  // Find the commentable block whose source-map range contains this line; if the
-  // exact line isn't inside a block (e.g. a heading or blank line), fall back to
-  // the nearest block so the thread still scrolls somewhere sensible.
-  let targetEl = null, bestKey = null, bestDist = Infinity;
-  for (const key of Object.keys(SOURCE_MAP)) {
-    const sm = SOURCE_MAP[key];
-    if (td.line >= sm.startLine && td.line <= sm.endLine) { targetEl = commentableEls[parseInt(key)]; break; }
-    const dist = td.line < sm.startLine ? sm.startLine - td.line : td.line - sm.endLine;
-    if (dist < bestDist) { bestDist = dist; bestKey = key; }
-  }
-  if (!targetEl && bestKey != null) targetEl = commentableEls[parseInt(bestKey)];
-  if (!targetEl) return;
-  const bubble = document.createElement('button');
-  bubble.className = 'inline-bubble ' + (td.resolved ? 'inline-bubble-resolved' : 'inline-bubble-active');
-  bubble.textContent = td.count;
-  bubble.title = (td.resolved ? 'Resolved' : 'Active') + ' — ' + td.count + ' comment' + (td.count > 1 ? 's' : '');
-  bubble.setAttribute('aria-label', (td.resolved ? 'Resolved' : 'Active') + ' thread, ' + td.count + ' comment' + (td.count > 1 ? 's' : ''));
-  bubble.addEventListener('click', (e) => {
-    e.stopPropagation();
-    if (threadEl) {
-      threadEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
-      threadEl.style.boxShadow = '0 0 0 2px ' + (td.resolved ? 'var(--cp-success)' : 'var(--cp-accent)');
-      setTimeout(() => threadEl.style.boxShadow = '', 2000);
+    // Find the commentable block whose source-map range contains this line; if the
+    // exact line isn't inside a block (e.g. a heading or blank line), fall back to
+    // the nearest block so the thread still scrolls somewhere sensible.
+    let targetEl = null, bestKey = null, bestDist = Infinity;
+    for (const key of Object.keys(rangeMap)) {
+      const sm = rangeMap[key];
+      if (td.line >= sm.startLine && td.line <= sm.endLine) { targetEl = blocks[parseInt(key)]; break; }
+      const dist = td.line < sm.startLine ? sm.startLine - td.line : td.line - sm.endLine;
+      if (dist < bestDist) { bestDist = dist; bestKey = key; }
+    }
+    if (!targetEl && bestKey != null) targetEl = blocks[parseInt(bestKey)];
+    if (!targetEl) return;
+    const bubble = document.createElement('button');
+    bubble.className = 'inline-bubble ' + (td.resolved ? 'inline-bubble-resolved' : 'inline-bubble-active');
+    bubble.textContent = td.count;
+    bubble.title = (td.resolved ? 'Resolved' : 'Active') + ' — ' + td.count + ' comment' + (td.count > 1 ? 's' : '');
+    bubble.setAttribute('aria-label', (td.resolved ? 'Resolved' : 'Active') + ' thread, ' + td.count + ' comment' + (td.count > 1 ? 's' : ''));
+    bubble.addEventListener('click', (e) => {
+      e.stopPropagation();
+      if (threadEl) {
+        threadEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        threadEl.style.boxShadow = '0 0 0 2px ' + (td.resolved ? 'var(--cp-success)' : 'var(--cp-accent)');
+        setTimeout(() => threadEl.style.boxShadow = '', 2000);
+      }
+    });
+    targetEl.appendChild(bubble);
+
+    // Reverse direction: clicking the thread header scrolls the document to the
+    // corresponding content block and flashes it. Wired once — the header lives
+    // in the persistent sidebar, not the swapped view content, so a later
+    // re-placement (e.g. entering Proposed view) must not double-wire it.
+    if (header && !header._inlineBubbleWired) {
+      header._inlineBubbleWired = true;
+      header.style.cursor = 'pointer';
+      header.title = 'Jump to this location in the document';
+      header.addEventListener('click', () => { scrollDocToThread(td.id); });
     }
   });
-  targetEl.appendChild(bubble);
-
-  // Reverse direction: clicking the thread header scrolls the document to the
-  // corresponding content block and flashes it.
-  if (header) {
-    header.style.cursor = 'pointer';
-    header.title = 'Jump to this location in the document';
-    header.addEventListener('click', () => { scrollDocToThread(td.id); });
-  }
-});
+}
+placeInlineBubbles(commentableEls, SOURCE_MAP);
 
 // GitHub-style diff overlay for a staged spec edit: for each change hunk, hide
 // the affected rendered block and show a red "Current" box + green "Proposed"
@@ -5776,7 +5803,14 @@ async function applyView(view) {
         const r = await fetch('/api/v1/specs/' + CURRENT_FILE_INDEX + '/render?draft=1');
         if (r.ok) d = await r.json();
       }
-      if (d && current) { current.innerHTML = d.html || ''; if (window.tippaniRenderMermaid) window.tippaniRenderMermaid(current); }
+      if (d && current) {
+        current.innerHTML = d.html || '';
+        if (window.tippaniRenderMermaid) window.tippaniRenderMermaid(current);
+        // Re-anchor reviewer comment bubbles onto the Proposed content's own
+        // blocks/ranges — the initial placement's bubbles live on #spec-content,
+        // which is now hidden, so without this Proposed view shows none at all.
+        placeInlineBubbles(collectCommentableBlocks(current), d.ranges || {});
+      }
     } catch {}
     if (!editing) { if (content) content.style.display = 'none'; if (current) current.style.display = ''; }
   } else {
@@ -8014,8 +8048,8 @@ async function main() {
       content = raw || "";
     }
     const { body } = stripFrontmatter(content);
-    const { html } = await renderSpecBody(body, specSanitizeSchema, { rewriteImagesForFileIndex: idx });
-    return { html };
+    const { html, ranges } = await renderSpecBody(body, specSanitizeSchema, { rewriteImagesForFileIndex: idx });
+    return { html, ranges };
   }
 
   // Stateless preview of the user's LIVE (uncommitted) editor buffer for the
@@ -8026,10 +8060,10 @@ async function main() {
   async function computeSpecPreview(idx, { original = "", proposed = "" } = {}) {
     const { body: propBody } = stripFrontmatter(String(proposed || ""));
     const { body: origBody } = stripFrontmatter(String(original || ""));
-    const { html } = await renderSpecBody(propBody, specSanitizeSchema, { rewriteImagesForFileIndex: idx });
+    const { html, ranges } = await renderSpecBody(propBody, specSanitizeSchema, { rewriteImagesForFileIndex: idx });
     let hunks = [];
     try { hunks = await computeSpecDiffHunks(origBody, propBody); } catch { hunks = []; }
-    return { html, hunks, source: "user" };
+    return { html, hunks, source: "user", ranges };
   }
 
   // List PRs to review (item 6). Defaults to the authenticated user's active
