@@ -810,5 +810,32 @@ export function buildTools(http, session) {
         return withHints("push_staged_changes", r, {});
       },
     },
+    {
+      name: "close_tippani",
+      description:
+        "Close Tippani explicitly when the review session is finished: steer the " +
+        "open browser tab to a closed page, then shut down the background " +
+        "review-portal process(es) gracefully and clear their registry entries. " +
+        "A later open_pr / open_branch / discovery call relaunches a fresh portal.",
+      inputSchema: {},
+      handler: async () => {
+        // Best-effort: land the open tab on the terminal /closed page before the
+        // server goes away, so the browser shows a clean closed state rather than
+        // a dead-connection error. Skipped silently if no portal is up.
+        let browserNudged = false;
+        try {
+          await http.post("/api/v1/nav", { path: "/closed" });
+          browserNudged = true;
+          await new Promise((r) => setTimeout(r, 1400));
+        } catch {}
+        // Tear down every portal this shim owns (graceful: kills the background
+        // process and removes its registry entry).
+        let closed = false;
+        if (session && typeof session.stop === "function") {
+          try { session.stop(); closed = true; } catch {}
+        }
+        return { ok: true, closed, browserNudged };
+      },
+    },
   ];
 }

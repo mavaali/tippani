@@ -159,8 +159,9 @@ try {
       "delete_all_annotations", "navigate_annotations", "jump_to_annotation",
       "show_resolved_annotations", "open_branch", "open_branch_file", "open_local_file", "refresh_spec",
     "stage_branch", "stage_spec", "stage_spec_pr", "push_staged_changes",
+    "close_tippani",
   ];
-  check("tools: exactly 41 registered", tools.length === 41);
+  check("tools: exactly 42 registered", tools.length === 42);
   for (const n of expected) {
     check(`tools: includes ${n}`, !!byName[n]);
     check(`tools: ${n} has description`, typeof byName[n].description === "string" && byName[n].description.length > 20);
@@ -341,6 +342,19 @@ try {
     check("separate-tabs: open_thread opens a new tab", tabUrlCalls.includes("/goto/thread/42"));
     check("separate-tabs: open_file opens a new tab", tabUrlCalls.includes("/file/1"));
     check("separate-tabs: show_feedback opens a new tab", tabUrlCalls.includes("/feedback"));
+  }
+
+  // --- close_tippani: stops owned portals; best-effort browser nudge ---
+  {
+    let stopCalls = 0;
+    const closeSession = { stop: () => { stopCalls++; } };
+    // http whose nav POST fails fast → browserNudged false, no 1.4s wait.
+    const failHttp = createHttpClient({ baseUrl: BASE, token: TOKEN, clientName: "mcp-test", fetch: async () => { throw new Error("no portal"); } });
+    const closeTools = Object.fromEntries(buildTools(failHttp, closeSession).map((t) => [t.name, t]));
+    const r = await closeTools.close_tippani.handler({});
+    check("close_tippani: returns ok", r.ok === true);
+    check("close_tippani: stops owned portals", stopCalls === 1 && r.closed === true);
+    check("close_tippani: reports browser not nudged when no portal", r.browserNudged === false);
   }
 
   // --- get_spec ---
