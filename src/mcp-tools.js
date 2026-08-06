@@ -811,6 +811,45 @@ export function buildTools(http, session) {
       },
     },
     {
+      name: "start_tippani",
+      description:
+        "Start the Tippani portal (browse mode) without opening a specific PR and " +
+        "return its `portalUrl`. Use this to bring Tippani up on demand; the portal " +
+        "runs in the background, so SHOW the returned portalUrl to the user as a " +
+        "clickable link. The entry tools (open_pr, list_prs, search_specs, " +
+        "open_branch, …) also start the portal themselves — this is the explicit " +
+        "start. Safe to call when already running (returns the existing portalUrl).",
+      inputSchema: {},
+      handler: async () => {
+        if (!session || typeof session.ensureBrowsePortal !== "function") {
+          throw new Error("Portal launcher unavailable in this context.");
+        }
+        await session.ensureBrowsePortal();
+        const portalUrl = typeof session.getBaseUrl === "function" ? session.getBaseUrl() : null;
+        return {
+          portalUrl,
+          running: !!(typeof session.getToken === "function" && session.getToken()),
+          note:
+            "Tippani is running in the background — share the portalUrl as a " +
+            "clickable link so the user can open the review UI.",
+        };
+      },
+    },
+    {
+      name: "get_portal_url",
+      description:
+        "Return the Tippani portal `portalUrl` and whether it is currently " +
+        "`running`. This does NOT start the portal — use start_tippani (or an " +
+        "entry tool like open_pr) to launch it. When not running, `running` is " +
+        "false and portalUrl is the address the portal will use once started.",
+      inputSchema: {},
+      handler: async () => {
+        const running = !!(session && typeof session.getToken === "function" && session.getToken());
+        const portalUrl = session && typeof session.getBaseUrl === "function" ? session.getBaseUrl() : null;
+        return { portalUrl, running };
+      },
+    },
+    {
       name: "close_tippani",
       description:
         "Close Tippani explicitly when the review session is finished: steer the " +

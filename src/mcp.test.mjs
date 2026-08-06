@@ -135,11 +135,14 @@ const ensurePortalCalls = [];
 const openUrlCalls = [];
 const browsePortalCalls = [];
 const activePortalCalls = [];
+let stubToken = null;
 const stubSession = {
-  ensurePortal: async (opts) => { ensurePortalCalls.push(opts); return { reused: false, prId: opts.prId }; },
-  ensureBrowsePortal: async () => { browsePortalCalls.push(1); },
+  ensurePortal: async (opts) => { ensurePortalCalls.push(opts); stubToken = "tok"; return { reused: false, prId: opts.prId, url: "http://localhost:3847" }; },
+  ensureBrowsePortal: async () => { browsePortalCalls.push(1); stubToken = "tok"; },
   ensureActivePortal: async () => { activePortalCalls.push(1); },
   openUrl: async (path) => { openUrlCalls.push(path); },
+  getBaseUrl: () => "http://localhost:3847",
+  getToken: () => stubToken,
 };
 const tools = buildTools(http, stubSession);
 const byName = Object.fromEntries(tools.map((t) => [t.name, t]));
@@ -159,15 +162,31 @@ try {
       "delete_all_annotations", "navigate_annotations", "jump_to_annotation",
       "show_resolved_annotations", "open_branch", "open_branch_file", "open_local_file", "refresh_spec",
     "stage_branch", "stage_spec", "stage_spec_pr", "push_staged_changes",
+    "start_tippani", "get_portal_url",
     "close_tippani",
   ];
-  check("tools: exactly 42 registered", tools.length === 42);
+  check("tools: exactly 44 registered", tools.length === 44);
   for (const n of expected) {
     check(`tools: includes ${n}`, !!byName[n]);
     check(`tools: ${n} has description`, typeof byName[n].description === "string" && byName[n].description.length > 20);
   }
   for (const n of ["post_reply", "resolve_thread", "mark_viewed", "stage_spec_edit", "commit_spec", "create_branch", "push_spec", "create_spec_pr"]) {
     check(`tools: excludes direct/redundant ${n}`, !byName[n]);
+  }
+
+  // --- get_portal_url / start_tippani (lifecycle) ---
+  {
+    stubToken = null; // simulate no portal yet
+    const before = await byName.get_portal_url.handler({});
+    check("get_portal_url: not running before start", before.running === false);
+    check("get_portal_url: still returns the address", before.portalUrl === "http://localhost:3847");
+    const n0 = browsePortalCalls.length;
+    const started = await byName.start_tippani.handler({});
+    check("start_tippani: launches a browse portal", browsePortalCalls.length === n0 + 1);
+    check("start_tippani: returns portalUrl", started.portalUrl === "http://localhost:3847");
+    check("start_tippani: reports running", started.running === true);
+    const after = await byName.get_portal_url.handler({});
+    check("get_portal_url: running after start", after.running === true);
   }
 
   // --- open_pr ---
