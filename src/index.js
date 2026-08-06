@@ -66,8 +66,8 @@ import {
   summarizeNonMarkdown,
 } from "./config-util.js";
 import { resolveImagePath, imageContentType, isLfsPointer, secureImageHeaders, isValidRepoId } from "./image-src.js";
-import { cssVariables, changeTypeBadge, escHtml, stripMarkdown, jsonForScript } from "./html-util.js";
-import { getSpecContentAt, getSpecBlobAt, buildSpecWebUrl } from "./ado-read.js";
+import { cssVariables, changeTypeBadge, escHtml, stripMarkdown, jsonForScript, errorPage } from "./html-util.js";
+import { getSpecContentAt, getSpecBlobAt, buildSpecWebUrl, getLastCommitAuthor } from "./ado-read.js";
 import { branchesForRepo, repoOptions, branchNamePlaceholder, sortBranches, shortBranchName, summarizeBranchRef } from "./branch-list.js";
 import { branchFileRows, visibleFileCount, mdPathsFromChanges, buildSpecHref, stagedFileComparison } from "./branch-files.js";
 import { validateLocalRepo, resolveGitDir, parseGitHead, parsePackedRefs, mergeLocalBranches, parseOriginHeadDefault, userCreatedBranches } from "./local-repo.js";
@@ -985,8 +985,8 @@ function buildPickerPage(pr, changedFiles, threads = []) {
       const parentPath = f.path.split("/").slice(0, -1).join("/") + "/";
       const badge = changeTypeBadge(f.changeType);
       const badgeClass = badge.color === "success" ? "badge-success" : "badge-accent";
-      return `<a href="/file/${i}" class="file-card">
-        <div class="file-icon">📄</div>
+      return `<a href="/file/${i}" class="file-card" onclick="document.body.classList.add('nav-loading')">
+        <div class="file-icon"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" aria-hidden="true"><path d="M4 1.5h5L12.5 5v9a.5.5 0 0 1-.5.5H4a.5.5 0 0 1-.5-.5V2a.5.5 0 0 1 .5-.5Z"/><path d="M9 1.5V5h3.5"/></svg></div>
         <div class="file-info">
           <div class="file-name">${escHtml(fileName)}</div>
           <div class="file-path">${escHtml(parentPath)}</div>
@@ -1022,7 +1022,7 @@ body { font-family: "Segoe UI", Aptos, Calibri, -apple-system, BlinkMacSystemFon
 .pr-card h1 { font-size: 19px; font-weight: 700; margin-bottom: 6px; text-align: center; }
 .pr-meta { font-size: 13px; color: var(--cp-text-muted); display: flex; align-items: center; justify-content: center; gap: 8px; flex-wrap: wrap; }
 .pr-meta .pr-badge { display: inline-block; padding: 2px 10px; border-radius: 99px; font-size: 11px; font-weight: 600; background: var(--cp-accent-soft); color: var(--cp-accent); }
-.pr-desc { margin-top: 6px; font-size: 13px; color: var(--cp-text-muted); line-height: 1.5; text-align: center; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.pr-desc { margin-top: 10px; font-size: 13px; color: var(--cp-text-muted); line-height: 1.5; text-align: center; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 .pr-desc.expanded { -webkit-line-clamp: unset; overflow: visible; }
 .pr-desc-toggle { margin-top: 4px; background: none; border: none; color: var(--cp-accent); cursor: pointer; font-size: 12px; font-weight: 600; }
 
@@ -1030,15 +1030,20 @@ body { font-family: "Segoe UI", Aptos, Calibri, -apple-system, BlinkMacSystemFon
 
 .file-list { display: flex; flex-direction: column; gap: 6px; }
 
-.file-card { display: flex; align-items: center; gap: 14px; padding: 14px 18px; background: var(--cp-surface); border: 1px solid var(--cp-border); border-radius: 12px; text-decoration: none; color: var(--cp-text); transition: all 0.15s; cursor: pointer; }
+.file-card { display: flex; align-items: center; gap: 14px; padding: 11px 16px; background: var(--cp-surface); border: 1px solid var(--cp-border); border-radius: 12px; text-decoration: none; color: var(--cp-text); transition: all 0.15s; cursor: pointer; }
 .file-card:hover { background: var(--cp-accent-soft); border-color: var(--cp-accent); box-shadow: 0 2px 8px rgba(0,0,0,0.06); }
-.file-icon { font-size: 22px; flex-shrink: 0; }
+.file-icon { flex-shrink: 0; display: flex; align-items: center; color: var(--cp-text-muted); }
+.file-icon svg { width: 20px; height: 20px; }
 .file-info { flex: 1; min-width: 0; }
 .file-name { font-size: 14px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.file-path { font-size: 12px; color: var(--cp-text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 2px; }
+.file-path { font-size: 12px; color: var(--cp-text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 4px; }
 .badge { display: inline-block; padding: 2px 10px; border-radius: 99px; font-size: 11px; font-weight: 600; flex-shrink: 0; }
 .badge-accent { background: var(--cp-accent-soft); color: var(--cp-accent); }
 .badge-success { background: rgba(22,163,74,0.1); color: var(--cp-success); }
+/* Navigation loading bar: shown when opening a file (full-page nav). */
+body.nav-loading { cursor: progress; }
+body.nav-loading::after { content: ''; position: fixed; left: 0; top: 0; height: 2px; width: 100%; background: var(--cp-accent); transform-origin: left; animation: navLoad 1.4s ease-out forwards; z-index: 9999; }
+@keyframes navLoad { 0% { transform: scaleX(0); } 55% { transform: scaleX(0.7); } 100% { transform: scaleX(0.96); } }
 
 <\/style>
 <script>
@@ -3331,6 +3336,7 @@ body { font-family: "Segoe UI", Aptos, Calibri, -apple-system, sans-serif; backg
 .rh-thread.rh-expanded .rh-summary { display: none; }
 .rh-full { display: none; margin-top: 6px; }
 .rh-thread.rh-expanded .rh-full { display: block; }
+.rh-thread.rh-expanded:not(.pc-card) .rh-full { max-height: 55vh; overflow-y: auto; }
 /* Personal comments always show their full text (not a clamped 2-line summary);
    a single very long comment scrolls within the card rather than overflowing the
    page's vertical space. */
@@ -3373,7 +3379,7 @@ body { font-family: "Segoe UI", Aptos, Calibri, -apple-system, sans-serif; backg
 .ro-doc a { color: var(--cp-accent); }
 .ro-doc p, .ro-doc li, .ro-doc a, .ro-doc code { overflow-wrap: anywhere; }
 .ro-doc code { font-family: Consolas, "Courier New", monospace; font-size: 0.9em; background: var(--cp-surface-soft); padding: 1px 5px; border-radius: 5px; }
-.ro-doc pre { background: #1e1e1e; color: #d4d4d4; padding: 14px 16px; border-radius: 10px; overflow-x: auto; margin: 12px 0; }
+.ro-doc pre { background: var(--cp-code-bg); color: var(--cp-code-fg); border: 1px solid var(--cp-border); padding: 14px 16px; border-radius: 10px; overflow-x: auto; margin: 12px 0; }
 .ro-doc pre code { background: none; padding: 0; color: inherit; }
 .ro-doc blockquote { border-left: 3px solid var(--cp-border-strong); padding-left: 14px; color: var(--cp-text-muted); margin: 12px 0; }
 .ro-doc table { border-collapse: collapse; margin: 14px 0; font-size: 14px; max-width: 100%; }
@@ -4025,7 +4031,7 @@ function buildSpecPage(specHtml, toc, metadata, pr, threads, specPath, sourceMap
     .map((f, i) => {
       const name = f.path.split("/").pop();
       const active = i === currentFileIndex ? "file-nav-active" : "";
-      return `<a href="/file/${i}" class="file-nav-item ${active}" title="${escHtml(f.path)}">${escHtml(name)}</a>`;
+      return `<a href="/file/${i}" class="file-nav-item ${active}" title="${escHtml(f.path)}" onclick="document.body.classList.add('nav-loading')">${escHtml(name)}</a>`;
     })
     .join("\n");
 
@@ -4095,7 +4101,7 @@ button:focus-visible { outline: 2px solid var(--cp-accent); outline-offset: 2px;
 .brand-sub { font-size: 11px; font-weight: 400; color: var(--cp-text-muted); flex-shrink: 0; white-space: nowrap; }
 .hdr-sep { color: var(--cp-border); margin: 0 2px; }
 .pr-info { min-width: 0; }
-.pr-info h1 { font-size: 14px; font-weight: 600; line-height: 1.3; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pr-info h1 { font-size: 15px; font-weight: 700; line-height: 1.3; color: var(--cp-text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .pr-meta { font-size: 11px; color: var(--cp-text-muted); margin-top: 1px; display: flex; align-items: center; gap: 4px; }
 .comment-count-active { color: var(--cp-accent); font-weight: 600; }
 .comment-count-resolved { color: var(--cp-success); font-weight: 500; }
@@ -4115,6 +4121,16 @@ button:focus-visible { outline: 2px solid var(--cp-accent); outline-offset: 2px;
 
 /* 3-column layout */
 .layout { display: flex; flex: 1; min-height: 0; }
+/* Narrow viewports: shrink the side rails, then drop the right rail entirely. */
+@media (max-width: 1000px) {
+  .sidebar-left { width: 200px; }
+  .sidebar-right { width: 240px; }
+}
+@media (max-width: 760px) {
+  .sidebar-right { display: none; }
+  .sidebar-left { width: 180px; }
+  .main-content { padding: 0 16px 32px; }
+}
 
 /* Resize handles */
 .resize-handle { width: 5px; flex-shrink: 0; cursor: col-resize; background: transparent; position: relative; z-index: 10; transition: background 0.15s; }
@@ -4126,10 +4142,11 @@ body.col-resizing * { cursor: col-resize !important; user-select: none !importan
 
 /* Left sidebar */
 .sidebar-left { width: 260px; flex-shrink: 0; display: flex; flex-direction: column; border-right: 1px solid var(--cp-border); background: var(--cp-bg-elevated); overflow: hidden; }
-.sidebar-left-scroll { flex: 1; overflow-y: auto; padding: 16px; }
+.sidebar-left-scroll { flex: 1; overflow-y: auto; padding: 16px; -webkit-mask-image: linear-gradient(to bottom, transparent 0, black 12px, black calc(100% - 16px), transparent 100%); mask-image: linear-gradient(to bottom, transparent 0, black 12px, black calc(100% - 16px), transparent 100%); }
 .sidebar-section-label { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; color: var(--cp-text-muted); margin-bottom: 8px; margin-top: 16px; }
 .sidebar-section-label:first-child { margin-top: 0; }
 .sidebar-section-label:first-child { margin-top: 0; }
+.sidebar-section-label-sub { margin-top: 20px; padding-top: 12px; border-top: 1px solid var(--cp-border); font-size: 10px; opacity: 0.9; }
 
 .toc-item { display: block; font-size: 13px; padding: 4px 8px; border-left: 2px solid transparent; color: var(--cp-text-muted); text-decoration: none; transition: all 0.12s; border-radius: 0 4px 4px 0; }
 .toc-item:hover { color: var(--cp-text); background: var(--cp-accent-soft); text-decoration: none; }
@@ -4138,6 +4155,10 @@ body.col-resizing * { cursor: col-resize !important; user-select: none !importan
 .file-nav-item { display: block; font-size: 12px; padding: 5px 8px; color: var(--cp-text-muted); text-decoration: none; border-radius: 6px; transition: all 0.12s; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .file-nav-item:hover { background: var(--cp-accent-soft); color: var(--cp-text); text-decoration: none; }
 .file-nav-active { background: var(--cp-highlight); color: var(--cp-accent); font-weight: 600; }
+/* Navigation loading bar: shown when opening a file (full-page nav). */
+body.nav-loading { cursor: progress; }
+body.nav-loading::after { content: ''; position: fixed; left: 0; top: 0; height: 2px; width: 100%; background: var(--cp-accent); transform-origin: left; animation: navLoad 1.4s ease-out forwards; z-index: 9999; }
+@keyframes navLoad { 0% { transform: scaleX(0); } 55% { transform: scaleX(0.7); } 100% { transform: scaleX(0.96); } }
 
 /* Main content */
 .main-content { flex: 1; min-width: 0; overflow-y: auto; padding: 0 40px 40px; background: var(--cp-bg); scroll-padding-top: 56px; }
@@ -4174,7 +4195,7 @@ body.sidebar-mode-comments .spec .rh-marker { display: none !important; }
 .spec td { padding: 8px 12px; border: 1px solid var(--cp-border); }
 .spec tr:nth-child(even) td { background: var(--cp-surface-soft); }
 .spec code { background: var(--cp-surface-soft); padding: 1px 5px; border-radius: 4px; font-family: Consolas, "Courier New", monospace; font-size: 13px; border: 1px solid var(--cp-border); }
-.spec pre { background: #1e1e1e; color: #d4d4d4; padding: 16px; border-radius: 10px; overflow-x: auto; margin: 1rem 0; }
+.spec pre { background: var(--cp-code-bg); color: var(--cp-code-fg); border: 1px solid var(--cp-border); padding: 16px; border-radius: 10px; overflow-x: auto; margin: 1rem 0; }
 .spec pre code { background: none; padding: 0; color: inherit; border: none; font-size: 13px; }
 .spec ul, .spec ol { padding-left: 1.5rem; margin-bottom: 0.75rem; }
 .spec li { margin-bottom: 0.2rem; line-height: 1.6; }
@@ -4286,6 +4307,7 @@ details[open] .resolved-summary::before { content: '▾ '; }
 .rh-thread.rh-expanded .rh-summary { display: none; }
 .rh-full { display: none; margin-top: 6px; }
 .rh-thread.rh-expanded .rh-full { display: block; }
+.rh-thread.rh-expanded:not(.pc-card) .rh-full { max-height: 55vh; overflow-y: auto; }
 .pc-card .rh-summary { display: none; }
 .pc-card .rh-full { display: block; }
 .pc-card .pc-view .rh-body { max-height: calc(100vh - 160px); overflow-y: auto; resize: vertical; }
@@ -4348,8 +4370,8 @@ body.show-markers .rh-marker { display: inline-flex; }
 .review-btn { padding: 10px 28px; font-size: 14px; font-weight: 700; border-radius: 8px; border: none; cursor: pointer; transition: all 0.15s; font-family: inherit; }
 .review-btn-approve { background: var(--cp-success); color: #fff; }
 .review-btn-approve:hover { opacity: 0.9; }
-.review-btn-changes { background: transparent; color: var(--cp-danger); border: 1.5px solid var(--cp-danger); }
-.review-btn-changes:hover { background: var(--cp-danger); color: #fff; }
+.review-btn-changes { background: transparent; color: var(--cp-text); border: 1.5px solid var(--cp-border-strong); }
+.review-btn-changes:hover { background: var(--cp-surface-soft); color: var(--cp-text); }
 
 /* Sync status bar */
 .sync-bar { display: none; height: 36px; align-items: center; justify-content: center; gap: 10px; background: var(--cp-surface-soft); border-top: 1px solid var(--cp-border); font-size: 12px; color: var(--cp-text-muted); flex-shrink: 0; }
@@ -4449,7 +4471,7 @@ ${ctx ? renderCrumbBar([{ label: "Home", href: "/discovery" }, { label: ctx.back
     <div class="sidebar-left-scroll">
       <div class="tp-pane-head"><span class="sidebar-section-label">Contents</span><button type="button" class="tp-collapse-btn" onclick="tpPaneCollapse('left')" title="Collapse" aria-label="Collapse contents">«</button></div>
       ${tocHtml}
-      ${ctx ? "" : `<div class="sidebar-section-label" style="margin-top:24px;">Files in PR</div>
+      ${ctx ? "" : `<div class="sidebar-section-label sidebar-section-label-sub">Files in PR</div>
       ${filesNavHtml}`}
     </div>
     <button type="button" class="tp-rail" onclick="tpPaneCollapse('left')" title="Expand contents" aria-label="Expand contents"><span>»</span><span class="tp-rail-label">Contents</span></button>
@@ -7810,7 +7832,7 @@ async function main() {
       res.type("html").send(buildReadonlySpecPage({ title, bodyHtml, toc, specPath, repo: repoName, adoUrl, backHref, backLabel, historyUrl, sourceMap: ranges, reviewing, editMode, commentCount, reviewRepo: repoId, reviewBranch: branch, reviewPath: specPath, currentUser: me?.displayName || "You", personalComments, pcDataSeq }));
     } catch (e) {
       console.error(`/spec read-only failed for ${specPath}:`, e.message);
-      res.status(502).send("Could not open the spec. Check the server console.");
+      res.status(502).type("html").send(errorPage({ title: "Couldn't open the spec", message: "Check the server console for details.", backHref: "/", backLabel: "Back to files" }));
     }
   });
 
@@ -8014,7 +8036,11 @@ async function main() {
         try { buf = fs.readFileSync(cls.abs); } catch { return res.status(404).end(); }
         if (!buf || buf.length === 0) return res.status(404).end();
         if (isLfsPointer(buf)) return res.status(502).end();
-        return res.set("Content-Type", cls.type).set(secureImageHeaders()).send(buf);
+        // Local working-tree files change while a doc is being reviewed, so they
+        // must never be cached (the shared header's max-age would serve stale
+        // bytes after an edit). Override to no-store; keep the security headers.
+        return res.set("Content-Type", cls.type).set(secureImageHeaders())
+                  .set("Cache-Control", "no-store").send(buf);
       }
       const repoId = String(req.query.repo || "").trim();
       const specPath = String(req.query.spec || "").trim();
@@ -8145,7 +8171,7 @@ async function main() {
 
       res.type("html").send(buildSpecPage(specHtml, toc, metadata, _pr, allThreads, filePath, sourceMap, _changedFiles, idx, body, canEdit, baseObjectId, viewedMap, viewedError, !!_pr && !_pr.isDraft, null, pcForReview));
     } catch (e) {
-      res.status(500).send("Error rendering spec. Check the server console for details.");
+      res.status(500).type("html").send(errorPage({ title: "Couldn't render this file", message: "The spec failed to render. Check the server console for details.", backHref: "/", backLabel: "Back to files" }));
       console.error("Spec render error:", e.message);
     }
   });

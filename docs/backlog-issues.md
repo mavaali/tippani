@@ -109,3 +109,25 @@ Red implies destructive. "Request Changes" is routine in a review workflow.
 Cards at 14px + 18px padding work for 3 files but require scrolling at 10+.
 
 **Fix:** Reduce padding to `10px 14px` when file count > 6, or add a compact view toggle.
+
+---
+
+## Issue 13: Self-acquired ADO token is not refreshed on mid-session expiry
+**Label:** `P1` `auth`
+
+When no token is injected, the MCP shim mints an AAD bearer once from the user's
+CLI at startup (`acquireAdoTokenFromCli` in `mcp.js` → Git Credential Manager, then
+Azure CLI). AAD access tokens expire in ~1h, but the self-acquired token is never
+re-minted, so a long session's ADO tools (`open_pr`, `list_prs`, PR review) start
+failing with an auth error until the server is restarted.
+
+**Scope it to the self-acquired path only.** When the token was **host-injected**
+(`--ado-token` / `TIPPANI_ADO_TOKEN` at spawn, or pushed via
+`POST /api/v1/ado-token`), tippani must keep its current behavior — it never
+silently swaps a host token; the host owns refresh. This fix applies **only** when
+tippani acquired the token itself via the CLI fallback.
+
+**Fix:** track whether the live bearer was self-acquired (CLI fallback) vs
+host-supplied. For the self-acquired case, re-run `acquireAdoTokenFromCli` and swap
+the live bearer when it is near expiry or on a 401 from ADO, gated by
+`inspectAdoToken` as usual. Leave host-token mode untouched.
