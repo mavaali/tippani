@@ -16,7 +16,7 @@ export const NEXT_STEP_HINTS = {
   stage_branch: "Branch staged locally. Stage files and an optional PR intent, then call push_staged_changes when ready.",
   stage_spec: "File staged locally. Stage more changes or call push_staged_changes when ready.",
   stage_spec_pr: "PR intent staged locally. Call push_staged_changes when the branch and files are ready.",
-  push_staged_changes: "Staged changes published. Review the per-target results and retry only failures.",
+  push_staged_changes: "Staged changes published. Review the per-target results and retry only failures. If the reviewing page is open in a browser, call refresh_spec now so the user sees the published result.",
 };
 
 export function nextStep(tool) {

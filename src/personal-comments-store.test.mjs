@@ -30,6 +30,18 @@ test("key is stable and path-scoped", () => {
   assert.notEqual(a, personalCommentsKey(R, B, "docs/other.md"));
 });
 
+test("empty, null, and undefined branch resolve to the SAME key (file: local files)", () => {
+  // A file:-scheme local file has no branch; the page render passes "" while an
+  // MCP caller may pass null/undefined. All three must hash to one store so an
+  // annotation written under "" is readable when a caller passes null.
+  const fileRepo = "file:C:\\x\\y.md";
+  const empty = personalCommentsKey(fileRepo, "", F);
+  assert.equal(empty, personalCommentsKey(fileRepo, null, F));
+  assert.equal(empty, personalCommentsKey(fileRepo, undefined, F));
+  // A real branch still keys differently.
+  assert.notEqual(empty, personalCommentsKey(fileRepo, "main", F));
+});
+
 test("absent file loads as empty list", () => {
   const dir = tmpDir();
   assert.deepEqual(loadPersonalComments(dir, R, B, F), []);

@@ -757,17 +757,17 @@ export function registerControlApi(app, deps) {
       res.status(502).json({ error: String(e?.message || e) });
     }
   };
-  app.get("/api/v1/personal-comments/all", requireAuth(), mcpAc(mcpReadPersonalComments, "read personal comments"));
-  app.post("/api/v1/personal-comments/mcp/add", requireAuth({ mutation: true }), mcpAc(mcpAddPersonalComment, "add personal comment"));
-  app.post("/api/v1/personal-comments/mcp/edit", requireAuth({ mutation: true }), mcpAc(mcpEditPersonalComment, "edit personal comment"));
-  app.post("/api/v1/personal-comments/mcp/delete", requireAuth({ mutation: true }), mcpAc(mcpDeletePersonalComment, "delete personal comment"));
-  app.post("/api/v1/personal-comments/mcp/resolve", requireAuth({ mutation: true }), mcpAc(mcpResolvePersonalComment, "resolve personal comment"));
-  app.post("/api/v1/personal-comments/mcp/reply", requireAuth({ mutation: true }), mcpAc(mcpReplyPersonalComment, "reply to personal comment"));
-  app.post("/api/v1/personal-comments/mcp/delete-resolved", requireAuth({ mutation: true }), mcpAc(mcpDeleteResolvedPersonalComments, "delete resolved personal comments"));
-  app.post("/api/v1/personal-comments/mcp/clear", requireAuth({ mutation: true }), mcpAc(mcpClearPersonalComments, "clear personal comments"));
-  app.post("/api/v1/personal-comments/mcp/nav", requireAuth({ mutation: true }), mcpAc(mcpNavPersonalComment, "navigate personal comments"));
-  app.post("/api/v1/personal-comments/mcp/jump", requireAuth({ mutation: true }), mcpAc(mcpJumpPersonalComment, "jump to personal comment"));
-  app.post("/api/v1/personal-comments/mcp/show-resolved", requireAuth({ mutation: true }), mcpAc(mcpSetPcResolvedVisibility, "show/hide resolved personal comments"));
+  app.get("/api/v1/annotations/all", requireAuth(), mcpAc(mcpReadPersonalComments, "read personal comments"));
+  app.post("/api/v1/annotations/mcp/add", requireAuth({ mutation: true }), mcpAc(mcpAddPersonalComment, "add personal comment"));
+  app.post("/api/v1/annotations/mcp/edit", requireAuth({ mutation: true }), mcpAc(mcpEditPersonalComment, "edit personal comment"));
+  app.post("/api/v1/annotations/mcp/delete", requireAuth({ mutation: true }), mcpAc(mcpDeletePersonalComment, "delete personal comment"));
+  app.post("/api/v1/annotations/mcp/resolve", requireAuth({ mutation: true }), mcpAc(mcpResolvePersonalComment, "resolve personal comment"));
+  app.post("/api/v1/annotations/mcp/reply", requireAuth({ mutation: true }), mcpAc(mcpReplyPersonalComment, "reply to personal comment"));
+  app.post("/api/v1/annotations/mcp/delete-resolved", requireAuth({ mutation: true }), mcpAc(mcpDeleteResolvedPersonalComments, "delete resolved personal comments"));
+  app.post("/api/v1/annotations/mcp/clear", requireAuth({ mutation: true }), mcpAc(mcpClearPersonalComments, "clear personal comments"));
+  app.post("/api/v1/annotations/mcp/nav", requireAuth({ mutation: true }), mcpAc(mcpNavPersonalComment, "navigate personal comments"));
+  app.post("/api/v1/annotations/mcp/jump", requireAuth({ mutation: true }), mcpAc(mcpJumpPersonalComment, "jump to personal comment"));
+  app.post("/api/v1/annotations/mcp/show-resolved", requireAuth({ mutation: true }), mcpAc(mcpSetPcResolvedVisibility, "show/hide resolved personal comments"));
 
   // Reviewing surface: refresh the open file (remote push -> visible) and open a
   // branch / spec file for review from MCP.

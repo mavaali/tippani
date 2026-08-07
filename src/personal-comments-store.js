@@ -15,7 +15,10 @@ import crypto from "crypto";
 
 export function personalCommentsKey(repoId, branch, filePath) {
   const h = crypto.createHash("sha1");
-  h.update(`${repoId}\n${branch}\n${filePath}`);
+  // Normalize each field so a null/undefined branch (e.g. a file:-scheme local
+  // file with no branch) hashes identically to an empty-string branch — MCP and
+  // page-render callers must resolve the SAME store file.
+  h.update(`${String(repoId ?? "")}\n${String(branch ?? "")}\n${String(filePath ?? "")}`);
   return h.digest("hex");
 }
 

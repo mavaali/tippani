@@ -80,6 +80,8 @@ async function fakeSetViewed(threadId, commentId) {
   viewedCalls.push({ threadId, commentId });
   return { ok: true, status: 200, body: { ok: true, viewedCommentId: commentId == null ? null : String(commentId) } };
 }
+const customFileAdds = [];
+const customFileRemoves = [];
 const app = express();
 app.use(express.json());
 registerControlApi(app, {
@@ -101,6 +103,10 @@ registerControlApi(app, {
     p === "/ok/a.md"
       ? { ok: true, opened: "/open-file-view?path=" + p, realpath: p }
       : { ok: false, reason: "outside-root", error: "outside every approved folder" },
+  // Reading list (custom-files) fakes.
+  customFilesList: () => [],
+  customFileAdd: ({ path: p } = {}) => { customFileAdds.push(p); return { ok: true, added: p }; },
+  customFileRemove: ({ path: p } = {}) => { customFileRemoves.push(p); return { ok: true, removed: p }; },
   // Clickstop 2 step 13: remote-authoring write deps (in-memory fakes).
   mcpCreateBranch: async ({ org, project, repo, branch, base }) =>
     (branch && project && repo) ? { ok: true, org: org || "https://dev.azure.com/powerbi", project, repo, branch, branchRef: `refs/heads/${branch}`, base: base || "main", created: true, objectId: "tip1" } : { ok: false, error: "project, repo, branch are required" },
@@ -160,12 +166,13 @@ try {
       "read_annotations", "add_annotation", "edit_annotation",
       "delete_annotation", "resolve_annotation", "reply_annotation", "delete_resolved_annotations",
       "delete_all_annotations", "navigate_annotations", "jump_to_annotation",
-      "show_resolved_annotations", "open_branch", "open_branch_file", "open_local_file", "refresh_spec",
+      "show_resolved_annotations", "open_branch", "open_branch_file", "open_local_file", "open_local_only", "refresh_spec",
     "stage_branch", "stage_spec", "stage_spec_pr", "push_staged_changes",
     "start_tippani", "get_portal_url",
+    "add_reading_list_file", "remove_reading_list_file",
     "close_tippani",
   ];
-  check("tools: exactly 44 registered", tools.length === 44);
+  check("tools: exactly 47 registered", tools.length === 47);
   for (const n of expected) {
     check(`tools: includes ${n}`, !!byName[n]);
     check(`tools: ${n} has description`, typeof byName[n].description === "string" && byName[n].description.length > 20);
@@ -251,6 +258,25 @@ try {
     try { await byName.open_local_file.handler({ path: "/etc/passwd.md" }); }
     catch (e) { rejected = true; rejStatus = e.status; }
     check("open_local_file: outside-root rejected (400, not read)", rejected && rejStatus === 400);
+  }
+
+  // --- reading list add/remove (custom-files) ---
+  {
+    const before = browsePortalCalls.length;
+    const added = await byName.add_reading_list_file.handler({ path: "/docs/notes.md" });
+    check("add_reading_list_file: ok + path forwarded", added.ok === true && customFileAdds.includes("/docs/notes.md"));
+    check("add_reading_list_file: ensured a browse portal", browsePortalCalls.length === before + 1);
+    const removed = await byName.remove_reading_list_file.handler({ path: "/docs/notes.md" });
+    check("remove_reading_list_file: ok + path forwarded", removed.ok === true && customFileRemoves.includes("/docs/notes.md"));
+  }
+
+  // --- open_local_only (local mode, no token, no args) ---
+  {
+    const before = browsePortalCalls.length;
+    const r = await byName.open_local_only.handler({});
+    check("open_local_only: returns portalUrl", r.portalUrl === "http://localhost:3847");
+    check("open_local_only: reports running", r.running === true);
+    check("open_local_only: ensured a browse portal (no token needed)", browsePortalCalls.length === before + 1);
   }
 
   // --- Staged-only authoring tools ---

@@ -55,7 +55,7 @@ export function createHttpClient({ baseUrl, getBaseUrl, token, getToken, clientN
     get: (p) => req("GET", p),
     post: (p, b) => req("POST", p, b),
     put: (p, b) => req("PUT", p, b),
-    delete: (p) => req("DELETE", p),
+    delete: (p, b) => req("DELETE", p, b),
   };
 }
 
@@ -83,6 +83,10 @@ export function buildTools(http, session) {
   async function ensuredPut(path, body) {
     if (session && typeof session.ensureBrowsePortal === "function") await session.ensureBrowsePortal();
     return http.put(path, body || {});
+  }
+  async function ensuredDelete(path, body) {
+    if (session && typeof session.ensureBrowsePortal === "function") await session.ensureBrowsePortal();
+    return http.delete(path, body || {});
   }
   return [
     {
@@ -542,7 +546,7 @@ export function buildTools(http, session) {
         if (session && typeof session.ensureBrowsePortal === "function") await session.ensureBrowsePortal();
         const q = [["repo", repo], ["branch", branch], ["path", path]]
           .filter(([, v]) => v).map(([k, v]) => `${k}=${encodeURIComponent(v)}`).join("&");
-        return http.get("/api/v1/personal-comments/all" + (q ? "?" + q : ""));
+        return http.get("/api/v1/annotations/all" + (q ? "?" + q : ""));
       },
     },
     {
@@ -556,7 +560,7 @@ export function buildTools(http, session) {
         line: z.number().int().positive().optional().describe("1-based source line to anchor to"),
         repo: z.string().optional(), branch: z.string().optional(), path: z.string().optional(),
       },
-      handler: (args) => ensuredPost("/api/v1/personal-comments/mcp/add", args),
+      handler: (args) => ensuredPost("/api/v1/annotations/mcp/add", args),
     },
     {
       name: "edit_annotation",
@@ -569,7 +573,7 @@ export function buildTools(http, session) {
         id: z.string().optional().describe("Annotation id (defaults to the selected annotation)"),
         repo: z.string().optional(), branch: z.string().optional(), path: z.string().optional(),
       },
-      handler: (args) => ensuredPost("/api/v1/personal-comments/mcp/edit", args),
+      handler: (args) => ensuredPost("/api/v1/annotations/mcp/edit", args),
     },
     {
       name: "delete_annotation",
@@ -577,7 +581,7 @@ export function buildTools(http, session) {
         "Delete an annotation. Defaults to the SELECTED annotation; pass id to " +
         "target a specific one.",
       inputSchema: { id: z.string().optional().describe("Annotation id (defaults to the selected annotation)"), repo: z.string().optional(), branch: z.string().optional(), path: z.string().optional() },
-      handler: (args) => ensuredPost("/api/v1/personal-comments/mcp/delete", args),
+      handler: (args) => ensuredPost("/api/v1/annotations/mcp/delete", args),
     },
     {
       name: "reply_annotation",
@@ -592,7 +596,7 @@ export function buildTools(http, session) {
       },
       handler: async (args) => {
         if (session && typeof session.ensureBrowsePortal === "function") await session.ensureBrowsePortal();
-        return http.post("/api/v1/personal-comments/mcp/reply", args);
+        return http.post("/api/v1/annotations/mcp/reply", args);
       },
     },
     {
@@ -611,7 +615,7 @@ export function buildTools(http, session) {
       },
       handler: async (args) => {
         if (session && typeof session.ensureBrowsePortal === "function") await session.ensureBrowsePortal();
-        return http.post("/api/v1/personal-comments/mcp/resolve", args);
+        return http.post("/api/v1/annotations/mcp/resolve", args);
       },
     },
     {
@@ -620,7 +624,7 @@ export function buildTools(http, session) {
         "Delete ALL resolved annotations on the open spec file. Returns how " +
         "many were removed. Reflects live in the open page.",
       inputSchema: {},
-      handler: (args) => ensuredPost("/api/v1/personal-comments/mcp/delete-resolved", args || {}),
+      handler: (args) => ensuredPost("/api/v1/annotations/mcp/delete-resolved", args || {}),
     },
     {
       name: "delete_all_annotations",
@@ -628,7 +632,7 @@ export function buildTools(http, session) {
         "Delete EVERY annotation on the open spec file (resolved or not). " +
         "Irreversible. Reflects live in the open page.",
       inputSchema: {},
-      handler: (args) => ensuredPost("/api/v1/personal-comments/mcp/clear", args || {}),
+      handler: (args) => ensuredPost("/api/v1/annotations/mcp/clear", args || {}),
     },
     {
       name: "navigate_annotations",
@@ -638,7 +642,7 @@ export function buildTools(http, session) {
       inputSchema: {
         direction: z.enum(["next", "prev", "first", "last"]).describe("Which annotation to select"),
       },
-      handler: ({ direction }) => ensuredPost("/api/v1/personal-comments/mcp/nav", { direction }),
+      handler: ({ direction }) => ensuredPost("/api/v1/annotations/mcp/nav", { direction }),
     },
     {
       name: "jump_to_annotation",
@@ -649,7 +653,7 @@ export function buildTools(http, session) {
         id: z.string().optional().describe("Annotation id"),
         line: z.number().int().positive().optional().describe("Anchor line to jump to"),
       },
-      handler: (args) => ensuredPost("/api/v1/personal-comments/mcp/jump", args),
+      handler: (args) => ensuredPost("/api/v1/annotations/mcp/jump", args),
     },
     {
       name: "show_resolved_annotations",
@@ -657,7 +661,7 @@ export function buildTools(http, session) {
         "Hide or show resolved annotations in the open reviewing page. " +
         "show=false hides resolved ones; show=true (default) shows them all.",
       inputSchema: { show: z.boolean().optional().describe("true = show resolved (default), false = hide") },
-      handler: ({ show }) => ensuredPost("/api/v1/personal-comments/mcp/show-resolved", { show: show !== false }),
+      handler: ({ show }) => ensuredPost("/api/v1/annotations/mcp/show-resolved", { show: show !== false }),
     },
     {
       name: "open_branch",
@@ -718,6 +722,28 @@ export function buildTools(http, session) {
           await session.ensureBrowsePortal();
         }
         return http.post("/api/v1/spec/open-file", args);
+      },
+    },
+    {
+      name: "open_local_only",
+      description:
+        "Start Tippani in local-only mode on the Discovery page — no Azure DevOps " +
+        "and NO token required, and no arguments. Brings the portal up (reusing a " +
+        "running one) and returns its `portalUrl`; SHOW that as a clickable link. " +
+        "Use this to open Tippani for local review (open_branch / open_branch_file / " +
+        "open_local_file) without signing in to ADO. The ADO discovery tools " +
+        "(list_prs / open_pr) still need a token.",
+      inputSchema: {},
+      handler: async () => {
+        if (!session || typeof session.ensureBrowsePortal !== "function") {
+          throw new Error("Portal launcher unavailable in this context.");
+        }
+        await session.ensureBrowsePortal();
+        return {
+          portalUrl: typeof session.getBaseUrl === "function" ? session.getBaseUrl() : null,
+          running: !!(typeof session.getToken === "function" && session.getToken()),
+          note: "Local-only mode — no ADO token required.",
+        };
       },
     },
     {
@@ -848,6 +874,30 @@ export function buildTools(http, session) {
         const portalUrl = session && typeof session.getBaseUrl === "function" ? session.getBaseUrl() : null;
         return { portalUrl, running };
       },
+    },
+    {
+      name: "add_reading_list_file",
+      description:
+        "Add a local .md file to the Discovery \"Reading list\" so it persists " +
+        "as a reopenable tile. Its folder becomes an approved read root, so " +
+        "open_local_file can then open .md files there. `path` is an absolute " +
+        "path to a readable .md on disk. Launches the portal if it isn't running.",
+      inputSchema: {
+        path: z.string().describe("Absolute path to a readable .md file to add"),
+      },
+      handler: (args) => ensuredPost("/api/v1/custom-files", { path: args.path }),
+    },
+    {
+      name: "remove_reading_list_file",
+      description:
+        "Remove a .md file from the Discovery \"Reading list\" (revoking its " +
+        "folder as an approved read root if it was the last file there). The " +
+        "pinned \"User Manual\" tile cannot be removed. `path` is the absolute " +
+        "file path as it appears in the list.",
+      inputSchema: {
+        path: z.string().describe("Absolute path of the reading-list .md to remove"),
+      },
+      handler: (args) => ensuredDelete("/api/v1/custom-files", { path: args.path }),
     },
     {
       name: "close_tippani",

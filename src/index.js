@@ -8660,7 +8660,10 @@ async function main() {
   }
   function pcCtx(args = {}) {
     const cur = _focus.get().pcContext;
-    return { repo: args.repo || (cur && cur.repo), branch: args.branch || (cur && cur.branch), path: args.path || (cur && cur.path) };
+    // Nullish (not ||) so an explicit empty-string branch — the correct value
+    // for a file:-scheme local file — is preserved rather than coerced to the
+    // (possibly null) fallback, which would point reads at the wrong store key.
+    return { repo: args.repo ?? cur?.repo, branch: args.branch ?? cur?.branch, path: args.path ?? cur?.path };
   }
   async function mcpReadPersonalComments(args = {}) {
     const { repo, branch, path: filePath } = pcCtx(args);
