@@ -45,10 +45,16 @@ export function createFocusStore() {
   let pcCommand = null; // { type: 'focus'|'showResolved', id?, show? }
   let pcCommandSeq = 0;
   let pcDataSeq = 0;
+  // Same-page scroll target: the source line the agent (go_to_line) wants the
+  // ONE open file page scrolled to. lineSeq is monotonic so the page scrolls
+  // once per request; the page baselines lineSeq on first poll so a stale
+  // command doesn't yank a freshly opened file.
+  let line = null;
+  let lineSeq = 0;
   const VIEWS = ["current", "diff", "proposed"];
   return {
     get() {
-      return { focusedThreadId, version, navUrl, navSeq, view, viewSeq, filter, filterSeq, pcContext, pcSelectedId, pcCommand, pcCommandSeq, pcDataSeq };
+      return { focusedThreadId, version, navUrl, navSeq, view, viewSeq, filter, filterSeq, pcContext, pcSelectedId, pcCommand, pcCommandSeq, pcDataSeq, line, lineSeq };
     },
     set(threadId) {
       const next = threadId == null ? null : Number(threadId);
@@ -96,6 +102,18 @@ export function createFocusStore() {
     bumpVersion() {
       version++;
       return version;
+    },
+    // Scroll the open file page to a 1-based source line (go_to_line). Always
+    // bumps lineSeq + version so a repeat go-to the same line still fires.
+    setLine(n) {
+      const next = Number(n);
+      if (!Number.isInteger(next) || next < 1) {
+        throw new Error("go-to-line: line must be a positive integer");
+      }
+      line = next;
+      lineSeq++;
+      version++;
+      return { line, lineSeq, version };
     },
     // --- Personal Comments ---
     setPcContext(ctx) {

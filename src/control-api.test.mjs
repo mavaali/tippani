@@ -550,6 +550,19 @@ try {
     const cl = await call("/api/v1/commands/filter", { method: "POST", headers: authHeaders, body: { filter: null } });
     check("filter: clear -> null", cl.body.filter.filter === null);
   }
+  // --- go_to_line control state ---
+  {
+    const s0 = (await call("/api/v1/state")).body;
+    check("state: exposes line + lineSeq", s0.line === null && typeof s0.lineSeq === "number");
+    const r = await call("/api/v1/commands/go-to-line", { method: "POST", headers: authHeaders, body: { line: 130 } });
+    check("go-to-line: set -> ok", r.status === 200 && r.body.ok === true && r.body.line === 130);
+    const s = (await call("/api/v1/state")).body;
+    check("state: reflects go-to-line", s.line === 130 && s.lineSeq >= 1);
+    const bad = await call("/api/v1/commands/go-to-line", { method: "POST", headers: authHeaders, body: { line: 0 } });
+    check("go-to-line: rejects line 0 -> 400", bad.status === 400);
+    const bad2 = await call("/api/v1/commands/go-to-line", { method: "POST", headers: authHeaders, body: { line: -5 } });
+    check("go-to-line: rejects negative -> 400", bad2.status === 400);
+  }
   {
     const r = await call("/api/v1/specs/0/render?draft=1", { headers: authHeaders });
     check("render: draft=1 renders draft html", r.status === 200 && /DRAFT/.test(r.body.html));

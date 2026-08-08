@@ -3599,6 +3599,7 @@ body.show-markers .rh-marker { display: inline-flex; }
       var pcShowResolvedState = true;      // hide/show resolved cards (MCP-driven)
       var pcLastDataSeq = RO_PC_DATASEQ;   // last comment-data version this page has applied
       var pcLastCmdSeq = 0;                // last one-shot UI command applied
+      var pcLastLineSeq = 0;               // last go_to_line seq applied (baselined on first poll)
       var pcPollInit = false;              // first poll only syncs baselines
       function pcEsc(s) { return String(s == null ? '' : s).replace(/[&<>"]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; }); }
       function pcWhen(iso) { try { return new Date(iso).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }); } catch (e) { return ''; } }
@@ -3656,8 +3657,14 @@ body.show-markers .rh-marker { display: inline-flex; }
       function pcPoll() {
         fetch('/api/v1/state').then(function (r) { return r.ok ? r.json() : null; }).then(function (s) {
           if (!s) return;
-          if (!pcPollInit) { pcPollInit = true; if (typeof s.pcCommandSeq === 'number') pcLastCmdSeq = s.pcCommandSeq; if (typeof s.pcDataSeq === 'number') pcLastDataSeq = Math.max(pcLastDataSeq, s.pcDataSeq); return; }
+          if (!pcPollInit) { pcPollInit = true; if (typeof s.pcCommandSeq === 'number') pcLastCmdSeq = s.pcCommandSeq; if (typeof s.pcDataSeq === 'number') pcLastDataSeq = Math.max(pcLastDataSeq, s.pcDataSeq); if (typeof s.lineSeq === 'number') pcLastLineSeq = s.lineSeq; return; }
           if (typeof s.pcDataSeq === 'number' && s.pcDataSeq > pcLastDataSeq) { pcLastDataSeq = s.pcDataSeq; pcReloadComments(); }
+          if (typeof s.lineSeq === 'number' && s.lineSeq > pcLastLineSeq) {
+            pcLastLineSeq = s.lineSeq;
+            // go_to_line: scroll the open file to a source line (same-page, no reopen).
+            var goB = Number.isFinite(s.line) ? blockForLine(s.line) : null;
+            if (goB) goB.scrollIntoView({ behavior: 'smooth', block: 'center' });
+          }
           if (typeof s.pcCommandSeq === 'number' && s.pcCommandSeq > pcLastCmdSeq) {
             pcLastCmdSeq = s.pcCommandSeq;
             var cmd = s.pcCommand;
@@ -6312,6 +6319,7 @@ document.addEventListener('keydown', (e) => {
 (function() {
   let lastVersion = -1;
   let lastViewSeq = -1;
+  let lastLineSeq = null;   // baselined on first poll so a stale go_to_line doesn't yank a fresh open
   let lastSpecDraftKey = null;
   const seenDraftKey = (id, d) => id + ':' + (d ? d.updatedAt : '0');
   const lastDraftSeen = new Map();
@@ -6420,6 +6428,12 @@ document.addEventListener('keydown', (e) => {
             }
           }
         }
+      }
+      // go_to_line: scroll THIS open file to a source line (same-page, no reopen).
+      // Baseline on the first poll so a stale command doesn't scroll on load.
+      if (typeof s.lineSeq === 'number') {
+        if (lastLineSeq === null) lastLineSeq = s.lineSeq;
+        else if (s.lineSeq > lastLineSeq) { lastLineSeq = s.lineSeq; try { scrollToLine(s.line); } catch {} }
       }
     } catch {}
   }

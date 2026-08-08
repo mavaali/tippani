@@ -41,6 +41,7 @@ required.
 | `focus_thread` | Scroll the browser to a thread and highlight it (`threadId=null` clears focus). | `threadId` |
 | `set_view` | Switch the reading view of a file: `current`, `diff`, or `proposed`. Call after `edit_spec` — the view never auto-flips. | `view`, `fileIndex` |
 | `open_file` | Open a changed file at the file view, optionally scrolled to a line. Read-only. | `fileIndex`, `line` |
+| `go_to_line` | Scroll the file the user ALREADY has open to a 1-based source line, without reopening or switching files. Works on any open surface (PR file, branch file, local file). Read-only same-page scroll. | `line*` |
 | `get_spec` | Read the rendered Markdown of one PR file plus a flat heading list (level, text, 1-based line). | `fileIndex` |
 | `get_file_commits` | Bulk commit history for up to 25 spec files (id, author/committer, message, change counts, url). | `files*`, `top` |
 
@@ -153,7 +154,7 @@ All routes are prefixed `/api/v1`. Mutating routes (marked ✎) require the bear
 | `GET /triage` | Triage summary of all threads. |
 | `PUT /threads/:id/draft` ✎ · `DELETE /threads/:id/draft` ✎ | Stage / discard a reply draft. |
 | `POST /threads/:id/lock` ✎ | Lock a thread's draft (edit coordination). |
-| `POST /commands/focus` ✎ · `POST /nav` ✎ · `POST /commands/view` ✎ · `POST /commands/filter` ✎ | Drive the browser: focus a thread, navigate, switch view, filter feedback. |
+| `POST /commands/focus` ✎ · `POST /nav` ✎ · `POST /commands/view` ✎ · `POST /commands/filter` ✎ · `POST /commands/go-to-line` ✎ | Drive the browser: focus a thread, navigate, switch view, filter feedback, scroll the open file to a line. |
 | `POST /ado-token` ✎ | Supply / refresh the ADO bearer for the session. |
 
 **Specs, drafts & edits**

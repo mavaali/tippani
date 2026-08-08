@@ -286,6 +286,19 @@ export function buildTools(http, session) {
       },
     },
     {
+      name: "go_to_line",
+      description:
+        "Scroll the file the user ALREADY has open to a 1-based source line, without " +
+        "reopening or switching files. Use for \"scroll to line 130\" / \"jump to that " +
+        "section\" once a file is open (any surface: a PR file, a branch file, or a " +
+        "local file). Read-only same-page scroll — creates no annotation and changes " +
+        "nothing. The open page acts within ~1.5s (it polls).",
+      inputSchema: {
+        line: z.number().int().min(1).describe("1-based source line to scroll to"),
+      },
+      handler: ({ line }) => http.post("/api/v1/commands/go-to-line", { line }),
+    },
+    {
       name: "get_thread",
       description:
         "Get full content of one thread: every comment plus any staged draft. " +

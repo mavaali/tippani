@@ -158,7 +158,7 @@ try {
   const expected = [
     "open_pr", "refresh_ado_token",
     "list_threads", "triage_summary", "show_feedback",
-    "open_thread", "open_file", "get_thread", "focus_thread",
+    "open_thread", "open_file", "go_to_line", "get_thread", "focus_thread",
     "stage_draft", "clear_draft", "stage_resolve_thread", "get_spec",
     "get_spec_draft", "clear_spec_edit",
     "edit_spec", "set_view", "set_feedback_filter",
@@ -172,7 +172,7 @@ try {
     "add_reading_list_file", "remove_reading_list_file",
     "close_tippani",
   ];
-  check("tools: exactly 47 registered", tools.length === 47);
+  check("tools: exactly 48 registered", tools.length === 48);
   for (const n of expected) {
     check(`tools: includes ${n}`, !!byName[n]);
     check(`tools: ${n} has description`, typeof byName[n].description === "string" && byName[n].description.length > 20);
@@ -246,6 +246,14 @@ try {
     check("open_file: single-tab does NOT open a new browser tab", !openUrlCalls.includes("/file/2"));
     const r2 = await byName.open_file.handler({ fileIndex: 0, line: 47 });
     check("open_file: appends ?line when given", r2.opened === "/file/0?line=47" && focus.get().navUrl === "/file/0?line=47");
+  }
+
+  // --- go_to_line (same-page scroll of the already-open file) ---
+  {
+    const before = focus.get().lineSeq;
+    const r = await byName.go_to_line.handler({ line: 130 });
+    check("go_to_line: posts the line", r.ok === true && r.line === 130);
+    check("go_to_line: bumps focus line + lineSeq", focus.get().line === 130 && focus.get().lineSeq === before + 1);
   }
 
   // --- open_local_file (clickstop 2: one-off .md by path, gated to approved roots) ---

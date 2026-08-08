@@ -238,6 +238,15 @@ export function registerControlApi(app, deps) {
     catch (e) { res.status(400).json({ error: String(e?.message || e) }); }
   });
 
+  // POST /api/v1/commands/go-to-line { line } — scroll the ONE open file page to
+  // a 1-based source line without reopening the file (go_to_line). Same-page
+  // scroll only; the PR and read-only spec pages poll lineSeq and act once.
+  app.post("/api/v1/commands/go-to-line", requireAuth({ mutation: true }), (req, res) => {
+    const { line } = req.body || {};
+    try { res.json({ ok: true, ...focus.setLine(line) }); }
+    catch (e) { res.status(400).json({ error: String(e?.message || e) }); }
+  });
+
   // POST /api/v1/ado-token { token } — the host pushes a freshly-minted ADO
   // bearer here before the old one expires, so a long-lived portal never makes
   // ADO calls with a stale token. Swaps the connection in place. The token is
@@ -875,6 +884,8 @@ export function registerControlApi(app, deps) {
       pcCommand: f.pcCommand,
       pcCommandSeq: f.pcCommandSeq,
       pcDataSeq: f.pcDataSeq,
+      line: f.line,
+      lineSeq: f.lineSeq,
     };
     // The heavy draft bodies are only needed when something actually changed;
     // the 1.2s pollers compare seqs/version and re-fetch with ?full=1 on a bump,

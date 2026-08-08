@@ -187,6 +187,28 @@ function check(name, cond) {
   check("get: exposes view + filter fields", g.view === "diff" && g.filter === null);
 }
 
+// --- FocusStore: go_to_line scroll state ---
+{
+  const f = createFocusStore();
+  const init = f.get();
+  check("line: starts null", init.line === null && init.lineSeq === 0);
+  const v = f.get().version;
+  const r = f.setLine(130);
+  check("setLine: records line", r.line === 130);
+  check("setLine: bumps lineSeq + version", r.lineSeq === 1 && r.version === v + 1);
+  const r2 = f.setLine(130);
+  check("setLine: repeat still bumps so the page re-scrolls", r2.lineSeq === 2);
+  check("get: exposes line + lineSeq", f.get().line === 130 && f.get().lineSeq === 2);
+  let threwZero = false; try { f.setLine(0); } catch { threwZero = true; }
+  check("setLine: rejects 0", threwZero);
+  let threwNeg = false; try { f.setLine(-3); } catch { threwNeg = true; }
+  check("setLine: rejects a negative line", threwNeg);
+  let threwFrac = false; try { f.setLine(4.5); } catch { threwFrac = true; }
+  check("setLine: rejects a fractional line", threwFrac);
+  let threwNaN = false; try { f.setLine("nope"); } catch { threwNaN = true; }
+  check("setLine: rejects a non-number", threwNaN);
+}
+
 // --- FocusStore: author-comment state ---
 {
   const f = createFocusStore();
