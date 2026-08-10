@@ -2,9 +2,14 @@
 
 /**
  * Demo mode for tippani — serves the review portal with fake data.
- * No ADO connection needed. Use for generating README screenshots.
  *
- * Usage: node scripts/demo.js
+ * No Azure DevOps connection, no credentials, no git clone. This is the
+ * zero-friction front door: `npx tippani --demo` shows what the tool does
+ * before anyone has to configure an org, a project, or a token.
+ *
+ * Also used to generate the README screenshots.
+ *
+ * Usage: tippani --demo  |  node src/demo.js
  */
 
 import express from "express";
@@ -19,7 +24,13 @@ import rehypeAutolinkHeadings from "rehype-autolink-headings";
 
 import rehypeSanitize, { defaultSchema } from "rehype-sanitize";
 
-const PORT = 3847;
+// Shared with the real portal — the demo must not drift from what ships.
+import { cssVariables, changeTypeBadge, escHtml, stripMarkdown } from "./html-util.js";
+import { voteForReviewType, voteLabel } from "./review-vote.js";
+import { pathToFileURL } from "url";
+import path from "path";
+
+const DEFAULT_PORT = 3847;
 
 // Spec content schema: allow headings with ids but strip scripts/iframes
 const specSanitizeSchema = {
@@ -106,88 +117,6 @@ function buildSourceMap(content) {
   }
   if (inPara) sourceMap[pIdx] = { startLine: paraStart + 1, endLine: lines.length };
   return { toc, sourceMap };
-}
-
-// ── Utility helpers (copied from src/index.js) ─────────────────────────
-
-function cssVariables() {
-  return `
-:root {
-  color-scheme: light;
-  --cp-bg: #f7f4ef;
-  --cp-bg-elevated: #fcfbf8;
-  --cp-surface: #ffffff;
-  --cp-surface-soft: #f5f5f5;
-  --cp-border: #dedede;
-  --cp-border-strong: #919191;
-  --cp-text: #242424;
-  --cp-text-muted: #5c5c5c;
-  --cp-text-soft: #6f6f6f;
-  --cp-accent: #b11f4b;
-  --cp-accent-hover: #9a1a41;
-  --cp-accent-soft: rgba(177, 31, 75, 0.08);
-  --cp-accent-fg: #ffffff;
-  --cp-success: #16a34a;
-  --cp-danger: #dc2626;
-  --cp-warning: #f59e0b;
-  --cp-link: #0078d4;
-  --cp-shadow: 0 18px 48px rgba(0, 0, 0, 0.12);
-  --cp-overlay: rgba(255, 255, 255, 0.8);
-  --cp-panel: rgba(255, 255, 255, 0.86);
-  --cp-panel-strong: rgba(255, 255, 255, 0.96);
-  --cp-sheen: rgba(255, 255, 255, 0.55);
-  --cp-highlight: rgba(177, 31, 75, 0.12);
-}
-html[data-theme="dark"] {
-  color-scheme: dark;
-  --cp-bg: #3d3b3a;
-  --cp-bg-elevated: #343231;
-  --cp-surface: #292929;
-  --cp-surface-soft: #2e2e2e;
-  --cp-border: #474747;
-  --cp-border-strong: #5f5f5f;
-  --cp-text: #dedede;
-  --cp-text-muted: #919191;
-  --cp-text-soft: #b0b0b0;
-  --cp-accent: #fd8ea1;
-  --cp-accent-hover: #fb7b91;
-  --cp-accent-soft: rgba(253, 142, 161, 0.14);
-  --cp-accent-fg: #1a1a1a;
-  --cp-success: #4ade80;
-  --cp-danger: #f87171;
-  --cp-warning: #fbbf24;
-  --cp-link: #4da6ff;
-  --cp-shadow: 0 18px 48px rgba(0, 0, 0, 0.32);
-  --cp-overlay: rgba(41, 41, 41, 0.88);
-  --cp-panel: rgba(41, 41, 41, 0.72);
-  --cp-panel-strong: rgba(41, 41, 41, 0.96);
-  --cp-sheen: rgba(255, 255, 255, 0.04);
-  --cp-highlight: rgba(253, 142, 161, 0.12);
-}`;
-}
-
-function changeTypeBadge(changeType) {
-  if (changeType === 1) return { label: "Added", color: "success" };
-  return { label: "Modified", color: "accent" };
-}
-
-function escHtml(s) {
-  return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
-}
-
-function stripMarkdown(s) {
-  return String(s)
-    .replace(/^#{1,6}\s+/gm, "")
-    .replace(/\*\*([^*]+)\*\*/g, "$1")
-    .replace(/\*([^*]+)\*/g, "$1")
-    .replace(/__([^_]+)__/g, "$1")
-    .replace(/_([^_]+)_/g, "$1")
-    .replace(/`([^`]+)`/g, "$1")
-    .replace(/\[([^\]]+)\]\([^)]+\)/g, "$1")
-    .replace(/^[-*]\s+/gm, "• ")
-    .replace(/\n{2,}/g, " ")
-    .replace(/\n/g, " ")
-    .trim();
 }
 
 // ── Template functions (copied from src/index.js) ──────────────────────
@@ -946,7 +875,7 @@ const mockThreads = [
 
 // ── Server ─────────────────────────────────────────────────────────────
 
-async function main() {
+export async function startDemo({ port = DEFAULT_PORT, headless = false } = {}) {
   // Pre-render comment content through safe markdown renderer
   for (const t of mockThreads) {
     for (const c of t.comments) {
@@ -990,29 +919,49 @@ async function main() {
     }
   });
 
-  // Dummy API routes for demo mode
+  // Stub API routes: the demo has no ADO behind it, so writes are acknowledged
+  // but go nowhere. Shapes match the real routes so the client behaves the same.
   app.post("/api/comment", (_req, res) => res.json({ ok: true, synced: true }));
   app.post("/api/reply", (_req, res) => res.json({ ok: true, synced: true }));
   app.post("/api/resolve", (_req, res) => res.json({ ok: true, synced: true }));
-  app.post("/api/review", (_req, res) => res.json({ ok: true }));
+  app.post("/api/review", (req, res) => {
+    const vote = voteForReviewType(req.body && req.body.type);
+    if (vote === null) return res.status(400).json({ ok: false, code: "bad-type", error: "Unknown review type." });
+    res.json({ ok: true, vote, message: voteLabel(vote) + " (demo — not sent anywhere)" });
+  });
   app.get("/api/pending", (_req, res) => res.json({ count: 0, isOffline: false }));
 
-  const server = app.listen(PORT, "127.0.0.1", () => {
-    const url = `http://localhost:${PORT}`;
-    console.log(`\n  Demo server running at ${url} — use for screenshots\n`);
-    open(url);
+  const server = app.listen(port, "127.0.0.1", () => {
+    const url = `http://localhost:${port}`;
+    console.log(`\n  tippani demo running at ${url}`);
+    console.log(`  Sample spec, sample comments. Nothing is sent anywhere.\n`);
+    if (!headless) open(url);
   });
   server.on("error", (err) => {
     if (err.code === "EADDRINUSE") {
-      console.error(`\n  Error: Port ${PORT} is already in use.\n`);
+      console.error(`\n  Error: Port ${port} is already in use. Try --port=<n>.\n`);
     } else {
       console.error(`\n  Error starting server: ${err.message}\n`);
     }
     process.exit(1);
   });
+  return server;
 }
 
-main().catch((e) => {
-  console.error(`\n  Error: ${e.message}\n`);
-  process.exit(1);
-});
+// Run directly (node src/demo.js) as well as via `tippani --demo`.
+// The basename check matters for the bundled build: esbuild folds this module
+// into cli.cjs and rewrites import.meta.url to the bundle's own path, so the
+// href comparison alone would be true there and boot a second demo server.
+const _entry = process.argv[1] ? path.basename(process.argv[1]) : "";
+const _isDirectRun = _entry === "demo.js" && pathToFileURL(process.argv[1]).href === import.meta.url;
+if (_isDirectRun) {
+  const args = process.argv.slice(2);
+  const portArg = args.find((a) => a.startsWith("--port="));
+  startDemo({
+    port: portArg ? parseInt(portArg.split("=")[1], 10) || DEFAULT_PORT : DEFAULT_PORT,
+    headless: args.includes("--headless"),
+  }).catch((e) => {
+    console.error(`\n  Error: ${e.message}\n`);
+    process.exit(1);
+  });
+}

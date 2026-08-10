@@ -12,6 +12,14 @@ Everything runs on your own machine. Tippani opens in your web browser at `http:
 
 **New here?** The [User Guide](docs/user-guide.md) walks through every screen; the [MCP & API Reference](docs/mcp-api.md) covers the assistant tools and endpoints.
 
+## Try it — no setup
+
+```bash
+npx tippani --demo
+```
+
+Opens the portal on a sample spec with sample comment threads. No account, no login, no clone. Nothing is sent anywhere.
+
 ## Quick Start
 
 Tippani is a small command-line tool. Point it at your repositories once, then open the home screen in your browser.
@@ -64,6 +72,7 @@ Or download a standalone binary from the [latest release](https://github.com/mav
 - **Edit in place** — change a spec in a WYSIWYG editor, no hand-written Markdown required.
 - **Write new specs** — create a branch, add or edit `.md` files, and open a pull request (optionally linked to a work item) — without cloning anything locally.
 - **Nothing happens by surprise** — every change waits, staged and reviewable, until you press **Push to remote** once.
+- **Sign off** — Approve or Request Changes from the reviewing bar, recorded as your vote on the pull request.
 - **Work from a local clone** — review branches and files straight from a folder on disk.
 - **Offline mode** — cache a review, comment offline, and sync when you reconnect.
 - **Assistant-ready** — an MCP server (`tippani-mcp`) that can do all of this on your behalf.
@@ -79,6 +88,9 @@ Or download a standalone binary from the [latest release](https://github.com/mav
 ## Usage
 
 ```bash
+# Try it on a sample spec — no account, no config
+npx tippani --demo
+
 # Open the Discovery portal (Specs, Review queue, Work items, Branches, Reading list)
 tippani --browse
 
@@ -93,6 +105,9 @@ npx tippani <PR_ID> --offline
 
 # Fetch fresh data, ignoring the cache
 npx tippani <PR_ID> --refresh
+
+# Review a local git clone — no PR needed
+npx tippani --local-repo=/path/to/clone
 ```
 
 ### All flags
@@ -175,14 +190,16 @@ To build a Windows `.exe`, run `npm run build` on a Windows machine with Node.js
 ## How it works
 
 Tippani is a single-file command-line tool (`src/index.js`) that:
-1. Signs you in to your repository host
+1. Signs you in to your repository host — or skips sign-in entirely for local-clone review
 2. Fetches the pull request's details, changed files, contents, and comment threads
 3. Caches everything locally for offline use
 4. Starts a local web server on port 3847
 5. Renders Markdown to HTML (via `remark` + `rehype`)
 6. Opens Tippani in your browser
 
-Comments are written to a local queue first, then sent to the host. Offline, they wait in the queue until the next sync.
+Comments are written to a local queue first, then sent to the host. Offline, they wait in the queue until the next sync. Review votes are the exception — they are never queued, since a stale vote sent later could approve a pull request whose content has moved on.
+
+`src/demo.js` serves the same portal over fixture data for `--demo`. It shares the design system and helpers with the real portal so the demo can't drift from what ships.
 
 ## AI / MCP integration
 
@@ -190,7 +207,7 @@ Tippani exposes a [Model Context Protocol](https://modelcontextprotocol.io) serv
 
 **Self-bootstrapping — you don't start tippani first.** The shim launches (or adopts) a review portal per PR on demand via the `open_pr` tool, opening a visible browser window for you while the agent drives it. Multiple PRs can run at once on separate ports, discovered across processes via a per-port registry under `~/.tippani/instances/`.
 
-**Setup (Claude Desktop):** install tippani globally (`npm i -g tippani`), then add to your `claude_desktop_config.json`. The shim authenticates with an access token you pass in via `TIPPANI_ADO_TOKEN` (a read/write access token for your repository host) — it will refuse to start without one. Optionally set `TIPPANI_ADO_AUDIENCE` to have it verify the token's audience on startup:
+**Setup (Claude Desktop):** install tippani globally (`npm i -g tippani`), then add to your `claude_desktop_config.json`. For work against a repository host, pass a read/write access token via `TIPPANI_ADO_TOKEN`; without one the shim still starts in local-only mode (local-clone review works, and the host tools ask for a token if used). Optionally set `TIPPANI_ADO_AUDIENCE` to have it verify the token's audience on startup:
 
 ```json
 {
@@ -205,9 +222,12 @@ Tippani exposes a [Model Context Protocol](https://modelcontextprotocol.io) serv
 
 **Tools (40):**
 
-- **Portal & navigation** — `open_pr` (opens a PR for review; the PR reading/comment tools act on it — or start from `list_prs` / `search_specs` or a branch), `open_file`, `open_thread`, `show_feedback` (cross-PR triage page).
+- **Portal & navigation** — `open_pr` (opens a PR for review; the PR reading/comment tools act on it — or start from `list_prs` / `search_specs` or a branch), `open_file`, `open_thread`, `show_feedback` (cross-PR triage page), `set_view`, `set_feedback_filter`, `refresh_spec`.
 - **Reading** — `list_threads`, `get_thread`, `get_spec`, `get_spec_draft`, `triage_summary`; focus with `focus_thread`.
 - **Stage-then-push** — stage review work with `stage_draft`, `edit_spec`, and `stage_resolve_thread`; stage authoring work with `stage_branch`, `stage_spec`, and `stage_spec_pr`. Nothing staged by MCP reaches your repository host until one explicit `push_staged_changes` call. Also `clear_draft` and `clear_spec_edit`.
+- **Discovery** — `list_prs`, `search_specs`, `search_work_items`, `get_file_commits`.
+- **Local review (no PR, no host account)** — `open_branch`, `open_branch_file`, `open_local_file`.
+- **Annotations** — `read_annotations`, `add_annotation`, `edit_annotation`, `delete_annotation`, `reply_annotation`, `resolve_annotation`, plus navigation (`navigate_annotations`, `jump_to_annotation`, `show_resolved_annotations`) and bulk cleanup.
 
 Staged whole-file edits show up in the portal as a side-by-side Current/Proposed diff you can accept-and-refine in the editor before committing.
 

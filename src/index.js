@@ -71,6 +71,7 @@ import { branchesForRepo, repoOptions, branchNamePlaceholder, sortBranches, shor
 import { branchFileRows, visibleFileCount, mdPathsFromChanges, buildSpecHref, stagedFileComparison } from "./branch-files.js";
 import { validateLocalRepo, resolveGitDir, parseGitHead, parsePackedRefs, mergeLocalBranches, parseOriginHeadDefault, userCreatedBranches } from "./local-repo.js";
 import { baseCandidates, safeLocalPath } from "./local-git.js";
+import { voteForReviewType, voteLabel, reviewPrecheck } from "./review-vote.js";
 import { newComment as pcNew, addComment as pcAdd, updateComment as pcUpdate, removeComment as pcRemove, findComment as pcFind, sortComments as pcSort, setResolved as pcSetResolved, addReply as pcAddReply, navTargetId as pcNavTarget, reanchorComments as pcReanchor } from "./personal-comments.js";
 import { personalCommentsKey as pcStoreKey, loadPersonalComments as pcStoreLoad, savePersonalComments as pcStoreSave, deletePersonalComments as pcStoreDelete, migrateKey as pcStoreMigrate } from "./personal-comments-store.js";
 
@@ -566,26 +567,6 @@ async function bindPr(prId) {
   return pr;
 }
 
-
-async function getSpecFiles(conn, branch) {
-  const gitApi = await conn.getGitApi();
-  const versionDesc = branch.replace("refs/heads/", "");
-  const items = await gitApi.getItems(
-    ADO_REPO,
-    ADO_PROJECT,
-    "/",
-    1, // full recursion
-    true,
-    undefined,
-    undefined,
-    undefined,
-    { version: versionDesc, versionType: 0 }
-  );
-  return items
-    .filter((i) => i.path?.endsWith(".md") && !i.isFolder)
-    .map((i) => i.path);
-}
-
 async function getCommentThreads(conn, prId) {
   const gitApi = await conn.getGitApi();
   return gitApi.getThreads(ADO_REPO, prId, ADO_PROJECT);
@@ -614,6 +595,17 @@ async function replyToThread(conn, prId, threadId, content) {
 async function resolveThread(conn, prId, threadId) {
   const gitApi = await conn.getGitApi();
   return gitApi.updateThread({ status: 2 }, ADO_REPO, prId, threadId, ADO_PROJECT);
+}
+
+// Record the signed-in user's review vote on the PR (the Approve / Request
+// changes bar). ADO addresses a vote by reviewer identity, so this needs the
+// authenticated user's id — an anonymous vote is not expressible.
+async function submitReviewVote(conn, prId, vote) {
+  const cd = await conn.connect();
+  const reviewerId = cd && cd.authenticatedUser && cd.authenticatedUser.id;
+  if (!reviewerId) throw new Error("Could not resolve your Azure DevOps identity, so the vote was not recorded.");
+  const gitApi = await conn.getGitApi();
+  return gitApi.createPullRequestReviewer({ vote }, ADO_REPO, prId, reviewerId, ADO_PROJECT);
 }
 
 // Durable "viewed" state: ADO comment-thread properties are NOT updatable
@@ -4496,7 +4488,7 @@ ${ctx ? renderCrumbBar([{ label: "Home", href: "/discovery" }, { label: ctx.back
 
 ${reviewing ? `<div class="review-bar">
   <button class="review-btn review-btn-approve" onclick="submitReview('approve')">Approve</button>
-  <button class="review-btn review-btn-changes" onclick="submitReview('reject')">Request Changes</button>
+  <button class="review-btn review-btn-changes" onclick="submitReview('request-changes')">Request Changes</button>
 </div>` : ``}
 
 <div class="comment-modal" id="commentModal">
@@ -6295,16 +6287,27 @@ async function resolveThread(threadId) {
 }
 
 async function submitReview(type) {
+  const btns = document.querySelectorAll('.review-btn');
+  btns.forEach(b => b.disabled = true);
   try {
     const res = await fetch('/api/review', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ type })
     });
-    if (!res.ok) throw new Error('Failed');
-    showToast(type === 'approve' ? 'Approved!' : 'Changes requested');
+    let data = null;
+    try { data = await res.json(); } catch { /* non-JSON error body */ }
+    // The server is the source of truth for whether the vote landed — never
+    // report success just because the request completed.
+    if (!res.ok || !data || !data.ok) {
+      showToast((data && data.error) || 'Failed to submit review');
+      return;
+    }
+    showToast(data.message || 'Review submitted');
   } catch (e) {
     showToast('Failed to submit review');
+  } finally {
+    btns.forEach(b => b.disabled = false);
   }
 }
 
@@ -6950,6 +6953,19 @@ async function main() {
   // Parse PR ID (first non-flag argument)
   const args = process.argv.slice(2);
   const positional = args.filter(a => !a.startsWith("--"));
+
+  // --demo boots the portal on sample data: no ADO, no credentials, no clone.
+  // Checked before every other requirement so it is always reachable.
+  if (args.includes("--demo")) {
+    const { startDemo } = await import("./demo.js");
+    const portArg = args.find(a => a.startsWith("--port="));
+    await startDemo({
+      port: portArg ? parseInt(portArg.split("=")[1], 10) || 3847 : 3847,
+      headless: args.includes("--headless"),
+    });
+    return;
+  }
+
   _prId = parseInt(positional[0]);
   const explicitFile = args.find((a) => a.startsWith("--file="))?.split("=").slice(1).join("=") || positional[1] || null;
 
@@ -6963,6 +6979,9 @@ async function main() {
   _browseMode = browseModeEffective;
   if (!_prId && !browseModeEffective) {
     console.log("Usage: tippani <PR_ID> [options]");
+    console.log("");
+    console.log("Try it with no setup:");
+    console.log("  tippani --demo    Open the portal on a sample spec (no ADO, no login)");
     console.log("");
     console.log("Options:");
     console.log("  --org=<url>       ADO org URL (e.g. https://dev.azure.com/myorg)");
@@ -6978,6 +6997,7 @@ async function main() {
     console.log("  --ado-token=<t>   Use a bearer token for ADO (skip PAT / az CLI)");
     console.log("");
     console.log("Examples:");
+    console.log("  tippani --demo");
     console.log("  tippani 992661");
     console.log("  tippani 992661 --org=https://dev.azure.com/myorg --project='My Project'");
     console.log("  tippani 992661 --offline");
@@ -9071,13 +9091,21 @@ if ($path) { [Console]::Out.Write($path) }
     }
   });
 
+  // Approve / Request changes. This is a WRITE to ADO and is deliberately not
+  // queued offline: a stale vote synced later could approve a PR whose content
+  // has since moved on.
   app.post("/api/review", async (req, res) => {
+    const vote = voteForReviewType(req.body && req.body.type);
+    if (vote === null) {
+      return res.status(400).json({ ok: false, code: "bad-type", error: "Unknown review type." });
+    }
+    const pre = reviewPrecheck({ isOffline: _isOffline, hasConn: !!_conn, prId: _prId });
+    if (!pre.ok) return res.status(409).json({ ok: false, code: pre.code, error: pre.error });
     try {
-      const gitApi = await _conn.getGitApi();
-      const vote = req.body.type === "approve" ? 10 : -5;
-      res.json({ ok: true, message: "Review submitted (vote: " + vote + ")" });
+      await submitReviewVote(_conn, _prId, vote);
+      res.json({ ok: true, vote, message: voteLabel(vote) });
     } catch (e) {
-      res.status(500).json({ error: e.message });
+      res.status(502).json({ ok: false, code: "ado-error", error: friendlyAdoError(e, "submit review") });
     }
   });
 

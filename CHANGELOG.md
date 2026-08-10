@@ -29,6 +29,53 @@ publish the whole set with one `push_staged_changes`. From branch `clickstop-2`.
 - **Docs** — rewritten [README](README.md) (User Manual + hub), a full
   [User Guide](docs/user-guide.md) with screenshots of every screen, and a
   complete [MCP & API Reference](docs/mcp-api.md).
+## Unreleased — Credibility + zero-setup demo
+
+Two fixes to what tippani claims about itself, plus a front door that needs no
+Azure DevOps account.
+
+### Fixed — Approve / Request Changes actually votes
+`POST /api/review` computed a vote and then threw it away: it never called Azure
+DevOps, always returned `{ok: true}`, and the UI toasted "Approved!" over a
+no-op. It now records the signed-in user's vote on the pull request via
+`createPullRequestReviewer`.
+
+- **Request Changes maps to -5** (waiting for author), not -10 (rejected). The
+  bottom bar is a routine review action; -10 is ADO's hard block.
+- **Unknown review types are rejected**, not silently voted. The old
+  `type === "approve" ? 10 : -5` turned any unrecognised string into a -5.
+- **Votes are never queued offline.** A stale vote synced later could approve a
+  PR whose content has since changed, so offline/disconnected/no-PR states
+  return a `409` with an actionable reason instead.
+- **The client trusts the server.** `submitReview()` now reports success only
+  when the response says the vote landed, surfaces the server's error text, and
+  disables the buttons while in flight.
+- Vote mapping and preconditions extracted to a pure `review-vote.js` with tests.
+
+### Added — `tippani --demo`
+A working demo portal already existed but shipped to nobody: it lived in
+`scripts/`, which the npm package excludes, and nothing referenced it.
+
+- `npx tippani --demo` opens the portal on a sample spec with sample comment
+  threads. No account, no credentials, no clone. Honours `--port` and `--headless`.
+- Moved `scripts/demo.js` to `src/demo.js` so it ships and bundles; exposed as
+  `startDemo()` and still runnable directly (`npm run demo`).
+- **Deduped ~85 lines** of design-system and helper code the demo had copied
+  from `index.js` (`cssVariables`, `escHtml`, `stripMarkdown`,
+  `changeTypeBadge`) — now imported from `html-util.js` so the demo cannot drift
+  from the real portal. The page templates remain duplicated; tracked in
+  [#62](https://github.com/mavaali/tippani/issues/62).
+- The demo's stub `/api/review` matches the real route's contract, so the
+  buttons behave identically and say so.
+
+### Fixed — documentation drift
+- README advertised **19 MCP tools**; there are **40**. Documented the missing
+  groups: discovery, local review, and annotations.
+- README said the MCP shim "will refuse to start" without an access token. It
+  boots in local-only mode; a token is only needed for the host tools.
+
+### Removed
+- Dead `getSpecFiles()` (defined, never called).
 
 ## Unreleased — Personal comments + local (ADO-less) review
 
