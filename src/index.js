@@ -75,6 +75,7 @@ import { personalCommentsKey as pcStoreKey, loadPersonalComments as pcStoreLoad,
 import { createStagedInventory, normFolder, parentFolder } from "./staged-inventory.js";
 import { createAdoReviewProvider } from "./ado-review-provider.js";
 import { createAdoRepoContentProvider } from "./ado-repo-content-provider.js";
+import { createAdoAuthoringProvider } from "./ado-authoring-provider.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -327,6 +328,7 @@ function getAdoConnection(pat) {
 // the connection's lifetime.
 const _adoReviewProviders = new WeakMap();
 const _adoRepoContentProviders = new WeakMap();
+const _adoAuthoringProviders = new WeakMap();
 function adoReview(conn) {
   if (!conn) throw new Error("ADO review provider requires a connection");
   let provider = _adoReviewProviders.get(conn);
@@ -345,6 +347,15 @@ function adoRepoContent(conn) {
   if (!provider) {
     provider = createAdoRepoContentProvider(conn);
     _adoRepoContentProviders.set(conn, provider);
+  }
+  return provider;
+}
+function adoAuthoring(conn) {
+  if (!conn) throw new Error("ADO authoring provider requires a connection");
+  let provider = _adoAuthoringProviders.get(conn);
+  if (!provider) {
+    provider = createAdoAuthoringProvider(conn);
+    _adoAuthoringProviders.set(conn, provider);
   }
   return provider;
 }
@@ -6508,12 +6519,14 @@ async function openPr(args = {}) {
   let target;
   try { target = await resolveTarget({ org: args.org, project: args.project, repo: args.repo }); }
   catch (e) { return { ok: false, error: e.message }; }
-  const gitApi = await target.conn.getGitApi();
+  const authoring = adoAuthoring(target.conn);
   const witApi = await target.conn.getWorkItemTrackingApi();
   try {
     return await openSpecReviewPr({
       call: (fn) => adoCall(fn, { label: "pr-open" }),
-      createPr: (req) => gitApi.createPullRequest(req, target.repoId, target.project),
+      createPr: (req) => authoring.createPullRequest(
+        target.repoId, target.project, req,
+      ),
       findWorkItems: async (wiql) => {
         const q = await witApi.queryByWiql({ query: wiql }, { project: target.project });
         return (q.workItems || []).map((w) => ({ id: w.id }));
@@ -6692,8 +6705,12 @@ async function publishStagedPrs() {
   for (const item of _inventory.snapshot().prPublishes) {
     try {
       const target = await resolveTarget({ org: item.org, project: item.project, repo: item.repo });
-      const gitApi = await target.conn.getGitApi();
-      await adoCall(() => gitApi.updatePullRequest({ isDraft: false }, target.repoId, item.pullRequestId, target.project), { label: "publish PR" });
+      await adoCall(
+        () => adoAuthoring(target.conn).publishPullRequest(
+          target.repoId, target.project, item.pullRequestId,
+        ),
+        { label: "publish PR" },
+      );
       results.push({ pullRequestId: item.pullRequestId, ok: true });
     } catch (e) {
       results.push({ pullRequestId: item.pullRequestId, ok: false, error: e?.message || String(e) });

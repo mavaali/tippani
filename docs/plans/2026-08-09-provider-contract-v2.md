@@ -77,7 +77,7 @@ interface RepoContentProvider {
 // New. The "open a PR from a staged branch" half of clickstop-2.
 interface AuthoringProvider {
   createPullRequest(repo, {title, description, sourceBranch, targetBranch, isDraft}) -> PR
-  linkWorkItem(pr, workItemId) -> void
+  publishPullRequest(repo, pullRequestId) -> PR
 }
 
 // New. Two structurally different searches that happen to share a UI tab.
@@ -99,6 +99,7 @@ interface WorkItemProvider {
   queryWorkItems(project, wiql) -> [WorkItem]
   createWorkItem(project, type, fields) -> WorkItem
   updateWorkItem(id, fields) -> WorkItem
+  linkToPullRequest(workItemId, {projectId, repositoryId, pullRequestId}) -> WorkItem
 }
 
 // New. Isolated because the LFS-pointer-detection behavior (not just the
@@ -131,7 +132,7 @@ interface BlobProvider {
 | Discovery branch/repository listing | RepoContentProvider | `listRepositories`, `listBranches` |
 | `getFileCommits` / `getLastCommitAuthor` | RepoContentProvider | `getFileCommits` |
 | `listBranchFiles` | RepoContentProvider | `resolveRepository`, `diffBranches` |
-| `openPr`, `publishStagedPrs` | AuthoringProvider | `createPullRequest`, `linkWorkItem` |
+| `openPr`, `publishStagedPrs` | AuthoringProvider | `createPullRequest`, `publishPullRequest` |
 | work-item search/create/link (index.js ~7982-7998, ~6594-6598) | WorkItemProvider | `queryWorkItems`, `createWorkItem`, `updateWorkItem` |
 | code search (index.js ~8015-8023) | SearchProvider | `searchSpecs` |
 
@@ -145,14 +146,14 @@ One class, six interfaces, because a single backend naturally supports all six t
 |---|---|---|
 | `ReviewProvider` | **Full.** Already researched in the July doc — GraphQL `reviewThreads`, REST comment/reply, GraphQL `resolveReviewThread`, Contents API `sha` for `commitFile`, marker-comment for viewed-state. `submitReview` (new) maps to `POST /pulls/{n}/reviews` with `event: APPROVE`/`REQUEST_CHANGES`. |
 | `RepoContentProvider` | **Full.** `POST /git/refs` (branch create), `GET /git/ref/heads/{branch}` (tip), Contents API or Git Data API tree/commit endpoints for multi-file push (a single-file `PUT /contents` per file is NOT atomic across files the way ADO's `createPush` change-array is — this is a real gap, not a naming one: a multi-file stage-then-push on GitHub needs the lower-level Git Data API, building a tree and one commit, to preserve the "all-or-nothing" guarantee clickstop-2 promises). `listFolders` — `GET /contents/{path}` non-recursive listing. |
-| `AuthoringProvider` | **Full for PR creation** (`POST /pulls`). **No native analog for `linkWorkItem`** — GitHub has no separate work-item type; the closest equivalent is linking a GitHub Issue via the PR body's closing-keyword syntax (`Closes #123`) or the Projects v2 API. Different enough from ADO's typed work-item link that this method should be allowed to be a no-op / unsupported on `GitHubProvider` rather than faked. |
+| `AuthoringProvider` | **Full.** Create via `POST /pulls`; publish a draft through GraphQL `markPullRequestReadyForReview`. Work-item linking is not an authoring capability — it belongs to the optional `WorkItemProvider` below. |
 | `SearchProvider` | **`searchSpecs`: full** via the GitHub code search API (`GET /search/code`), same `ext:md` filter pattern. **`searchPullRequests`: full** via `GET /search/issues?q=type:pr`. |
 | `WorkItemProvider` | **Does not exist on GitHub as designed.** GitHub Issues has no query language equivalent to WIQL, no typed "work item type" (Feature/Bug/Task), and no field schema. A `GitHubProvider` should implement this interface as **unsupported** (each method returns a capability-not-available error, or the interface is simply absent and callers check `provider.workItems ?? null` before use) rather than emulating WIQL against GitHub's REST search syntax — that emulation would silently produce wrong results for any nontrivial query, which is worse than a clear "not supported here." |
 | `BlobProvider` | **Full**, and simpler than ADO: `GET /repos/{o}/{r}/contents/{path}` with `Accept: application/vnd.github.raw` auto-resolves Git LFS server-side (when the repo has GitHub's LFS support enabled) — no separate pointer-detection step is needed on the GitHub side, though `isLfsPointer()` should stay as a defensive check in case LFS isn't configured, matching the "fail loudly, don't stream pointer bytes as an image" behavior from #68. |
 
 ## Capability gaps are a first-class, visible design element
 
-The July doc's model was "one stable interface, dialect-specific calls hidden below the line" — appropriate when every method has a GitHub equivalent. `WorkItemProvider` and `AuthoringProvider.linkWorkItem` don't. Rather than stretch the contract to cover them badly, a provider capability check is part of the contract itself:
+The July doc's model was "one stable interface, dialect-specific calls hidden below the line" — appropriate when every method has a GitHub equivalent. `WorkItemProvider` does not. Rather than stretch the contract to cover it badly, a provider capability check is part of the contract itself:
 
 ```
 interface Provider {
@@ -171,7 +172,7 @@ The portal/MCP layer checks `provider.workItems` before exposing work-item searc
 
 - **Phase 0 — provider interface, six capabilities.** Extract all 45 call sites (not 55 factory-adjusted, not the smaller review-only set) into `AdoProvider` implementing all six interfaces. Zero behavior change; existing tests hold, plus new route-level integration tests (see companion plan). This is larger than the July Phase 0 but is the actual current surface — deferring any of the six defers the correctness of the interface itself, per Thor's review.
 - **Phase 1 — GitHub `ReviewProvider` + `RepoContentProvider` + `BlobProvider`.** The three fully-supported capabilities: render, comment, WYSIWYG edit + commit, single-file and multi-file push, image/LFS. Usable end-to-end for read/comment/edit/author-without-PR-metadata.
-- **Phase 2 — GitHub `AuthoringProvider` + `SearchProvider`.** PR creation, code search, PR search. `linkWorkItem` ships as a documented no-op.
+- **Phase 2 — GitHub `AuthoringProvider` + `SearchProvider`.** PR creation/publish, code search, PR search.
 - **Phase 3 — `WorkItemProvider` explicitly absent.** Portal/MCP hide work-item UI and tools when `provider.workItems === null`. Not "Phase 3 implements it differently" — Phase 3 is making the absence a clean, visible product decision instead of a silent gap.
 
 Phase 0 still ships first and still "proves the interface against the known backend before GitHub stresses it" (unchanged reasoning from the July doc) — it is just no longer scoped to a contract already known to be a third smaller than what the codebase needs.
