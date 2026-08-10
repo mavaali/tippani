@@ -43,8 +43,28 @@ const last = (calls, name) => [...calls].reverse().find((c) => c.name === name);
   eq("create exact SDK args", last(f.calls, "createWorkItem").args, [null, patch, "P", "Task"]);
   await p.updateWorkItem(2, patch, "P");
   eq("update exact SDK args", last(f.calls, "updateWorkItem").args, [null, patch, 2, "P"]);
-  await p.linkToPullRequest(2, patch);
-  eq("link preserves old no-project call shape", last(f.calls, "updateWorkItem").args, [null, patch, 2, undefined]);
+  await p.linkToPullRequest(2, {
+    projectId: "Project Guid",
+    repositoryId: "Repo Guid",
+    pullRequestId: 77,
+    comment: "Spec review",
+  });
+  eq("link builds ADO artifact patch from backend-neutral PR identity",
+    last(f.calls, "updateWorkItem").args,
+    [
+      null,
+      [{
+        op: "add",
+        path: "/relations/-",
+        value: {
+          rel: "ArtifactLink",
+          url: "vstfs:///Git/PullRequestId/Project%20Guid%2FRepo%20Guid%2F77",
+          attributes: { name: "Pull Request", comment: "Spec review" },
+        },
+      }],
+      2,
+      undefined,
+    ]);
   eq("API acquisition reused", f.calls.filter((c) => c.name === "getWorkItemTrackingApi").length, 1);
 }
 

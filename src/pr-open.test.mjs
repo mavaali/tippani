@@ -76,7 +76,7 @@ await threwAsync("work item create needs a type", () =>
     createPr: async (req) => { calls.push(["createPr", req]); return { pullRequestId: 55, url: "http://pr/55" }; },
     findWorkItems: async () => [],
     createWorkItem: async () => ({ id: 88 }),
-    linkWorkItem: async (id, patch) => { calls.push(["link", id, patch]); return {}; },
+    linkWorkItem: async (id, linkIdentity) => { calls.push(["link", id, linkIdentity]); return {}; },
   };
   const r = await openSpecReviewPr(deps, {
     title: "Add spec", sourceBranch: "spec/x", targetBranch: "main",
@@ -85,7 +85,9 @@ await threwAsync("work item create needs a type", () =>
   });
   ok("PR opened + work item created + linked", r.ok && r.pullRequestId === 55 && r.workItemId === 88 && r.workItemCreated && r.linked);
   ok("createPr got a well-formed request", calls[0][1].sourceRefName === "refs/heads/spec/x");
-  ok("link used the encoded PR artifact uri", calls.find((c) => c[0] === "link")[2][0].value.url === "vstfs:///Git/PullRequestId/P%2FR%2F55");
+  eq("link receives backend-neutral PR identity (provider builds backend patch)",
+    calls.find((c) => c[0] === "link")[2],
+    { projectId: "P", repositoryId: "R", pullRequestId: 55, comment: "Spec review" });
 }
 {
   // No work-item title -> PR only, no work item touched.

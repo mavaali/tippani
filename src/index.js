@@ -6544,8 +6544,8 @@ async function openPr(args = {}) {
       },
       createWorkItem: async (patch, type) =>
         workItems.createWorkItem(target.project, type, patch),
-      linkWorkItem: async (id, patch) =>
-        workItems.linkToPullRequest(id, patch),
+      linkWorkItem: async (id, link) =>
+        workItems.linkToPullRequest(id, link),
     }, { ...args, projectId: target.projectId, repositoryId: target.repoId });
   } catch (e) {
     return { ok: false, error: "open PR failed: " + (e?.message || e) };

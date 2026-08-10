@@ -2,6 +2,8 @@
 // construction, JSON-patch building, and compact row shaping stay in the
 // existing pure modules above this seam.
 
+import { buildPrLinkPatch, prArtifactUri } from "./pr-open.js";
+
 export function createAdoWorkItemProvider(conn) {
   if (!conn) throw new Error("ADO work-item provider requires a connection");
 
@@ -38,7 +40,16 @@ export function createAdoWorkItemProvider(conn) {
     return api.updateWorkItem(null, patch, id, project);
   }
 
-  async function linkToPullRequest(workItemId, patch, project) {
+  async function linkToPullRequest(workItemId, {
+    projectId,
+    repositoryId,
+    pullRequestId,
+    comment = "Spec review",
+  } = {}, project) {
+    const artifactUri = prArtifactUri({
+      projectId, repositoryId, pullRequestId,
+    });
+    const patch = buildPrLinkPatch(artifactUri, { comment });
     return updateWorkItem(workItemId, patch, project);
   }
 
