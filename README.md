@@ -40,8 +40,8 @@ tippani 123 --github=OWNER/REPO
 ```
 
 GitHub auth uses `--gh-token`, `TIPPANI_GH_TOKEN` / `GITHUB_TOKEN`, then
-`gh auth token`. GitHub browse/discovery and remote PR authoring are not wired
-yet; direct PR read/comment/edit/review works.
+`gh auth token`. Direct PR read/comment/edit/review and staged branch/spec/PR
+authoring work. GitHub browse/discovery and search are not wired yet.
 
 Or run without installing:
 

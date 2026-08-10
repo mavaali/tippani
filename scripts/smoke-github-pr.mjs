@@ -22,6 +22,7 @@ const close = (server) => new Promise((resolve) => server.close(resolve));
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 let commentCreated = false;
+let draftPublished = false;
 const writes = [];
 const rawPr = {
   number: 7,
@@ -63,6 +64,35 @@ const api = await listen(http.createServer(async (req, res) => {
   };
 
   if (url.pathname === "/repos/o/r/pulls/7") return sendJson(rawPr);
+  if (url.pathname === "/repos/o/r/pulls/8") {
+    return sendJson({
+      ...rawPr,
+      number: 8,
+      node_id: "PR_8",
+      draft: !draftPublished,
+      html_url: "https://github.com/o/r/pull/8",
+    });
+  }
+  if (url.pathname === "/repos/o/r/git/ref/heads/spec/authored") {
+    return sendJson({
+      ref: "refs/heads/spec/authored",
+      object: { sha: "authored-tip" },
+    });
+  }
+  if (req.method === "POST" && url.pathname === "/repos/o/r/pulls") {
+    writes.push(["create-pr", parsed]);
+    return sendJson({
+      ...rawPr,
+      number: 8,
+      node_id: "PR_8",
+      title: parsed.title,
+      body: parsed.body,
+      draft: parsed.draft,
+      head: { ...rawPr.head, ref: parsed.head },
+      base: { ...rawPr.base, ref: parsed.base },
+      html_url: "https://github.com/o/r/pull/8",
+    }, 201);
+  }
   if (url.pathname === "/repos/o/r/pulls/7/files") {
     return sendJson([{ filename: "docs/spec.md", status: "modified" }]);
   }
@@ -71,7 +101,14 @@ const api = await listen(http.createServer(async (req, res) => {
     return res.end("# GitHub Spec\n\nBody.");
   }
   if (url.pathname === "/repos/o/r") {
-    return sendJson({ permissions: { push: true } });
+    return sendJson({
+      full_name: "o/r",
+      name: "r",
+      owner: { login: "o" },
+      default_branch: "main",
+      html_url: "https://github.com/o/r",
+      permissions: { push: true },
+    });
   }
   if (
     req.method === "POST" &&
@@ -89,6 +126,22 @@ const api = await listen(http.createServer(async (req, res) => {
     return sendJson({ id: 1, state: parsed.event });
   }
   if (req.method === "POST" && url.pathname === "/graphql") {
+    if (parsed.query.includes("PublishTippaniPullRequest")) {
+      draftPublished = true;
+      writes.push(["publish-pr", parsed.variables]);
+      return sendJson({
+        data: {
+          markPullRequestReadyForReview: {
+            pullRequest: {
+              id: "PR_8",
+              number: 8,
+              isDraft: false,
+              url: "https://github.com/o/r/pull/8",
+            },
+          },
+        },
+      });
+    }
     const nodes = commentCreated ? [{
       id: "THREAD_1",
       isResolved: false,
@@ -214,6 +267,82 @@ try {
       discoveryResult.prs.length === 0 &&
       discoveryResult.error?.includes("not available"),
       JSON.stringify(discoveryResult));
+
+    const mutationHeaders = {
+      Authorization: "Bearer " + sessionToken,
+      "X-Tippani-Client": "smoke-github-pr",
+      "Content-Type": "application/json",
+    };
+    const stagedCreate = await fetch(`${base}/api/v1/pr/stage`, {
+      method: "POST",
+      headers: mutationHeaders,
+      body: JSON.stringify({
+        org: "https://github.com",
+        project: "o",
+        repo: "o/r",
+        title: "Authored spec",
+        description: "Created through Tippani",
+        sourceBranch: "spec/authored",
+        targetBranch: "main",
+        isDraft: true,
+      }),
+    });
+    const stagedCreateResult = await stagedCreate.json();
+    check("GitHub PR creation stages locally",
+      stagedCreate.status === 200 && stagedCreateResult.ok === true,
+      JSON.stringify(stagedCreateResult));
+    const pushedCreate = await fetch(`${base}/api/v1/branches/push`, {
+      method: "POST",
+      headers: mutationHeaders,
+      body: "{}",
+    });
+    const pushedCreateResult = await pushedCreate.json();
+    check("GitHub PR creation crosses on explicit push",
+      pushedCreate.status === 200 &&
+      pushedCreateResult.ok === true &&
+      pushedCreateResult.results?.[0]?.pullRequestId === 8,
+      JSON.stringify(pushedCreateResult));
+    check("GitHub PR creation maps neutral request",
+      writes.some(([kind, value]) =>
+        kind === "create-pr" &&
+        value.title === "Authored spec" &&
+        value.head === "spec/authored" &&
+        value.base === "main" &&
+        value.draft === true));
+
+    const stagedPublish = await fetch(
+      `${base}/api/v1/pr/publish/stage`,
+      {
+        method: "POST",
+        headers: mutationHeaders,
+        body: JSON.stringify({
+          org: "https://github.com",
+          project: "o",
+          repo: "o/r",
+          pullRequestId: 8,
+          title: "Authored spec",
+        }),
+      },
+    );
+    const stagedPublishResult = await stagedPublish.json();
+    check("GitHub draft publication stages locally",
+      stagedPublish.status === 200 && stagedPublishResult.ok === true,
+      JSON.stringify(stagedPublishResult));
+    const pushedPublish = await fetch(`${base}/api/v1/branches/push`, {
+      method: "POST",
+      headers: mutationHeaders,
+      body: "{}",
+    });
+    const pushedPublishResult = await pushedPublish.json();
+    check("GitHub draft publication crosses on explicit push",
+      pushedPublish.status === 200 &&
+      pushedPublishResult.ok === true &&
+      pushedPublishResult.publishes?.results?.[0]?.pullRequestId === 8,
+      JSON.stringify(pushedPublishResult));
+    check("GitHub draft publication uses GraphQL node id",
+      draftPublished &&
+      writes.some(([kind, value]) =>
+        kind === "publish-pr" && value.pullRequestId === "PR_8"));
 
     const viewed = await fetch(`${base}/api/v1/threads/101/viewed`, {
       method: "POST",

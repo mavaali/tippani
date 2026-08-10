@@ -207,6 +207,25 @@ try {
     s.stop();
   }
 
+  // --- authoring mutations stay on the active GitHub portal ---
+  {
+    reset();
+    const s = newSession({ githubToken: "gh-test-token" });
+    await s.ensurePortal({
+      prId: 77,
+      provider: "github",
+      owner: "mavaali",
+      repo: "tippani",
+    });
+    const spawnBefore = spawnCalls.length;
+    const r = await s.ensureActivePortal();
+    check("active mutation portal: reuses GitHub portal", r.reused === true);
+    check("active mutation portal: does not launch ADO browse",
+      spawnCalls.length === spawnBefore &&
+      s.getBaseUrl() === "http://localhost:3847");
+    s.stop();
+  }
+
   // --- a provider-tagged GitHub prId=0 entry is not an ADO browse portal ---
   {
     reset();

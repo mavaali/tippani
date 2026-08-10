@@ -132,9 +132,11 @@ const http = createHttpClient({ baseUrl: BASE, token: TOKEN, clientName: "mcp-te
 const ensurePortalCalls = [];
 const openUrlCalls = [];
 const browsePortalCalls = [];
+const activePortalCalls = [];
 const stubSession = {
   ensurePortal: async (opts) => { ensurePortalCalls.push(opts); return { reused: false, prId: opts.prId }; },
   ensureBrowsePortal: async () => { browsePortalCalls.push(1); },
+  ensureActivePortal: async () => { activePortalCalls.push(1); },
   openUrl: async (path) => { openUrlCalls.push(path); },
 };
 const tools = buildTools(http, stubSession);
@@ -232,9 +234,12 @@ try {
     check("stage_spec: does not cross ADO boundary", aggregatePushCalls === 0);
   }
   {
+    const before = activePortalCalls.length;
     const r = await byName.stage_spec_pr.handler({ org: "https://dev.azure.com/o", project: WPROJ, repo: WREPO, title: "Add spec", sourceBranch: "spec/x", targetBranch: "main" });
     check("stage_spec_pr: stages intent", r.ok === true && stagedPrs.length === 1);
     check("stage_spec_pr: does not cross ADO boundary", aggregatePushCalls === 0);
+    check("stage_spec_pr: stays on active provider portal",
+      activePortalCalls.length === before + 1);
   }
   {
     const r = await byName.push_staged_changes.handler({});

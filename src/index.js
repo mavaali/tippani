@@ -82,6 +82,7 @@ import { createAdoBlobProvider } from "./ado-blob-provider.js";
 import { createGitHubClient } from "./github-client.js";
 import { createGitHubReviewProvider } from "./github-review-provider.js";
 import { createGitHubRepoContentProvider } from "./github-repo-content-provider.js";
+import { createGitHubAuthoringProvider } from "./github-authoring-provider.js";
 import { createGitHubBlobProvider } from "./github-blob-provider.js";
 import { createGitHubViewedStore } from "./github-viewed-store.js";
 import { parseGitHubTarget, selectGitHubToken } from "./github-target.js";
@@ -124,7 +125,8 @@ let ADO_ORG, ADO_PROJECT, ADO_REPO;
 let _hostKind = "ado";
 let _githubOwner = null, _githubRepo = null;
 let _githubHeadOwner = null, _githubHeadRepo = null;
-let _githubReview = null, _githubRepoContent = null, _githubBlobs = null;
+let _githubReview = null, _githubRepoContent = null;
+let _githubAuthoring = null, _githubBlobs = null;
 // Human-readable name for ADO_PROJECT (which applyRepoContextFromPR may re-point
 // to a project GUID). Resolved by listAdoProjects so the picker never shows a GUID.
 let _adoProjectDisplayName = null;
@@ -423,6 +425,9 @@ function reviewProvider(conn) {
 function repoContentProvider(conn) {
   return _hostKind === "github" ? _githubRepoContent : adoRepoContent(conn);
 }
+function authoringProvider(conn) {
+  return _hostKind === "github" ? _githubAuthoring : adoAuthoring(conn);
+}
 function blobProvider(conn) {
   return _hostKind === "github" ? _githubBlobs : adoBlobs(conn);
 }
@@ -439,6 +444,7 @@ function initGitHubProviders(token, { owner, repo }) {
     owner, repo, viewedStore,
   });
   _githubRepoContent = createGitHubRepoContentProvider(client);
+  _githubAuthoring = createGitHubAuthoringProvider(client);
   _githubHeadOwner = owner;
   _githubHeadRepo = repo;
   _githubBlobs = createGitHubBlobProvider(client, {
@@ -6514,6 +6520,33 @@ function buildConnForOrg(org) {
 // the review globals play no part in an authoring write.
 async function resolveTarget({ org, project, repo } = {}) {
   const t = resolveWriteTarget({ org, project, repo });
+  if (_hostKind === "github") {
+    if (t.org.toLowerCase() !== "https://github.com") {
+      const error = new Error(
+        "GitHub writes require org=https://github.com",
+      );
+      error.code = "WRITE_TARGET";
+      throw error;
+    }
+    const info = await _githubRepoContent.resolveRepository(t.repo, t.project);
+    const owner = info?.project?.id || t.project;
+    if (String(owner).toLowerCase() !== t.project.toLowerCase()) {
+      const error = new Error(
+        `repo ${t.repo} does not belong to GitHub owner ${t.project}`,
+      );
+      error.code = "WRITE_TARGET";
+      throw error;
+    }
+    return {
+      conn: _conn,
+      org: t.org,
+      project: owner,
+      repo: t.repo,
+      repoId: info?.id || `${owner}/${t.repo}`,
+      projectId: owner,
+      repoName: info?.name || t.repo,
+    };
+  }
   const conn = buildConnForOrg(t.org);
   if (!conn) { const e = new Error("no ADO connection for " + t.org); e.noConn = true; throw e; }
   const info = await adoRepoContent(conn).resolveRepository(t.repo, t.project);
@@ -6549,7 +6582,7 @@ async function pushRemoteSpec({ org, project, repo, branch, message, oldObjectId
   const edits = staged.filter((d) => d.baseObjectId).map((d) => ({ path: d.path, content: d.body }));
   let pushed;
   try {
-    pushed = await adoRepoContent(target.conn).pushFiles(
+    pushed = await repoContentProvider(target.conn).pushFiles(
       target.repoId,
       target.project,
       {
@@ -6574,15 +6607,38 @@ async function pushRemoteSpec({ org, project, repo, branch, message, oldObjectId
 // we inject the real ADO calls, each bounded by the adoCall timeout. Title/type
 // come from the caller — never inferred.
 async function openPr(args = {}) {
-  if (_hostKind === "github") {
-    return {
-      ok: false,
-      error: "Opening GitHub pull requests from Tippani is not wired yet.",
-    };
-  }
   let target;
   try { target = await resolveTarget({ org: args.org, project: args.project, repo: args.repo }); }
   catch (e) { return { ok: false, error: e.message }; }
+  if (_hostKind === "github") {
+    if (args.workItemTitle) {
+      return {
+        ok: false,
+        error: "Work-item linking is not available for GitHub pull requests.",
+      };
+    }
+    try {
+      const pr = await authoringProvider(target.conn).createPullRequest(
+        target.repoId,
+        target.project,
+        args,
+      );
+      return {
+        ok: true,
+        pullRequestId: pr.pullRequestId,
+        url: pr.url,
+        isDraft: pr.isDraft,
+        workItemId: null,
+        workItemCreated: false,
+        linked: false,
+      };
+    } catch (e) {
+      return {
+        ok: false,
+        error: "open PR failed: " + (e?.message || e),
+      };
+    }
+  }
   const authoring = adoAuthoring(target.conn);
   const workItems = adoWorkItems(target.conn);
   try {
@@ -6615,7 +6671,7 @@ async function mcpCreateBranch({ org, project, repo, branch, base } = {}) {
   try { target = await resolveTarget({ org, project, repo }); }
   catch (e) { return { ok: false, error: e.message }; }
   const branchRef = normalizeBranchRef(branch);
-  const repoContent = adoRepoContent(target.conn);
+  const repoContent = repoContentProvider(target.conn);
   // Already exists? Adopt it (idempotent), don't fail or clobber.
   try {
     const tip = await getBranchTip(target.conn, branchRef, target.repoId, target.project);
@@ -6623,7 +6679,15 @@ async function mcpCreateBranch({ org, project, repo, branch, base } = {}) {
       openAuthoringSession({ id: branchRef, repo: target.repo, branch });
       return { ok: true, org: target.org, project: target.project, repo: target.repo, branch, branchRef, created: false, objectId: tip };
     }
-  } catch { /* not found -> create below */ }
+  } catch (e) {
+    if (_hostKind === "github" && e?.status !== 404) {
+      return {
+        ok: false,
+        error: "failed to read branch: " + (e?.message || e),
+      };
+    }
+    // Not found -> create below. ADO's SDK does not expose a stable 404 shape.
+  }
   // Resolve the base branch + its tip.
   let available = [];
   try {
@@ -6726,7 +6790,7 @@ async function pushStagedBranches() {
     let commitId = null;
     if (group.adds.length || group.edits.length) {
       try {
-        const pushed = await adoRepoContent(target.conn).pushFiles(
+        const pushed = await repoContentProvider(target.conn).pushFiles(
           target.repoId,
           target.project,
           {
@@ -6770,12 +6834,11 @@ async function publishStagedPrs() {
   for (const item of _inventory.snapshot().prPublishes) {
     try {
       const target = await resolveTarget({ org: item.org, project: item.project, repo: item.repo });
-      await adoCall(
-        () => adoAuthoring(target.conn).publishPullRequest(
-          target.repoId, target.project, item.pullRequestId,
-        ),
-        { label: "publish PR" },
+      const publish = () => authoringProvider(target.conn).publishPullRequest(
+        target.repoId, target.project, item.pullRequestId,
       );
+      if (_hostKind === "github") await publish();
+      else await adoCall(publish, { label: "publish PR" });
       results.push({ pullRequestId: item.pullRequestId, ok: true });
     } catch (e) {
       results.push({ pullRequestId: item.pullRequestId, ok: false, error: e?.message || String(e) });

@@ -246,6 +246,17 @@ never adopts ADO PR #N), forwards `TIPPANI_GH_TOKEN`, and launches the same
 direct-PR portal headlessly. ADO token validation remains independent and
 fail-fast; missing GitHub auth does not disable ADO/local tools.
 
+### Phase 2 implementation notes (GitHub AuthoringProvider)
+
+`src/github-authoring-provider.js` implements pull-request creation through the
+GitHub REST API and draft publication through
+`markPullRequestReadyForReview`. The existing staged-authoring pipeline now
+selects RepoContent and Authoring capabilities by host, so branch creation,
+atomic staged-file publication, PR creation, and draft publication use the same
+reviewable local staging flow on GitHub and Azure DevOps. GitHub work-item
+linking remains explicitly unsupported rather than being silently translated to
+Issues.
+
 ## Capability gaps are a first-class, visible design element
 
 The July doc's model was "one stable interface, dialect-specific calls hidden below the line" — appropriate when every method has a GitHub equivalent. `WorkItemProvider` does not. Rather than stretch the contract to cover it badly, a provider capability check is part of the contract itself:
@@ -267,7 +278,7 @@ The portal/MCP layer checks `provider.workItems` before exposing work-item searc
 
 - **Phase 0 — provider interface, six capabilities.** Extract all 49 call sites (not 55 factory-adjusted, not the smaller review-only set) into six ADO capability providers. Zero behavior change; existing tests hold, plus route and built-artifact integration tests. This is larger than the July Phase 0 but is the actual current surface — deferring any of the six defers the correctness of the interface itself, per Thor's review.
 - **Phase 1 — GitHub `ReviewProvider` + `RepoContentProvider` + `BlobProvider`.** The three fully-supported capabilities: render, comment, WYSIWYG edit + commit, single-file and multi-file push, image/LFS. Usable end-to-end for read/comment/edit/author-without-PR-metadata.
-- **Phase 2 — GitHub `AuthoringProvider` + `SearchProvider`.** PR creation/publish, code search, PR search.
+- **Phase 2 — GitHub `AuthoringProvider` + `SearchProvider`.** Authoring is implemented: PR creation/publish now uses the provider-neutral staged workflow. Code search and PR search remain.
 - **Phase 3 — `WorkItemProvider` explicitly absent.** Portal/MCP hide work-item UI and tools when `provider.workItems === null`. Not "Phase 3 implements it differently" — Phase 3 is making the absence a clean, visible product decision instead of a silent gap.
 
 Phase 0 still ships first and still "proves the interface against the known backend before GitHub stresses it" (unchanged reasoning from the July doc) — it is just no longer scoped to a contract already known to be a third smaller than what the codebase needs.
