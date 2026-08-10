@@ -1,6 +1,7 @@
 // Tests for the routing directive surfaces (clickstop 2, step 14).
 import {
   AUTHORING_FLOW,
+  AUTH_RECOVERY_DIRECTIVE,
   ROUTING_DIRECTIVE,
   AUTHOR_SPEC_INSTRUCTIONS,
   AUTHOR_SPEC_PROMPT_NAME,
@@ -23,6 +24,12 @@ ok("directive names the flow", ROUTING_DIRECTIVE.includes(AUTHORING_FLOW));
 // initialize.instructions carries the directive.
 ok("instructions carry the directive", AUTHOR_SPEC_INSTRUCTIONS.includes(ROUTING_DIRECTIVE));
 ok("instructions forbid raw git/ADO", /raw git/.test(AUTHOR_SPEC_INSTRUCTIONS) && /Azure DevOps MCP/.test(AUTHOR_SPEC_INSTRUCTIONS));
+ok("instructions carry auth recovery", AUTHOR_SPEC_INSTRUCTIONS.includes(AUTH_RECOVERY_DIRECTIVE));
+ok("auth recovery is triggered by ADO 401", /ADO-backed tool fails with HTTP 401/.test(AUTH_RECOVERY_DIRECTIVE));
+ok("auth recovery closes portals before restart", /close_tippani/.test(AUTH_RECOVERY_DIRECTIVE));
+ok("auth recovery permits host lifecycle or local termination", /host's MCP lifecycle controls/.test(AUTH_RECOVERY_DIRECTIVE) && /terminate.*tippani-mcp process/.test(AUTH_RECOVERY_DIRECTIVE));
+ok("auth recovery retries exactly once", /Retry the original tool exactly once/.test(AUTH_RECOVERY_DIRECTIVE));
+ok("auth recovery never round-trips tokens", /Never pass access tokens through chat or MCP tool arguments/.test(AUTH_RECOVERY_DIRECTIVE));
 
 // The author-spec prompt.
 ok("prompt name is author-spec", AUTHOR_SPEC_PROMPT_NAME === "author-spec");

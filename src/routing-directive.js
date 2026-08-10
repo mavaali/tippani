@@ -18,10 +18,19 @@ export const ROUTING_DIRECTIVE =
   "Each tool echoes the resolved {repo, branch, path} and tells you the next step; " +
   "follow that chain rather than reaching for git or the Azure DevOps MCP.";
 
+export const AUTH_RECOVERY_DIRECTIVE =
+  "If an ADO-backed tool fails with HTTP 401, call close_tippani to shut down " +
+  "owned portals, then restart this MCP server using the host's MCP lifecycle controls. " +
+  "If no restart control is available but local script execution is allowed, terminate " +
+  "the current tippani-mcp process so the host can relaunch it with fresh startup credentials. " +
+  "Retry the original tool exactly once. Never pass access tokens through chat or MCP tool " +
+  "arguments; if the retry also fails, report the authentication error and stop.";
+
 // Sent as the MCP server's `initialize.instructions` — the first thing the host
 // model sees on connect.
 export const AUTHOR_SPEC_INSTRUCTIONS =
-  "Tippani is the review + spec-authoring portal. " + ROUTING_DIRECTIVE;
+  "Tippani is the review + spec-authoring portal. " + ROUTING_DIRECTIVE +
+  " " + AUTH_RECOVERY_DIRECTIVE;
 
 export const AUTHOR_SPEC_PROMPT_NAME = "author-spec";
 

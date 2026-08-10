@@ -26,6 +26,13 @@ It registers **47 tools**. `open_pr` (or a Discovery tool like `list_prs` /
 other tool then operates on that open session. A parameter marked `*` is
 required.
 
+The server's `initialize.instructions` defines authentication recovery for all
+ADO-backed tools. After HTTP 401, call `close_tippani`, restart the MCP server
+through the host's lifecycle controls (or terminate `tippani-mcp` with an
+approved local script when no restart control exists), and retry the original
+tool exactly once. Never pass access tokens through chat or MCP tool arguments;
+report and stop if the retry also fails.
+
 ### Reviewing a pull request
 
 | Tool | Purpose | Parameters |
