@@ -7775,7 +7775,7 @@ async function main() {
     if (_isOffline || !_conn) return { prs: [], error: "offline" };
     let currentUserId = null;
     let identityError = null;
-    try { const cd = await _conn.connect(); currentUserId = cd && cd.authenticatedUser && cd.authenticatedUser.id; }
+    try { currentUserId = (await adoReview(_conn).getCurrentUser())?.id || null; }
     catch (e) { identityError = friendlyAdoError(e, "Review queue"); }
     const top = Number.isFinite(query.top) ? query.top : 50;
 
@@ -8012,11 +8012,11 @@ async function main() {
     if (_me) return _me;
     if (_isOffline || !_conn) return { displayName: "You", id: null };
     try {
-      const cd = await _conn.connect();
+      const user = await adoReview(_conn).getCurrentUser();
       _me = {
-        displayName: (cd && cd.authenticatedUser && cd.authenticatedUser.displayName) || "You",
-        uniqueName: (cd && cd.authenticatedUser && cd.authenticatedUser.uniqueName) || null,
-        id: (cd && cd.authenticatedUser && cd.authenticatedUser.id) || null,
+        displayName: user?.displayName || "You",
+        uniqueName: user?.uniqueName || null,
+        id: user?.id || null,
       };
     } catch { _me = { displayName: "You", uniqueName: null, id: null }; }
     return _me;

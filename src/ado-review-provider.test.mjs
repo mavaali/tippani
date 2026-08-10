@@ -265,11 +265,26 @@ function providerFor(fake, options = {}) {
 // --- formal review vote -----------------------------------------------------
 {
   const fake = fakeConnection();
-  await providerFor(fake).submitReview(12, -5);
+  eq("getCurrentUser projects neutral identity",
+    await providerFor(fake).getCurrentUser(), {
+    id: "reviewer-1",
+    displayName: "Reviewer",
+    uniqueName: null,
+  });
+}
+{
+  const fake = fakeConnection();
+  const provider = providerFor(fake);
+  await provider.submitReview(12, -5);
   eq("submitReview connects to resolve reviewer identity", countCalls(fake.calls, "connect"), 1);
   eq("submitReview sends exact vote + reviewer id", lastCall(fake.calls, "createPullRequestReviewer").args, [
     { vote: -5 }, "repo-A", 12, "reviewer-1", "project-A",
   ]);
+}
+{
+  const fake = fakeConnection({ connectResult: {} });
+  eq("getCurrentUser missing identity -> null",
+    await providerFor(fake).getCurrentUser(), null);
 }
 
 // --- edit/push permission probe --------------------------------------------

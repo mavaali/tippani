@@ -3,11 +3,11 @@
 **Date:** 2026-08-09
 **Supersedes:** [2026-07-13-github-provider-design.md](2026-07-13-github-provider-design.md) — the original `ReviewProvider` contract is retained as one of six capability interfaces below, unchanged in shape. Nothing in that doc's GitHub-mapping research (threads, viewed-state, commitFile) is invalidated; it is incorporated by reference in the "Review & comment" section.
 **Status:** Phase 0 implemented across capability slices (PRs #76 onward); GitHub implementation not started.
-**Why superseded:** The July design audited 55 call sites across two files and proposed one interface. Since then, "clickstop-2" (PR #71, merged) added end-to-end remote spec authoring — stage a branch, add folders and files, open a PR, link a work item, publish everything in one push — plus Discovery's work-item search and full-text spec search, and #68's image/Git-LFS blob proxy. Re-auditing the current `main` (tag `v1.7.0`) finds **31 distinct Azure DevOps backend methods across 46 call sites in two files** (`src/index.js`, `src/ado-read.js`) — a larger and functionally broader surface than "review + single-file commit." A twelve-method interface scoped to review cannot express any of it. Per the original doc's own framing: *"the interface is the whole bet."* This revises the bet before a GitHub port is built against a contract already known to be too small.
+**Why superseded:** The July design audited 55 call sites across two files and proposed one interface. Since then, "clickstop-2" (PR #71, merged) added end-to-end remote spec authoring — stage a branch, add folders and files, open a PR, link a work item, publish everything in one push — plus Discovery's work-item search and full-text spec search, and #68's image/Git-LFS blob proxy. Re-auditing the current `main` (tag `v1.7.0`) finds **32 distinct Azure DevOps backend methods across 49 call sites in two files** (`src/index.js`, `src/ado-read.js`) — a larger and functionally broader surface than "review + single-file commit." A twelve-method interface scoped to review cannot express any of it. Per the original doc's own framing: *"the interface is the whole bet."* This revises the bet before a GitHub port is built against a contract already known to be too small.
 
 ## Re-audit — the real surface (verified against `main` @ `v1.7.0`)
 
-Counted directly (`grep -oE 'gitApi\.[a-zA-Z]+\(|coreApi\.[a-zA-Z]+\(|witApi\.[a-zA-Z]+\(|conn\.rest\.[a-zA-Z]+\('`), not by counting `getGitApi()`/`getCoreApi()`/`getWorkItemTrackingApi()` factory calls (the July doc's "55 call sites" figure was closer to counting factory acquisitions than distinct backend operations — a methodology mismatch worth naming since it understates what a GitHub port must reimplement).
+Counted directly with a broad baseline scan: `grep -oE '(gitApi|coreApi|witApi|securityApi)\.[a-zA-Z]+\(|_?conn\.(connect|rest\.(get|create))\(' src/index.js src/ado-read.js`. It yields 49 matches; normalizing `conn.connect` and `_conn.connect` to the same semantic operation yields 32 distinct backend methods. This deliberately includes `WebApi.connect()` (connection-data identity is a real RPC), not just typed API methods, and excludes only connection construction/auth handlers. The July doc's "55 call sites" figure was closer to counting factory acquisitions than distinct backend operations — a methodology mismatch worth naming since it understates what a GitHub port must reimplement.
 
 | Cluster | SDK methods used | Call sites | Where |
 |---|---|---:|---|
@@ -20,8 +20,9 @@ Counted directly (`grep -oE 'gitApi\.[a-zA-Z]+\(|coreApi\.[a-zA-Z]+\(|witApi\.[a
 | Work items | `queryByWiql`, `createWorkItem`, `updateWorkItem`, `getWorkItems` | 5 | `index.js` |
 | Cross-org / code search (REST, no typed SDK method) | `conn.rest.get` (org-wide PR list), `conn.rest.create` (ADO Code Search) | 2 | `index.js` |
 | Push-permission probe | `hasPermissions` | 1 | `index.js` |
+| Current-user identity | `connect` (connection data) | 3 | `index.js` |
 
-**31 distinct methods, 46 call sites.** Plus one behavior not visible in a method-name count: blob reads call `getItemContent` with `resolveLfs: true` and pair the returned bytes with `isLfsPointer()` above the provider line to reject a still-pointer response. A GitHub provider needs the same fail-loudly behavior even though its transport differs.
+**32 distinct methods, 49 call sites.** Plus one behavior not visible in a method-name count: blob reads call `getItemContent` with `resolveLfs: true` and pair the returned bytes with `isLfsPointer()` above the provider line to reject a still-pointer response. A GitHub provider needs the same fail-loudly behavior even though its transport differs.
 
 ## Architecture — six capability interfaces, not one
 
@@ -32,6 +33,7 @@ Thor's review of this codebase's provider design (2026-08-09) argued a single `R
 // in that doc and remains valid. Every AdoProvider method here already exists
 // in src/index.js under a different name (see mapping table below).
 interface ReviewProvider {
+  getCurrentUser() -> User | null
   connect(auth)
   getPullRequest(id) -> PR
   listChangedFiles(pr) -> [{path, changeType}]
@@ -130,6 +132,7 @@ interface BlobProvider {
 | `getPRChangedFiles` | ReviewProvider | `listChangedFiles` |
 | `getCommentThreads` / `createCommentThread` / `replyToThread` / `resolveThread` | ReviewProvider | `listThreads` / `createComment` / `replyToThread` / `resolveThread` |
 | `submitReviewVote` (added in #72) | ReviewProvider | `submitReview` — **new method, not in the July contract at all** |
+| Review queue / annotation identity (`doListPrs`, `getMe`) | ReviewProvider | `getCurrentUser` |
 | `computeCanEdit` permission probe | ReviewProvider | `probePushPermission` — host-specific push permission; fail-open policy stays above the provider line |
 | `readViewedMap` / `getViewedMap` / `setViewedMap` | ReviewProvider | `getViewed` / `setViewed` |
 | `getFileReviewHistory` | ReviewProvider | `getFileReviewHistory` — raw PR/thread history; markdown rendering stays above the provider line |
@@ -146,7 +149,7 @@ interface BlobProvider {
 
 ## ADO implementation — six capability providers
 
-Six small provider factories implement the six interfaces. They share the same underlying ADO WebApi connection through per-connection WeakMap adapters in `index.js`; each owns only its capability's SDK client/cache. Phase 0 mechanically extracts the 46 backend call sites behind named methods, with route and built-artifact integration tests covering the demonstrated failure classes (see "What this design does NOT claim" below).
+Six small provider factories implement the six interfaces. They share the same underlying ADO WebApi connection through per-connection WeakMap adapters in `index.js`; each owns only its capability's SDK client/cache. Phase 0 mechanically extracts the 49 backend call sites behind named methods, with route and built-artifact integration tests covering the demonstrated failure classes (see "What this design does NOT claim" below).
 
 ## `GitHubProvider` — capability-by-capability feasibility
 
@@ -178,7 +181,7 @@ The portal/MCP layer checks `provider.workItems` before exposing work-item searc
 
 ## Phasing (revised)
 
-- **Phase 0 — provider interface, six capabilities.** Extract all 46 call sites (not 55 factory-adjusted, not the smaller review-only set) into six ADO capability providers. Zero behavior change; existing tests hold, plus route and built-artifact integration tests. This is larger than the July Phase 0 but is the actual current surface — deferring any of the six defers the correctness of the interface itself, per Thor's review.
+- **Phase 0 — provider interface, six capabilities.** Extract all 49 call sites (not 55 factory-adjusted, not the smaller review-only set) into six ADO capability providers. Zero behavior change; existing tests hold, plus route and built-artifact integration tests. This is larger than the July Phase 0 but is the actual current surface — deferring any of the six defers the correctness of the interface itself, per Thor's review.
 - **Phase 1 — GitHub `ReviewProvider` + `RepoContentProvider` + `BlobProvider`.** The three fully-supported capabilities: render, comment, WYSIWYG edit + commit, single-file and multi-file push, image/LFS. Usable end-to-end for read/comment/edit/author-without-PR-metadata.
 - **Phase 2 — GitHub `AuthoringProvider` + `SearchProvider`.** PR creation/publish, code search, PR search.
 - **Phase 3 — `WorkItemProvider` explicitly absent.** Portal/MCP hide work-item UI and tools when `provider.workItems === null`. Not "Phase 3 implements it differently" — Phase 3 is making the absence a clean, visible product decision instead of a silent gap.

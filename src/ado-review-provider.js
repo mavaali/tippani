@@ -157,9 +157,19 @@ export function createAdoReviewProvider(conn, {
     );
   }
 
-  async function submitReview(prId, vote, options = {}) {
+  async function getCurrentUser() {
     const cd = await conn.connect();
-    const reviewerId = cd?.authenticatedUser?.id;
+    const user = cd?.authenticatedUser;
+    if (!user) return null;
+    return {
+      id: user.id || null,
+      displayName: user.displayName || "",
+      uniqueName: user.uniqueName || null,
+    };
+  }
+
+  async function submitReview(prId, vote, options = {}) {
+    const reviewerId = (await getCurrentUser())?.id;
     if (!reviewerId) {
       throw new Error(
         "Could not resolve your Azure DevOps identity, so the vote was not recorded.",
@@ -367,6 +377,7 @@ export function createAdoReviewProvider(conn, {
     createComment,
     replyToThread,
     resolveThread,
+    getCurrentUser,
     submitReview,
     probePushPermission,
     readViewed,
