@@ -1,4 +1,5 @@
 import {
+  normalizeGitHubCoordinates,
   parseGitHubTarget,
   selectGitHubToken,
 } from "./github-target.js";
@@ -9,6 +10,17 @@ function eq(name, a, b) { ok(name + ` (got ${JSON.stringify(a)})`, JSON.stringif
 
 eq("non-GitHub args", parseGitHubTarget(["123"]), { isGitHub: false });
 eq("shorthand", parseGitHubTarget(["github:mavaali/tippani#82"]), {
+  isGitHub: true, owner: "mavaali", repo: "tippani", prId: 82,
+});
+eq("coordinates normalize case and clone suffix", normalizeGitHubCoordinates({
+  owner: " MAVAALI ",
+  repo: "Tippani.git",
+}), {
+  owner: "mavaali", repo: "tippani",
+});
+eq("target normalizes case and clone suffix", parseGitHubTarget([
+  "github:MAVAALI/Tippani.git#82",
+]), {
   isGitHub: true, owner: "mavaali", repo: "tippani", prId: 82,
 });
 eq("PR URL", parseGitHubTarget([

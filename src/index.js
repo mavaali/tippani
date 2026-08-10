@@ -7899,6 +7899,12 @@ async function main() {
   // PRs; widen via query.creator = 'any'. Returns summarized PRs for the /prs
   // page + list_prs tool.
   async function doListPrs(query = {}) {
+    if (_hostKind === "github") {
+      return {
+        prs: [],
+        error: "Pull-request discovery is not available for GitHub repositories. Open a specific pull request.",
+      };
+    }
     if (_isOffline || !_conn) return { prs: [], error: "offline" };
     let currentUserId = null;
     let identityError = null;

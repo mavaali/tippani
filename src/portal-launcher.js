@@ -21,6 +21,7 @@ import net from "net";
 import path from "path";
 import { fileURLToPath } from "url";
 import openDefault from "open";
+import { normalizeGitHubCoordinates } from "./github-target.js";
 import { listInstances, removeInstance, reapInstances } from "./portal-registry.js";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -120,10 +121,13 @@ export function createPortalSession({
     prId, provider = "ado", owner = null, repo = null,
   }) {
     const instProvider = inst.provider || "ado"; // backward-compatible entries
+    const instGitHub = normalizeGitHubCoordinates(inst);
+    const targetGitHub = normalizeGitHubCoordinates({ owner, repo });
     return Number(inst.prId) === Number(prId) &&
       instProvider === provider &&
       (provider !== "github" ||
-        (inst.owner === owner && inst.repo === repo));
+        (instGitHub.owner === targetGitHub.owner &&
+          instGitHub.repo === targetGitHub.repo));
   }
 
   async function findLivePortalForPr(target) {
@@ -149,14 +153,15 @@ export function createPortalSession({
   } = {}) {
     const id = Number(prId);
     if (!id) throw new Error("open_pr requires a numeric prId.");
-    if (provider === "github" && (!owner || !repo)) {
+    const github = normalizeGitHubCoordinates({ owner, repo });
+    if (provider === "github" && (!github.owner || !github.repo)) {
       throw new Error("GitHub open_pr requires owner and repo.");
     }
     const target = {
       prId: id,
       provider,
-      owner: provider === "github" ? owner : null,
-      repo: provider === "github" ? repo : null,
+      owner: provider === "github" ? github.owner : null,
+      repo: provider === "github" ? github.repo : null,
     };
 
     let result;
@@ -174,7 +179,13 @@ export function createPortalSession({
       } else {
         // 3. Launch a new portal on a free port, leaving other PRs' portals alone.
         active = await launchNew({
-          prId: id, org, project, repo, refresh, provider, owner,
+          prId: id,
+          org,
+          project,
+          repo: provider === "github" ? target.repo : repo,
+          refresh,
+          provider,
+          owner: target.owner,
         });
         result = { reused: false, prId: id, url: active.url };
       }
@@ -197,19 +208,29 @@ export function createPortalSession({
   }
 
   // Ensure a portal exists for cross-PR browsing (list_prs). Reuses the active
-  // portal (PR-bound OR browse — both serve /prs + /api/v1/prs), or an existing
-  // browse portal (prId 0) in the registry, else launches a PR-less browse
-  // portal (reads org/project from ~/.tippani/config.json).
+  // ADO portal (PR-bound OR browse — both serve /prs + /api/v1/prs), or an
+  // existing ADO browse portal (prId 0) in the registry, else launches a PR-less
+  // browse portal (reads org/project from ~/.tippani/config.json).
   async function ensureBrowsePortal({ headless = true } = {}) {
-    if (active && (await healthyAt(active.url, active.token))) {
+    if (active && (active.provider || "ado") === "ado" &&
+        (await healthyAt(active.url, active.token))) {
       if (!headless) await maybeOpenBrowser();
       return { reused: true, url: active.url };
     }
     for (const inst of listInstancesFn()) {
-      if (Number(inst.prId) !== 0) continue;
+      if (Number(inst.prId) !== 0 || (inst.provider || "ado") !== "ado") continue;
       const url = inst.url || `http://localhost:${inst.port}`;
       if (await healthyAt(url, inst.token)) {
-        active = { port: Number(inst.port), url, token: inst.token, prId: 0, owned: false };
+        active = {
+          port: Number(inst.port),
+          url,
+          token: inst.token,
+          prId: 0,
+          provider: "ado",
+          owner: null,
+          repo: null,
+          owned: false,
+        };
         if (!headless) await maybeOpenBrowser();
         return { reused: true, adopted: true, url };
       }

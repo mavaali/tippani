@@ -6,6 +6,7 @@
 // input.
 
 import { EventEmitter } from "events";
+import { parseGitHubTarget } from "./github-target.js";
 import { createPortalSession, openInBrowser } from "./portal-launcher.js";
 
 let pass = 0, fail = 0;
@@ -32,10 +33,12 @@ const fetchImpl = async (url) => {
 
 function fakeSpawn(bin, args, opts) {
   const port = Number(args.find((a) => a.startsWith("--port=")).split("=")[1]);
-  const github = String(args[1] || "").match(
-    /^github:([^/]+)\/([^#]+)#(\d+)$/,
-  );
-  const prId = github ? Number(github[3]) : Number(args[1]);
+  const githubTarget = parseGitHubTarget([String(args[1] || "")]);
+  const github = githubTarget.isGitHub && !githubTarget.error
+    ? githubTarget
+    : null;
+  const browse = args.includes("--browse");
+  const prId = browse ? 0 : github ? github.prId : Number(args[1]);
   const provider = github ? "github" : "ado";
   const child = new EventEmitter();
   child.killed = false;
@@ -47,8 +50,8 @@ function fakeSpawn(bin, args, opts) {
       port,
       prId,
       provider,
-      owner: github?.[1] || null,
-      repo: github?.[2] || null,
+      owner: github?.owner || null,
+      repo: github?.repo || null,
       token: `tok-${port}`,
       url: `http://localhost:${port}`,
     });
@@ -166,6 +169,64 @@ try {
     check("parallel: only spawned on the free port 3848",
       spawnCalls.length === 1 && spawnCalls[0].args.includes("--port=3848"));
     check("parallel: left PR 111 portal alone", registry.some((i) => i.port === 3847 && i.prId === 111));
+    s.stop();
+  }
+
+  // --- GitHub coordinates use the same normalization as the child portal ---
+  {
+    reset();
+    const s = newSession({ githubToken: "gh-test-token" });
+    const r = await s.ensurePortal({
+      prId: 77,
+      provider: "github",
+      owner: "MAVAALI",
+      repo: "Tippani.git",
+    });
+    check("github normalization: child becomes ready", r.reused === false);
+    check("github normalization: launches canonical shorthand",
+      spawnCalls[0].args.includes("github:mavaali/tippani#77"));
+    s.stop();
+  }
+
+  // --- ADO discovery never reuses an active GitHub portal ---
+  {
+    reset();
+    const s = newSession({ githubToken: "gh-test-token" });
+    await s.ensurePortal({
+      prId: 77,
+      provider: "github",
+      owner: "mavaali",
+      repo: "tippani",
+    });
+    const r = await s.ensureBrowsePortal();
+    check("browse isolation: launches an ADO browse portal", r.reused === false);
+    check("browse isolation: uses --browse on another port",
+      spawnCalls.length === 2 &&
+      spawnCalls[1].args.includes("--browse") &&
+      spawnCalls[1].args.includes("--port=3848"));
+    s.stop();
+  }
+
+  // --- a provider-tagged GitHub prId=0 entry is not an ADO browse portal ---
+  {
+    reset();
+    registry.push({
+      port: 3847,
+      prId: 0,
+      provider: "github",
+      owner: "mavaali",
+      repo: "tippani",
+      token: "github-zero",
+      url: "http://localhost:3847",
+    });
+    busyPorts.add(3847);
+    const s = newSession();
+    const r = await s.ensureBrowsePortal();
+    check("browse adoption: ignores GitHub prId=0 entry", r.reused === false);
+    check("browse adoption: launches ADO on next port",
+      spawnCalls.length === 1 &&
+      spawnCalls[0].args.includes("--browse") &&
+      spawnCalls[0].args.includes("--port=3848"));
     s.stop();
   }
 
