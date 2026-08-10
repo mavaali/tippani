@@ -9293,7 +9293,17 @@ if ($path) { [Console]::Out.Write($path) }
       fs.writeFileSync(tokenPath, _sessionToken + "\n", { mode: 0o600 });
       // Register this portal so MCP clients can discover it by PR/port and
       // adopt it instead of colliding on the port (multi-PR parallelism).
-      writeInstance({ port: PORT, prId: _prId, token: _sessionToken, pid: process.pid, url: base, shimPid: Number(process.env.TIPPANI_SHIM_PID) || null });
+      writeInstance({
+        port: PORT,
+        prId: _prId,
+        provider: _hostKind,
+        owner: _githubOwner,
+        repo: _githubRepo,
+        token: _sessionToken,
+        pid: process.pid,
+        url: base,
+        shimPid: Number(process.env.TIPPANI_SHIM_PID) || null,
+      });
       const cleanup = () => {
         try { fs.unlinkSync(tokenPath); } catch {}
         removeInstance(PORT);

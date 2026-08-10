@@ -32,14 +32,26 @@ const fetchImpl = async (url) => {
 
 function fakeSpawn(bin, args, opts) {
   const port = Number(args.find((a) => a.startsWith("--port=")).split("=")[1]);
-  const prId = Number(args[1]);
+  const github = String(args[1] || "").match(
+    /^github:([^/]+)\/([^#]+)#(\d+)$/,
+  );
+  const prId = github ? Number(github[3]) : Number(args[1]);
+  const provider = github ? "github" : "ado";
   const child = new EventEmitter();
   child.killed = false;
   child.kill = () => { child.killed = true; child.emit("exit", 0); };
   spawnCalls.push({ bin, args, opts, child });
   setTimeout(() => {
     if (busyPorts.has(port)) { child.emit("exit", 1); return; } // EADDRINUSE
-    registry.push({ port, prId, token: `tok-${port}`, url: `http://localhost:${port}` });
+    registry.push({
+      port,
+      prId,
+      provider,
+      owner: github?.[1] || null,
+      repo: github?.[2] || null,
+      token: `tok-${port}`,
+      url: `http://localhost:${port}`,
+    });
     busyPorts.add(port); // a launched portal now holds its port (mirror reality)
   }, 15);
   return child;
@@ -108,6 +120,35 @@ try {
     check("headless default: launched + returns url", r.reused === false && r.url === "http://localhost:3847");
     check("headless default: spawned the portal", spawnCalls.length === 1);
     check("headless default: opened NO browser", openedUrls.length === 0);
+    s.stop();
+  }
+
+  // --- GitHub target launches with shorthand + token and never adopts an ADO
+  //     portal that merely shares the same numeric PR id ---
+  {
+    reset();
+    registry.push({
+      port: 3847,
+      prId: 77,
+      provider: "ado",
+      token: "ado-77",
+      url: "http://localhost:3847",
+    });
+    busyPorts.add(3847);
+    const s = newSession({ githubToken: "gh-test-token" });
+    const r = await s.ensurePortal({
+      prId: 77,
+      provider: "github",
+      owner: "mavaali",
+      repo: "tippani",
+    });
+    check("github: doesn't adopt same-number ADO portal",
+      !r.adopted && r.reused === false);
+    check("github: launches on next free port", r.url === "http://localhost:3848");
+    check("github: passes shorthand target",
+      spawnCalls[0].args.includes("github:mavaali/tippani#77"));
+    check("github: injects token env",
+      spawnCalls[0].opts.env.TIPPANI_GH_TOKEN === "gh-test-token");
     s.stop();
   }
 

@@ -29,6 +29,8 @@ import {
 import { createPortalSession } from "./portal-launcher.js";
 import { inspectAdoToken, tokenRejectionMessage } from "./ado-token-check.js";
 import { cliFallbackEnabled, acquireAdoTokenFromCli } from "./ado-token-cli.js";
+import { selectGitHubToken } from "./github-target.js";
+import { execSync } from "node:child_process";
 
 // Give MCP "Test connection" real meaning: validate the bound account's ADO
 // token before serving. If it isn't an Azure DevOps git/REST token (wrong
@@ -56,6 +58,23 @@ if (process.env.TIPPANI_ADO_TOKEN) {
   if (!adoCheck.ok) {
     console.error(tokenRejectionMessage(adoCheck));
     process.exit(1);
+  }
+  if (!process.env.TIPPANI_GH_TOKEN) {
+    const selected = selectGitHubToken({
+      env: process.env,
+      execGh: () => execSync("gh auth token", {
+        encoding: "utf8",
+        timeout: 15000,
+        stdio: ["ignore", "pipe", "ignore"],
+      }),
+    });
+    if (selected.token) process.env.TIPPANI_GH_TOKEN = selected.token;
+  }
+  if (!process.env.TIPPANI_GH_TOKEN) {
+    console.error(
+      "tippani-mcp: no GitHub token — GitHub open_pr needs TIPPANI_GH_TOKEN " +
+      "or an authenticated `gh` CLI.",
+    );
   }
 } else {
   console.error(
