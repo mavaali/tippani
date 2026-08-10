@@ -165,6 +165,38 @@ Six small provider factories implement the six interfaces. They share the same u
 | `WorkItemProvider` | **Does not exist on GitHub as designed.** GitHub Issues has no query language equivalent to WIQL, no typed "work item type" (Feature/Bug/Task), and no field schema. A `GitHubProvider` should implement this interface as **unsupported** (each method returns a capability-not-available error, or the interface is simply absent and callers check `provider.workItems ?? null` before use) rather than emulating WIQL against GitHub's REST search syntax — that emulation would silently produce wrong results for any nontrivial query, which is worse than a clear "not supported here." |
 | `BlobProvider` | **Full**, and simpler than ADO: `GET /repos/{o}/{r}/contents/{path}` with `Accept: application/vnd.github.raw` auto-resolves Git LFS server-side (when the repo has GitHub's LFS support enabled) — no separate pointer-detection step is needed on the GitHub side, though `isLfsPointer()` should stay as a defensive check in case LFS isn't configured, matching the "fail loudly, don't stream pointer bytes as an image" behavior from #68. |
 
+### Phase 1 implementation notes (GitHub ReviewProvider)
+
+`src/github-client.js` and `src/github-review-provider.js` implement the first
+GitHub capability behind an injected `fetch` client (Node 18+ already supplies
+fetch; no Octokit dependency).
+
+- REST: PR get/list/files, raw contents, review-comment create/reply, formal
+  review submit, repository permission, issue-comment viewed marker, commits /
+  associated PRs, refs, and Contents API commit.
+- GraphQL: paginated `reviewThreads`, `resolveReviewThread`, and
+  `unresolveReviewThread`.
+- Thread identity bridge: Tippani's MCP/control schemas currently require a
+  numeric thread id while GitHub review-thread ids are opaque GraphQL IDs.
+  GitHubReviewProvider exposes the root review comment's `fullDatabaseId` as
+  the stable numeric handle and keeps the thread node id private for resolve.
+  A review comment id that cannot be represented as a safe JavaScript integer
+  fails loudly rather than silently losing precision.
+- Viewed state: one invisible issue comment
+  (`<!-- tippani:viewed:{...} -->`), updated in place. Strict reads throw on a
+  corrupt marker; display-only reads degrade to `{}`.
+- Optimistic concurrency: Tippani's expected branch tip is checked first
+  (409 on movement), then GitHub's file blob SHA is fetched for the Contents
+  API update. This preserves the existing branch-level editor conflict guard
+  while satisfying GitHub's file-level `sha` requirement.
+- GitHub inline review comments can only target lines GitHub considers part of
+  the PR diff. ADO permits a wider line-anchor surface; GitHub API rejection is
+  surfaced rather than silently falling back to an unanchored issue comment.
+
+This implementation is not wired into CLI/provider selection yet; that happens
+after Review + RepoContent + Blob are all available, so the first user-facing
+GitHub mode is end-to-end rather than a partial portal.
+
 ## Capability gaps are a first-class, visible design element
 
 The July doc's model was "one stable interface, dialect-specific calls hidden below the line" — appropriate when every method has a GitHub equivalent. `WorkItemProvider` does not. Rather than stretch the contract to cover it badly, a provider capability check is part of the contract itself:
