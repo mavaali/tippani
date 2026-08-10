@@ -71,9 +71,10 @@ import { branchesForRepo, repoOptions, branchNamePlaceholder, sortBranches, shor
 import { branchFileRows, visibleFileCount, mdPathsFromChanges, buildSpecHref, stagedFileComparison } from "./branch-files.js";
 import { validateLocalRepo, resolveGitDir, parseGitHead, parsePackedRefs, mergeLocalBranches, parseOriginHeadDefault, userCreatedBranches } from "./local-repo.js";
 import { baseCandidates, safeLocalPath } from "./local-git.js";
-import { voteForReviewType, voteLabel, reviewPrecheck } from "./review-vote.js";
+import { handleReviewRequest } from "./review-vote.js";
 import { newComment as pcNew, addComment as pcAdd, updateComment as pcUpdate, removeComment as pcRemove, findComment as pcFind, sortComments as pcSort, setResolved as pcSetResolved, addReply as pcAddReply, navTargetId as pcNavTarget, reanchorComments as pcReanchor } from "./personal-comments.js";
 import { personalCommentsKey as pcStoreKey, loadPersonalComments as pcStoreLoad, savePersonalComments as pcStoreSave, deletePersonalComments as pcStoreDelete, migrateKey as pcStoreMigrate } from "./personal-comments-store.js";
+import { createStagedInventory, normFolder, parentFolder } from "./staged-inventory.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -211,18 +212,24 @@ function personalCommentsKey(repoId, branch, filePath) {
   return pcStoreKey(repoId, branch, filePath);
 }
 
+// Staged-authoring inventory (clickstop-2): branches, files, folders, PR
+// intents, and PR-publish intents held locally until one push_staged_changes
+// crosses to ADO. Extracted to staged-inventory.js — this instance owns the
+// state; index.js keeps only the ADO-calling orchestration (pushStagedBranches,
+// publishStagedPrs, listBranchFolders) that reads/writes it via snapshot()
+// and the removeXMatching() accessors rather than raw arrays.
+const _inventory = createStagedInventory({
+  deletePersonalComments: (repo, branch, path) => pcStoreDelete(PERSONAL_COMMENTS_DIR, repo, branch, path),
+});
+
 function loadPersonalComments(repoId, branch, filePath) {
-  const staged = _stagedFiles.find((f) => !f.existing && f.repo === repoId && f.branch === branch && f.path === filePath);
+  const staged = _inventory.getFiles(repoId, branch, filePath);
   if (staged) return staged.personalComments || [];
   return pcStoreLoad(PERSONAL_COMMENTS_DIR, repoId, branch, filePath);
 }
 
 function savePersonalComments(repoId, branch, filePath, comments) {
-  const staged = _stagedFiles.find((f) => !f.existing && f.repo === repoId && f.branch === branch && f.path === filePath);
-  if (staged) {
-    staged.personalComments = comments;
-    return;
-  }
+  if (_inventory.setFilePersonalComments(repoId, branch, filePath, comments)) return;
   pcStoreSave(PERSONAL_COMMENTS_DIR, repoId, branch, filePath, comments);
 }
 
@@ -6642,79 +6649,31 @@ async function mcpCreateBranch({ org, project, repo, branch, base } = {}) {
   return { ok: true, org: target.org, project: target.project, repo: target.repo, branch, branchRef, base: baseName, created: true, objectId: baseTip };
 }
 
-// Clickstop 2: staged branches live only in memory until pushed. Staging records
-// the intent (name + base) without touching ADO; pushing creates them all via
-// mcpCreateBranch and clears the staged set.
-let _stagedBranches = [];
-function stageBranch({ org, project, repo, repoName, branch, base } = {}) {
-  const name = String(branch || "").trim();
-  if (!name) return { ok: false, error: "branch name is required" };
-  if (!repo) return { ok: false, error: "repo is required" };
-  if (_stagedBranches.some((s) => s.repo === repo && s.branch === name)) return { ok: false, error: "that branch is already staged" };
-  _stagedBranches.push({ org, project, repo, repoName: repoName || "", branch: name, base: String(base || "").trim() });
-  return { ok: true, count: _stagedBranches.length, branches: _stagedBranches };
-}
-let _stagedFiles = [];
-let _stagedPrs = [];
-let _stagedPrPublishes = [];
-function stagedTotal() { return _stagedBranches.length + _stagedFiles.length + _stagedFolders.length + _stagedPrs.length + _stagedPrPublishes.length; }
-function listStagedBranches() {
-  return { ok: true, count: stagedTotal(), branches: _stagedBranches, files: _stagedFiles, folders: _stagedFolders, prs: _stagedPrs, prPublishes: _stagedPrPublishes };
-}
-function stageSpecPr({ org, project, repo, repoName, title, sourceBranch, targetBranch, description, isDraft, workItemTitle, workItemType } = {}) {
-  const branch = String(sourceBranch || "").replace(/^refs\/heads\//, "").trim();
-  if (!org || !project || !repo || !title || !branch || !targetBranch) return { ok: false, error: "org, project, repo, title, sourceBranch and targetBranch are required" };
-  if (workItemTitle && !workItemType) return { ok: false, error: "workItemType is required when workItemTitle is set" };
-  if (_stagedPrs.some((pr) => pr.repo === repo && pr.branch === branch)) return { ok: false, error: "that branch already has a staged PR intent" };
-  _stagedPrs.push({ org, project, repo, repoName: repoName || "", branch, title, sourceBranch: branch, targetBranch, description, isDraft: isDraft !== false, workItemTitle, workItemType });
-  return { ok: true, count: stagedTotal(), prs: _stagedPrs };
-}
-function stageFile({ org, project, repo, repoName, branch, title, folder, path } = {}) {
-  const t = String(title || "").trim();
-  const fdr = _normFolder(folder);
-  let name = t;
-  if (name && /\.[^./\\]+$/.test(name) && !/\.md$/i.test(name)) return { ok: false, error: "only .md files can be added to a branch" };
-  if (name && !/\.md$/i.test(name)) name += ".md";
-  const filePath = String(path || "").trim() || (name ? (fdr ? fdr + "/" : "") + name : "");
-  if (!filePath) return { ok: false, error: "title is required" };
-  if (!/\.md$/i.test(filePath)) return { ok: false, error: "only .md files can be added to a branch" };
-  if (!repo || !branch) return { ok: false, error: "repo and branch are required" };
-  if (_stagedFiles.some((f) => f.repo === repo && f.branch === branch && f.path === filePath)) return { ok: false, error: "that file is already staged" };
-  _stagedFiles.push({ org, project, repo, repoName: repoName || "", branch, title: name || filePath, path: filePath, content: "", personalComments: [] });
-  return { ok: true, count: stagedTotal(), files: _stagedFiles.filter((f) => f.repo === repo && f.branch === branch) };
-}
-function unstageFile({ repo, branch, path } = {}) {
-  const removing = _stagedFiles.filter((f) => !f.existing && f.repo === repo && f.branch === branch && f.path === path);
-  try {
-    for (const file of removing) pcStoreDelete(PERSONAL_COMMENTS_DIR, file.repo, file.branch, file.path);
-  } catch (e) {
-    return { ok: false, error: `could not remove annotations: ${e.code || e.message}` };
-  }
-  const before = _stagedFiles.length;
-  _stagedFiles = _stagedFiles.filter((f) => !(f.repo === repo && f.branch === branch && f.path === path));
-  return { ok: true, removed: before - _stagedFiles.length, count: stagedTotal() };
-}
-function updateStagedFileContent({ repo, branch, path, content } = {}) {
-  const f = _stagedFiles.find((x) => x.repo === repo && x.branch === branch && x.path === path);
-  if (!f) return { ok: false, error: "staged file not found" };
-  f.content = String(content == null ? "" : content);
-  return { ok: true };
-}
-// Staged edit to an EXISTING (already-pushed) ADO file: upsert an entry flagged
-// existing:true so it counts as a staged change and diffs against the original,
-// without a direct commit. Pushed later with the rest.
-function saveExistingEdit({ org, project, repo, repoName, branch, path, content, baseObjectId } = {}) {
-  if (!repo || !branch || !path) return { ok: false, error: "repo, branch and path are required" };
-  const body = String(content == null ? "" : content);
-  const f = _stagedFiles.find((x) => x.repo === repo && x.branch === branch && x.path === path);
-  if (f) { f.content = body; f.existing = true; f.baseObjectId = f.baseObjectId || baseObjectId || null; return { ok: true, count: stagedTotal(), files: _stagedFiles.filter((x) => x.repo === repo && x.branch === branch) }; }
-  const title = String(path).split("/").pop().replace(/\.md$/i, "");
-  _stagedFiles.push({ org, project, repo, repoName: repoName || "", branch, title, path, content: body, existing: true, baseObjectId: baseObjectId || null });
-  return { ok: true, count: stagedTotal(), files: _stagedFiles.filter((x) => x.repo === repo && x.branch === branch) };
-}
+// Clickstop 2: staged branches, files, folders, PR intents, and PR-publish
+// intents live only in memory until pushed — extracted to _inventory
+// (staged-inventory.js). The pure state operations below are destructured
+// straight off it so every existing caller (registerControlApi,
+// registerMcpTools, and the routes below) keeps using the same bare names
+// with no other change.
+const {
+  stageBranch, unstageBranch, resolveEffectiveBranch,
+  stageFile, unstageFile, updateStagedFileContent, saveExistingEdit,
+  stageSpecPr, unstageSpecPr,
+  stagePrPublish, unstagePrPublish,
+  createStagedFolder, deleteStagedFolder, renameStagedFolder,
+  listStagedBranches, stagedTotal,
+} = _inventory;
+
+// The three functions below stay in index.js because they call ADO
+// (mcpCreateBranch, resolveTarget, getBranchTip, createPush, openPr,
+// updatePullRequest, gitApi.getItems) — everything ELSE about staged state
+// now lives behind _inventory, reached here only via snapshot() (read) and
+// removeXMatching() / setPrPublishes() (write-after-success), never via a
+// raw array.
 async function pushStagedBranches() {
   const results = [];
-  const groups = planStagedPushes({ branches: _stagedBranches, files: _stagedFiles, folders: _stagedFolders, prs: _stagedPrs });
+  const { branches, files, folders, prs } = _inventory.snapshot();
+  const groups = planStagedPushes({ branches, files, folders, prs });
   const sameTarget = (item, group) =>
     String(item.org || "").replace(/\/+$/, "") === group.org &&
     item.project === group.project && item.repo === group.repo &&
@@ -6773,9 +6732,9 @@ async function pushStagedBranches() {
         continue;
       }
     }
-    _stagedBranches = _stagedBranches.filter((item) => !sameTarget(item, group));
-    _stagedFiles = _stagedFiles.filter((item) => !sameTarget(item, group));
-    _stagedFolders = _stagedFolders.filter((item) => !sameTarget(item, group));
+    _inventory.removeBranchesMatching((item) => sameTarget(item, group));
+    _inventory.removeFilesMatching((item) => sameTarget(item, group));
+    _inventory.removeFoldersMatching((item) => sameTarget(item, group));
     let prResult = null;
     if (group.prs.length) {
       try { prResult = await openPr(group.prs[0]); }
@@ -6784,7 +6743,7 @@ async function pushStagedBranches() {
         results.push({ project: group.project, repo: group.repo, branch: group.branch, ok: false, created, commitId, error: prResult?.error || "PR creation failed" });
         continue;
       }
-      _stagedPrs = _stagedPrs.filter((item) => !sameTarget(item, group));
+      _inventory.removePrsMatching((item) => sameTarget(item, group));
     }
     results.push({
       project: group.project, repo: group.repo, branch: group.branch, ok: true, created, commitId,
@@ -6793,36 +6752,10 @@ async function pushStagedBranches() {
   }
   return { ok: results.every((result) => result.ok), count: stagedTotal(), results };
 }
-function unstageBranch({ repo, branch } = {}) {
-  const before = _stagedBranches.length;
-  _stagedBranches = _stagedBranches.filter((s) => !(s.repo === repo && s.branch === branch));
-  return { ok: true, removed: before - _stagedBranches.length, count: _stagedBranches.length, branches: _stagedBranches };
-}
-function unstageSpecPr({ repo, branch } = {}) {
-  const before = _stagedPrs.length;
-  _stagedPrs = _stagedPrs.filter((pr) => !(pr.repo === repo && pr.branch === branch));
-  return { ok: true, removed: before - _stagedPrs.length, count: stagedTotal(), prs: _stagedPrs };
-}
-// Clickstop 5: stage the PUBLISH (draft -> published) of an existing PR. Like
-// every other staged intent it is local until push_staged_changes; the ADO
-// updatePullRequest({isDraft:false}) call happens only at the push boundary.
-function stagePrPublish({ org, project, repo, repoName, pullRequestId, title } = {}) {
-  const id = Number(pullRequestId);
-  if (!org || !project || !repo || !Number.isFinite(id)) return { ok: false, error: "org, project, repo and pullRequestId are required" };
-  if (_stagedPrPublishes.some((p) => p.pullRequestId === id)) return { ok: false, error: "that PR is already staged to publish" };
-  _stagedPrPublishes.push({ org, project, repo, repoName: repoName || "", pullRequestId: id, title: title || "" });
-  return { ok: true, count: stagedTotal(), prPublishes: _stagedPrPublishes };
-}
-function unstagePrPublish({ pullRequestId } = {}) {
-  const id = Number(pullRequestId);
-  const before = _stagedPrPublishes.length;
-  _stagedPrPublishes = _stagedPrPublishes.filter((p) => p.pullRequestId !== id);
-  return { ok: true, removed: before - _stagedPrPublishes.length, count: stagedTotal(), prPublishes: _stagedPrPublishes };
-}
 async function publishStagedPrs() {
   const results = [];
   const remaining = [];
-  for (const item of _stagedPrPublishes) {
+  for (const item of _inventory.snapshot().prPublishes) {
     try {
       const target = await resolveTarget({ org: item.org, project: item.project, repo: item.repo });
       const gitApi = await target.conn.getGitApi();
@@ -6833,40 +6766,18 @@ async function publishStagedPrs() {
       remaining.push(item);
     }
   }
-  _stagedPrPublishes = remaining;
+  _inventory.setPrPublishes(remaining);
   return { ok: results.every((r) => r.ok), count: stagedTotal(), results };
 }
 
 // Clickstop 2: folder picker. Real ADO folders always contain committed files
-// (git tracks no empty dirs), so brand-new folders live only in memory, scoped
-// to a (repo, branch), until a spec is staged into them and the branch pushed.
-// A staged branch has no ADO branch yet, so its folder tree is read from the
-// parent (base) branch — walking the base chain when the parent is also staged.
-let _stagedFolders = [];
-function _normFolder(p) { return String(p == null ? "" : p).replace(/\\/g, "/").replace(/^\/+|\/+$/g, ""); }
-function _parentFolder(p) { const n = _normFolder(p); const i = n.lastIndexOf("/"); return i < 0 ? "" : n.slice(0, i); }
-function _isUnder(childPath, folderPath) { const c = _normFolder(childPath), f = _normFolder(folderPath); return c === f || (f === "" ? true : (c + "/").startsWith(f + "/")); }
-function resolveEffectiveBranch(repo, branch) {
-  let cur = String(branch || "").trim();
-  const seen = new Set();
-  while (cur && !seen.has(cur)) {
-    seen.add(cur);
-    const st = _stagedBranches.find((s) => s.repo === repo && s.branch === cur);
-    if (!st) return cur;
-    cur = String(st.base || "").trim() || "main";
-  }
-  return cur || "main";
-}
-function _folderHasStagedFile(repo, branch, folderPath) {
-  const f = _normFolder(folderPath);
-  return _stagedFiles.some((x) => x.repo === repo && x.branch === branch && (_normFolder(x.path) + "/").startsWith(f + "/"));
-}
-function _folderHasChild(repo, branch, folderPath) {
-  const f = _normFolder(folderPath);
-  return _stagedFolders.some((y) => y.repo === repo && y.branch === branch && _normFolder(y.path) !== f && (_normFolder(y.path) + "/").startsWith(f + "/"));
-}
+// (git tracks no empty dirs), so brand-new folders live only in memory in
+// _inventory, scoped to a (repo, branch), until a spec is staged into them
+// and the branch pushed. A staged branch has no ADO branch yet, so its folder
+// tree is read from the parent (base) branch — walking the base chain when
+// the parent is also staged (resolveEffectiveBranch).
 async function listBranchFolders({ project, repo, branch, scope } = {}) {
-  const scopeN = _normFolder(scope);
+  const scopeN = normFolder(scope);
   const proj = project || _adoProjectDisplayName || ADO_PROJECT;
   const eff = resolveEffectiveBranch(repo, branch);
   const version = String(eff).replace(/^refs\/heads\//, "");
@@ -6880,30 +6791,28 @@ async function listBranchFolders({ project, repo, branch, scope } = {}) {
       const items = await gitApi.getItems(repo, proj, scopePath, 1, false, false, false, false, { version, versionType: 0 });
       for (const it of items || []) {
         if (!it || !it.isFolder || !it.path) continue;
-        const pn = _normFolder(it.path);
-        if (!pn || pn === scopeN || _parentFolder(pn) !== scopeN) continue;
+        const pn = normFolder(it.path);
+        if (!pn || pn === scopeN || parentFolder(pn) !== scopeN) continue;
         out.set(pn, { path: pn, name: pn.split("/").pop(), created: false, empty: false, hasChildren: false, _ado: true });
       }
     } catch (e) { adoError = e?.message || String(e); }
   }
-  for (const f of _stagedFolders) {
-    if (f.repo !== repo || f.branch !== branch) continue;
-    const pn = _normFolder(f.path);
-    if (_parentFolder(pn) !== scopeN) continue;
-    const empty = !_folderHasStagedFile(repo, branch, pn) && !_folderHasChild(repo, branch, pn);
+  for (const f of _inventory.stagedFoldersUnder(repo, branch, scopeN)) {
+    const pn = normFolder(f.path);
+    const empty = !_inventory._folderHasStagedFile(repo, branch, pn) && !_inventory._folderHasChild(repo, branch, pn);
     const existing = out.get(pn);
     if (existing) { existing.created = true; existing.empty = empty; }
     else out.set(pn, { path: pn, name: pn.split("/").pop(), created: true, empty, hasChildren: false, _ado: false });
   }
   const folders = [...out.values()];
   // Mark parents: a folder shows an expander if it has ADO subfolders or created subfolders.
-  for (const folder of folders) { if (_folderHasChild(repo, branch, folder.path)) folder.hasChildren = true; }
+  for (const folder of folders) { if (_inventory._folderHasChild(repo, branch, folder.path)) folder.hasChildren = true; }
   if (gitApi) {
     await Promise.all(folders.map(async (folder) => {
       if (folder.hasChildren || !folder._ado) return;
       try {
         const sub = await gitApi.getItems(repo, proj, "/" + folder.path, 1, false, false, false, false, { version, versionType: 0 });
-        folder.hasChildren = (sub || []).some((it) => it && it.isFolder && _parentFolder(_normFolder(it.path)) === folder.path);
+        folder.hasChildren = (sub || []).some((it) => it && it.isFolder && parentFolder(normFolder(it.path)) === folder.path);
       } catch (e) { /* ignore probe failure */ }
     }));
   }
@@ -6911,38 +6820,7 @@ async function listBranchFolders({ project, repo, branch, scope } = {}) {
   folders.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: "base" }));
   return { ok: true, scope: scopeN, effectiveBranch: eff, folders, adoError };
 }
-function createStagedFolder({ org, project, repo, branch, path } = {}) {
-  const pn = _normFolder(path);
-  if (!pn) return { ok: false, error: "folder name is required" };
-  if (!repo || !branch) return { ok: false, error: "repo and branch are required" };
-  const name = pn.split("/").pop();
-  if (/[\\/:*?"<>|]/.test(name)) return { ok: false, error: "invalid folder name" };
-  if (_stagedFolders.some((f) => f.repo === repo && f.branch === branch && _normFolder(f.path) === pn)) return { ok: false, error: "folder already exists" };
-  _stagedFolders.push({ org, project, repo, branch, path: pn });
-  return { ok: true, path: pn };
-}
-function deleteStagedFolder({ repo, branch, path } = {}) {
-  const pn = _normFolder(path);
-  const idx = _stagedFolders.findIndex((f) => f.repo === repo && f.branch === branch && _normFolder(f.path) === pn);
-  if (idx < 0) return { ok: false, error: "only folders you created can be deleted" };
-  if (_folderHasStagedFile(repo, branch, pn) || _folderHasChild(repo, branch, pn)) return { ok: false, error: "folder is not empty" };
-  _stagedFolders.splice(idx, 1);
-  return { ok: true };
-}
-function renameStagedFolder({ repo, branch, path, newName } = {}) {
-  const pn = _normFolder(path);
-  const f = _stagedFolders.find((x) => x.repo === repo && x.branch === branch && _normFolder(x.path) === pn);
-  if (!f) return { ok: false, error: "only folders you created can be renamed" };
-  if (_folderHasStagedFile(repo, branch, pn) || _folderHasChild(repo, branch, pn)) return { ok: false, error: "folder is not empty" };
-  const nn = String(newName || "").trim();
-  if (!nn) return { ok: false, error: "folder name is required" };
-  if (/[\\/:*?"<>|]/.test(nn)) return { ok: false, error: "invalid folder name" };
-  const parent = _parentFolder(pn);
-  const newPath = parent ? parent + "/" + nn : nn;
-  if (newPath !== pn && _stagedFolders.some((x) => x.repo === repo && x.branch === branch && _normFolder(x.path) === newPath)) return { ok: false, error: "folder already exists" };
-  f.path = newPath;
-  return { ok: true, path: newPath };
-}
+
 
 // Session token authorises external (non-browser-same-origin) mutations.
 // Generated fresh per process and printed to stdout at startup.
@@ -7575,7 +7453,7 @@ async function main() {
     const project = String(req.query.project || "").trim();
     const repoName = String(req.query.repoName || "").trim();
     if (!repo || !filePath) return res.redirect("/discovery?tab=branches");
-    let file = _stagedFiles.find((f) => f.repo === repo && f.branch === branch && f.path === filePath);
+    let file = _inventory.findFile(repo, branch, filePath);
     let kind, hasStagedEdit = false;
     if (file) { kind = file.existing ? "existing" : "staged-new"; hasStagedEdit = true; }
     else {
@@ -7588,7 +7466,7 @@ async function main() {
       try { baseObjectId = await getBranchTip(_conn, normalizeBranchRef(branch), repo, project); } catch { /* save will reject a missing base */ }
       file = { org: ADO_ORG, project, repo, repoName, branch, path: filePath, title: filePath.split("/").pop().replace(/\.md$/i, ""), content, baseObjectId };
     }
-    const isStagedBranch = _stagedBranches.some((s) => s.repo === file.repo && s.branch === file.branch);
+    const isStagedBranch = _inventory.snapshot().branches.some((s) => s.repo === file.repo && s.branch === file.branch);
     const backHref = "/branch?project=" + encodeURIComponent(file.project || project || "") + "&repo=" + encodeURIComponent(file.repo) + "&repoName=" + encodeURIComponent(file.repoName || repoName || "") + "&ref=" + encodeURIComponent(file.branch) + (isStagedBranch ? "&staged=1" : "");
     try {
       let remoteContent = "";
@@ -7665,7 +7543,7 @@ async function main() {
     const orgBase = ADO_ORG.replace(/\/+$/, "");
     const adoUrlFor = (name) => name ? `${orgBase}/${encodeURIComponent(project)}/_git/${encodeURIComponent(name)}?version=GB${encodeURIComponent(ref)}` : "";
     // A staged (not-yet-pushed) branch has no ADO ref — open the empty file view.
-    if (req.query.staged === "1" || _stagedBranches.some((s) => s.branch === ref && (s.repo === repoParam || s.repoName === repoParam))) {
+    if (req.query.staged === "1" || _inventory.snapshot().branches.some((s) => s.branch === ref && (s.repo === repoParam || s.repoName === repoParam))) {
       const displayName = String(req.query.repoName || repoParam);
       return res.type("html").send(buildBranchPage({ repoName: displayName, project, ref, rows: [], backHref, adoUrl: "", error: null, mode: editMode, staged: true }));
     }
@@ -9093,20 +8971,20 @@ if ($path) { [Console]::Out.Write($path) }
 
   // Approve / Request changes. This is a WRITE to ADO and is deliberately not
   // queued offline: a stale vote synced later could approve a PR whose content
-  // has since moved on.
+  // has since moved on. Orchestration (validate -> precheck -> vote) lives in
+  // handleReviewRequest (review-vote.js) so it's testable with a fake ADO
+  // connection — this route is just the HTTP<->function adapter.
   app.post("/api/review", async (req, res) => {
-    const vote = voteForReviewType(req.body && req.body.type);
-    if (vote === null) {
-      return res.status(400).json({ ok: false, code: "bad-type", error: "Unknown review type." });
-    }
-    const pre = reviewPrecheck({ isOffline: _isOffline, hasConn: !!_conn, prId: _prId });
-    if (!pre.ok) return res.status(409).json({ ok: false, code: pre.code, error: pre.error });
-    try {
-      await submitReviewVote(_conn, _prId, vote);
-      res.json({ ok: true, vote, message: voteLabel(vote) });
-    } catch (e) {
-      res.status(502).json({ ok: false, code: "ado-error", error: friendlyAdoError(e, "submit review") });
-    }
+    const { status, body } = await handleReviewRequest({
+      type: req.body && req.body.type,
+      isOffline: _isOffline,
+      hasConn: !!_conn,
+      prId: _prId,
+      conn: _conn,
+      submitVote: submitReviewVote,
+      formatError: friendlyAdoError,
+    });
+    res.status(status).json(body);
   });
 
   // Sync pending actions to ADO

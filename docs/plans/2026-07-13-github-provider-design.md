@@ -1,7 +1,7 @@
 # GitHub provider for tippani — design
 
 **Date:** 2026-07-13
-**Status:** Design approved; implementation not started.
+**Status:** Superseded by [2026-08-09-provider-contract-v2.md](2026-08-09-provider-contract-v2.md) — the `ReviewProvider` contract below is still valid and is retained unchanged as one of six capability interfaces in v2. The single-interface framing and the "55 call sites" coupling audit are what's superseded: clickstop-2 (PR #71) added remote authoring, work-item linking, and search that this contract cannot express. Read v2 first; this doc's GitHub-mapping research (threads, viewed-state, commitFile) remains the source of truth for those specific methods.
 **Outcome:** Run tippani's full read / annotate / edit / commit workflow against GitHub pull requests, at parity with the Azure DevOps experience, without forking the codebase.
 
 ## Why
