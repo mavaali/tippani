@@ -83,6 +83,7 @@ Or download a standalone binary from the [latest release](https://github.com/mav
 |---|---|
 | **[User Guide](docs/user-guide.md)** | A screen-by-screen walkthrough of the whole UI: Discovery tabs, the reviewing workspace, comments, editing, and the authoring flow. |
 | **[MCP & API Reference](docs/mcp-api.md)** | Every MCP tool and every HTTP control-API endpoint, with parameters and behavior. |
+| **[How this compares](docs/competitive-positioning.md)** | Dated, sourced research on the surrounding landscape — PR review tools, AI review agents, and MCP servers for developer workflows. |
 | **[Changelog](CHANGELOG.md)** | Release history. |
 
 ## Usage
