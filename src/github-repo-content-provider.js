@@ -313,7 +313,14 @@ export function createGitHubRepoContentProvider(client) {
         { body: { sha: commit.sha, force: false } },
       );
     } catch (error) {
-      if (error?.status === 422) {
+      const detail = [
+        error?.message,
+        error?.body?.message,
+      ].filter(Boolean).join(" ");
+      if (
+        error?.status === 422 &&
+        /not.?fast.?forward|reference update failed|stale ref/i.test(detail)
+      ) {
         throw new GitHubApiError(
           "Branch has already been updated",
           {

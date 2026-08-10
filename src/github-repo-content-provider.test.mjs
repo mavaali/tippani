@@ -268,6 +268,35 @@ eq("repo coordinate project owner", repoCoordinate("r", "o"), { owner: "o", repo
   );
   ok("converted conflict status", error.status === 409);
 }
+{
+  const client = fakeClient({
+    request: async (method, path) => {
+      if (method === "GET") return { tree: { sha: "tree" } };
+      if (path.endsWith("/blobs")) return { sha: "blob" };
+      if (path.endsWith("/trees")) return { sha: "tree2" };
+      if (path.endsWith("/commits")) return { sha: "commit" };
+      if (method === "PATCH") {
+        throw new GitHubApiError("protected branch", {
+          status: 422,
+          body: { message: "Protected branch update failed" },
+        });
+      }
+      return {};
+    },
+  });
+  const error = await rejects(
+    "non-conflict 422 is not mislabeled as stale branch",
+    () => createGitHubRepoContentProvider(client).pushFiles(
+      "o/r", null, {
+        branchRef: "main",
+        oldObjectId: "base",
+        edits: [{ path: "/a.md", content: "x" }],
+      },
+    ),
+    /protected branch/,
+  );
+  ok("protected-branch status remains 422", error.status === 422);
+}
 
 console.log(`\ngithub-repo-content-provider.test: ${pass} passed, ${fail} failed`);
 process.exit(fail === 0 ? 0 : 1);
