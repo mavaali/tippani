@@ -429,8 +429,7 @@ const _isGuid = (s) => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f
 
 async function listAdoProjects(conn) {
   try {
-    const coreApi = await conn.getCoreApi();
-    const projects = await coreApi.getProjects();
+    const projects = await adoRepoContent(conn).listProjects();
     const names = (projects || []).map((p) => p && p.name).filter(Boolean);
     // ADO_PROJECT may have been re-pointed to a project GUID by
     // applyRepoContextFromPR. Resolve it back to a human name so the picker
@@ -635,10 +634,6 @@ async function pushFileToBranch(conn, branchRef, filePath, content, message, exp
   });
 }
 
-// ADO security namespace + permission bit for Git "Contribute" (push) access.
-const GIT_SECURITY_NAMESPACE = "2e9eb7ed-3c0a-47d4-87c1-0ffdd275fd87";
-const GIT_PERMISSION_GENERIC_CONTRIBUTE = 4;
-
 // Whether the Edit affordance should be offered, gating push access. Decided without a
 // network call when it can be: a non-active PR is never editable; offline is allowed
 // (edits queue and sync on reconnect, per #48); online-but-unauthenticated can't push.
@@ -656,16 +651,7 @@ async function computeCanEdit(conn, pr, isOffline) {
   let probe = null; // indeterminate => fail open
   if (projectId && repoId) {
     try {
-      if (typeof conn.getSecurityApi !== "function") {
-        return decideCanEdit({ isOffline, hasConn: true, prStatus: pr.status, probe: null });
-      }
-      const securityApi = await conn.getSecurityApi();
-      const results = await securityApi.hasPermissions(
-        GIT_SECURITY_NAMESPACE,
-        GIT_PERMISSION_GENERIC_CONTRIBUTE,
-        `repoV2/${projectId}/${repoId}`
-      );
-      probe = Array.isArray(results) ? results[0] === true : results === true;
+      probe = await adoReview(conn).probePushPermission(projectId, repoId);
     } catch (e) {
       console.log("  ⚠ Could not verify push permission; Edit left enabled. (" + e.message + ")");
       probe = null;

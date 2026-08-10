@@ -74,6 +74,17 @@ function fakeConnection(overrides = {}) {
         authenticatedUser: { id: "reviewer-1", displayName: "Reviewer" },
       },
     ),
+    ...(overrides.withoutSecurityApi ? {} : {
+      getSecurityApi: async () => {
+        calls.push({ name: "getSecurityApi", args: [] });
+        return {
+          hasPermissions: async (...args) => {
+            calls.push({ name: "hasPermissions", args });
+            return overrides.permissionResult ?? [true];
+          },
+        };
+      },
+    }),
   };
   return { conn, gitApi, calls };
 }
@@ -259,6 +270,34 @@ function providerFor(fake, options = {}) {
   eq("submitReview sends exact vote + reviewer id", lastCall(fake.calls, "createPullRequestReviewer").args, [
     { vote: -5 }, "repo-A", 12, "reviewer-1", "project-A",
   ]);
+}
+
+// --- edit/push permission probe --------------------------------------------
+{
+  const fake = fakeConnection();
+  const allowed = await providerFor(fake).probePushPermission(
+    "project-guid", "repo-guid",
+  );
+  ok("probePushPermission true result", allowed === true);
+  eq("probePushPermission exact namespace/bit/token", lastCall(
+    fake.calls, "hasPermissions",
+  ).args, [
+    "2e9eb7ed-3c0a-47d4-87c1-0ffdd275fd87",
+    4,
+    "repoV2/project-guid/repo-guid",
+  ]);
+}
+{
+  const fake = fakeConnection({ permissionResult: false });
+  ok("probePushPermission scalar false", await providerFor(
+    fake,
+  ).probePushPermission("p", "r") === false);
+}
+{
+  const fake = fakeConnection({ withoutSecurityApi: true });
+  ok("probePushPermission unsupported SDK -> null", await providerFor(
+    fake,
+  ).probePushPermission("p", "r") === null);
 }
 {
   const fake = fakeConnection({ connectResult: {} });

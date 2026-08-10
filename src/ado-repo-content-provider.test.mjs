@@ -59,6 +59,15 @@ function fakeConnection(overrides = {}) {
       calls.push({ name: "getGitApi", args: [] });
       return gitApi;
     },
+    getCoreApi: async () => {
+      calls.push({ name: "getCoreApi", args: [] });
+      return {
+        getProjects: async (...args) => {
+          calls.push({ name: "getProjects", args });
+          return [{ id: "p1", name: "Project One" }];
+        },
+      };
+    },
   };
   return { conn, gitApi, calls };
 }
@@ -74,6 +83,20 @@ function countCalls(calls, name) {
   let threw = false;
   try { createAdoRepoContentProvider(null); } catch { threw = true; }
   ok("constructor requires a connection", threw);
+}
+{
+  const fake = fakeConnection();
+  const provider = createAdoRepoContentProvider(fake.conn);
+  eq("listProjects returns Core API projects", await provider.listProjects(), [
+    { id: "p1", name: "Project One" },
+  ]);
+  eq("listProjects exact SDK args", lastCall(
+    fake.calls, "getProjects",
+  ).args, []);
+  await provider.listProjects();
+  eq("successful CoreApi acquisition reused", countCalls(
+    fake.calls, "getCoreApi",
+  ), 1);
 }
 {
   const fake = fakeConnection();

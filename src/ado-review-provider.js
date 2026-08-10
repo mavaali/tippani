@@ -17,6 +17,9 @@ import { adoErrorInContent, toVersionDescriptor } from "./pr-version.js";
 import { parseViewedMap } from "./viewed-map.js";
 
 const VIEWED_PR_PROP = "tippani.viewed";
+const GIT_SECURITY_NAMESPACE =
+  "2e9eb7ed-3c0a-47d4-87c1-0ffdd275fd87";
+const GIT_PERMISSION_GENERIC_CONTRIBUTE = 4;
 
 async function readStream(stream) {
   const chunks = [];
@@ -170,6 +173,20 @@ export function createAdoReviewProvider(conn, {
       reviewerId,
       project(options.project),
     );
+  }
+
+  // null means this SDK/connection cannot answer the question. Callers retain
+  // the existing fail-open policy; a real backend error still throws so the
+  // application can log that verification failed.
+  async function probePushPermission(projectId, repoId) {
+    if (typeof conn.getSecurityApi !== "function") return null;
+    const securityApi = await conn.getSecurityApi();
+    const results = await securityApi.hasPermissions(
+      GIT_SECURITY_NAMESPACE,
+      GIT_PERMISSION_GENERIC_CONTRIBUTE,
+      `repoV2/${projectId}/${repoId}`,
+    );
+    return Array.isArray(results) ? results[0] === true : results === true;
   }
 
   // Strict read. Throws on corrupt/transient reads so callers doing
@@ -351,6 +368,7 @@ export function createAdoReviewProvider(conn, {
     replyToThread,
     resolveThread,
     submitReview,
+    probePushPermission,
     readViewed,
     getViewed,
     setViewed,
