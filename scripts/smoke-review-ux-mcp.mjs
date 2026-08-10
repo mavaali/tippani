@@ -8,7 +8,7 @@
 //
 // Usage:  node scripts/smoke-review-ux-mcp.mjs [--pr <id>] [--port <p>]
 // Requires the PR to be cached once (…/.tippani/cache/pr-<id>.json), which the
-// normal live/human-like run produces.
+// normal live run produces.
 
 import { spawn } from "node:child_process";
 import { readFileSync, existsSync } from "node:fs";

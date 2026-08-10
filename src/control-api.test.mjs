@@ -8,6 +8,7 @@ import {
   createFocusStore,
   createDraftStore,
   createLockStore,
+  createKeyedLockStore,
 } from "./api-state.js";
 import { registerControlApi } from "./control-api.js";
 
@@ -54,9 +55,66 @@ const locks = createLockStore({ ttlMs: 60_000 });
 const specDrafts = createDraftStore({ onChange: () => focus.bumpVersion() });
 const specLocks = createLockStore({ ttlMs: 60_000 });
 
+// Clickstop 2 step 11: fake durable remote-draft store (in-memory) + push dep.
+// Scoped by (project,repo,branch) so a same-named repo in another project can't collide.
+const remoteDraftMap = new Map();
+const remoteSpecDrafts = {
+  put(key, val, meta = {}) {
+    if (val.path === "/fail/write.md") throw new Error("disk full"); // forced write failure
+    const rec = { project: val.project, repo: val.repo, branch: val.branch, path: val.path, body: val.body, baseObjectId: val.baseObjectId || null, updatedAt: "t", source: meta.source || "external" };
+    remoteDraftMap.set(key, rec);
+    return rec;
+  },
+  get(key) { return remoteDraftMap.get(key) || null; },
+  delete(key) { return remoteDraftMap.delete(key); },
+  list() { return Object.fromEntries(remoteDraftMap); },
+  forBranch(project, repo, branch) { return [...remoteDraftMap.values()].filter((d) => d.project === project && d.repo === repo && d.branch === branch); },
+};
+const remoteSpecLocks = createKeyedLockStore({ ttlMs: 60_000 });
+const pushRemoteSpec = async ({ project, repo, branch, oldObjectId }) => {
+  if (!project || !repo) return { ok: false, status: 400, body: { ok: false, error: "project, repo required" } };
+  if (oldObjectId === "stale") return { ok: false, status: 409, body: { ok: false, error: "branch moved; re-stage" } };
+  const staged = remoteSpecDrafts.forBranch(project, repo, branch);
+  if (staged.length === 0) return { ok: false, status: 400, body: { ok: false, error: "nothing staged" } };
+  const files = staged.map((d) => d.path);
+  for (const d of staged) remoteSpecDrafts.delete(`${project}\n${repo}\n${branch}\n${d.path}`);
+  return { ok: true, status: 200, body: { ok: true, commitId: "c1", pushedFiles: files } };
+};
+// Clickstop 2 step 12: fake open-PR dep. Echoes the request so the route
+// contract (never infers title/type; explicit project/repo) is observable.
+let lastOpenPrArgs = null;
+const openPr = async (args) => {
+  lastOpenPrArgs = args;
+  if (args.title === "boom") return { ok: false, error: "ADO rejected the PR" };
+  return { ok: true, pullRequestId: 77, url: "http://pr/77", isDraft: !!args.isDraft, workItemId: args.workItemTitle ? 88 : null, workItemCreated: !!args.workItemTitle, linked: !!args.workItemTitle };
+};
+
 let lastAdoToken = null;
 const app = express();
 app.use(express.json());
+// Clickstop 2: Custom-list fake store shared by the injected deps below.
+const customListStore = [];
+const shapeCl = (p) => ({ path: p, dir: p.replace(/\/[^/]*$/, ""), name: p.split("/").pop(), addedAt: "T", openHref: "/open-file-view?path=" + encodeURIComponent(p) });
+const stagedFilePaths = [];
+let lastStagedPrArgs = null;
+let lastPersonalReplyArgs = null;
+const replyPersonalComment = async (args) => {
+  lastPersonalReplyArgs = args;
+  if (args.content === "reject") return { ok: false, error: "Empty reply." };
+  return { ok: true, comment: { id: args.id, replies: [{ author: "Kay", content: args.content }] }, dataSeq: 7 };
+};
+const stageFile = ({ repo, branch, title, folder, path } = {}) => {
+  const trimmedTitle = String(title || "").trim();
+  if (trimmedTitle && /\.[^./\\]+$/.test(trimmedTitle) && !/\.md$/i.test(trimmedTitle)) return { ok: false, error: "only .md files can be added to a branch" };
+  const name = trimmedTitle && !/\.md$/i.test(trimmedTitle) ? trimmedTitle + ".md" : trimmedTitle;
+  const filePath = String(path || "").trim() || (folder ? folder + "/" : "") + name;
+  if (!filePath) return { ok: false, error: "title is required" };
+  if (!/\.md$/i.test(filePath)) return { ok: false, error: "only .md files can be added to a branch" };
+  if (!repo || !branch) return { ok: false, error: "repo and branch are required" };
+  stagedFilePaths.push(filePath);
+  return { ok: true, files: stagedFilePaths.map((stagedPath) => ({ title: stagedPath === filePath ? name || stagedPath : stagedPath, path: stagedPath })) };
+};
+
 registerControlApi(app, {
   port: PORT_FOR_PREFIXES,
   sessionToken: SESSION_TOKEN,
@@ -68,8 +126,38 @@ registerControlApi(app, {
   specDrafts,
   specLocks,
   specDiff: async (idx) => ({ hunks: [{ startLine: 3, endLine: 3, oldHtml: "<p>a</p>", newHtml: "<p>b</p>" }], source: "test", updatedAt: 1 }),
+  specPreview: async (idx, { original, proposed } = {}) => ({
+    html: "<p>" + String(proposed || "") + "</p>",
+    hunks: String(original) === String(proposed)
+      ? []
+      : [{ startLine: 1, endLine: 1, oldHtml: "<p>" + String(original) + "</p>", newHtml: "<p>" + String(proposed) + "</p>" }],
+    source: "user",
+  }),
   renderDraft: async (idx, { draft } = {}) => ({ html: draft ? "<p>DRAFT</p>" : "<p>COMMITTED</p>" }),
   listPrs: async (q) => ({ prs: [{ id: 1, title: "PR One", author: "Kay" }], mine: q.creator !== "any", status: 1 }),
+  // Clickstop 2: Open file resolve. Fake classifier — "/ok/a.md" resolves, else error.
+  resolveOpenFile: ({ path: p } = {}) =>
+    p === "/ok/a.md"
+      ? { ok: true, realpath: "/ok/a.md" }
+      : { ok: false, reason: "outside-root", error: "outside every approved folder" },
+  // Clickstop 2: Custom list. In-memory fake store; add validates .md only.
+  customFilesList: () => customListStore.map(shapeCl),
+  customFileAdd: ({ path: p } = {}) => {
+    if (!p || !/\.md$/i.test(p)) return { ok: false, reason: "not-md", error: "Only .md files can be added here." };
+    if (!customListStore.includes(p)) customListStore.push(p);
+    return { ok: true, files: customListStore.map(shapeCl) };
+  },
+  customFileRemove: ({ path: p } = {}) => {
+    const i = customListStore.indexOf(p); if (i >= 0) customListStore.splice(i, 1);
+    return { ok: true, files: customListStore.map(shapeCl) };
+  },
+  remoteSpecDrafts,
+  remoteSpecLocks,
+  pushRemoteSpec,
+  openPr,
+  replyPersonalComment,
+  stageFile,
+  stageSpecPr: (args) => { lastStagedPrArgs = args; return { ok: true, prs: [args] }; },
 });
 
 const server = await new Promise((resolve) => {
@@ -92,6 +180,31 @@ async function call(path, opts = {}) {
 const authHeaders = { Authorization: `Bearer ${SESSION_TOKEN}` };
 
 try {
+  // --- POST /api/v1/pr/stage ---
+  {
+    const body = { org: "https://dev.azure.com/o", project: "P", repo: "R", title: "Review", sourceBranch: "spec/x", targetBranch: "main" };
+    const r = await call("/api/v1/pr/stage", { method: "POST", headers: authHeaders, body });
+    check("PR stage: authenticated request stages without opening", r.status === 200 && r.body.ok === true && lastStagedPrArgs.title === "Review");
+  }
+
+  // --- POST /api/v1/files/stage ---
+  {
+    const r = await call("/api/v1/files/stage", { method: "POST", headers: authHeaders, body: { repo: "r", branch: "b", title: "Spec title" } });
+    check("file stage: extensionless title and path get .md", r.status === 200 && r.body.ok === true && r.body.files.at(-1).title === "Spec title.md" && r.body.files.at(-1).path === "Spec title.md");
+  }
+  {
+    const r = await call("/api/v1/files/stage", { method: "POST", headers: authHeaders, body: { repo: "r", branch: "b", title: "Spec.MD" } });
+    check("file stage: uppercase .MD is preserved", r.status === 200 && r.body.ok === true && r.body.files.at(-1).path === "Spec.MD");
+  }
+  {
+    const r = await call("/api/v1/files/stage", { method: "POST", headers: authHeaders, body: { repo: "r", branch: "b", title: "Spec.txt" } });
+    check("file stage: non-md title is rejected", r.status === 200 && r.body.ok === false && /only \.md/i.test(r.body.error));
+  }
+  {
+    const r = await call("/api/v1/files/stage", { method: "POST", headers: authHeaders, body: { repo: "r", branch: "b", path: "Spec.txt" } });
+    check("file stage: explicit non-md path is rejected", r.status === 200 && r.body.ok === false && /only \.md/i.test(r.body.error));
+  }
+
   // --- Auth guards ---
   {
     const r = await fetch(BASE + "/api/v1/threads");
@@ -137,6 +250,37 @@ try {
   {
     const r = await call("/api/v1/specs/99/diff");
     check("diff: out-of-range index -> empty hunks", r.status === 200 && Array.isArray(r.body.hunks) && r.body.hunks.length === 0);
+  }
+
+  // --- POST /api/v1/specs/:fileIndex/preview (live editor-buffer preview) ---
+  {
+    const r = await fetch(BASE + "/api/v1/specs/0/preview", {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ original: "a", proposed: "b" }),
+    });
+    check("preview: missing X-Tippani-Client -> 403", r.status === 403);
+  }
+  {
+    const r = await call("/api/v1/specs/0/preview", { method: "POST", body: { original: "a", proposed: "b" } });
+    check("preview: with client header -> 200", r.status === 200);
+    check("preview: renders proposed html", typeof r.body.html === "string" && r.body.html.includes("b"));
+    check("preview: returns diff hunks for a change", Array.isArray(r.body.hunks) && r.body.hunks.length === 1);
+    check("preview: source is user (personal edit)", r.body.source === "user");
+  }
+  {
+    const r = await call("/api/v1/specs/0/preview", { method: "POST", body: { original: "same", proposed: "same" } });
+    check("preview: unchanged buffer -> no hunks", r.status === 200 && Array.isArray(r.body.hunks) && r.body.hunks.length === 0);
+  }
+  {
+    const r = await call("/api/v1/specs/99/preview", { method: "POST", body: { original: "a", proposed: "b" } });
+    check("preview: out-of-range index -> 404", r.status === 404);
+  }
+  {
+    const denied = await fetch(BASE + "/api/v1/spec-preview", {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ original: "", proposed: "new" }),
+    });
+    check("generic preview: missing X-Tippani-Client -> 403", denied.status === 403);
+    const r = await call("/api/v1/spec-preview", { method: "POST", body: { original: "", proposed: "new" } });
+    check("generic preview: pure-staged empty baseline renders proposed", r.status === 200 && r.body.html.includes("new") && r.body.hunks.length === 1);
   }
 
   // --- GET /api/v1/threads ---
@@ -225,7 +369,7 @@ try {
     check("nav: backslash path -> 400", r.status === 400);
   }
 
-  // --- POST /api/v1/ado-token (Coforce token push) ---
+  // --- POST /api/v1/ado-token (host token push) ---
   {
     const r = await call("/api/v1/ado-token", { method: "POST", headers: authHeaders, body: { token: "fresh-bearer-xyz" } });
     check("ado-token: 200", r.status === 200 && r.body.ok === true);
@@ -420,6 +564,186 @@ try {
     check("prs: mine true by default", r.body.mine === true);
     const r2 = await call("/api/v1/prs?creator=any", { headers: authHeaders });
     check("prs: creator=any widens", r2.body.mine === false);
+  }
+
+  // --- Open file resolve (clickstop 2, step 2) ---
+  {
+    const r = await fetch(BASE + "/api/v1/open-file", { method: "POST" });
+    check("open-file: missing X-Tippani-Client -> 403", r.status === 403);
+  }
+  {
+    const r = await fetch(BASE + "/api/v1/open-file", {
+      method: "POST",
+      headers: { "X-Tippani-Client": "test", "Content-Type": "application/json" },
+      body: JSON.stringify({ path: "/ok/a.md" }),
+    });
+    check("open-file: mutation without bearer -> 401", r.status === 401);
+  }
+  {
+    const r = await call("/api/v1/open-file", { method: "POST", headers: authHeaders, body: { path: "/ok/a.md" } });
+    check("open-file: valid -> ok + realpath", r.status === 200 && r.body.ok === true && r.body.realpath === "/ok/a.md");
+  }
+  {
+    const r = await call("/api/v1/open-file", { method: "POST", headers: authHeaders, body: { path: "/etc/passwd.md" } });
+    check("open-file: invalid -> ok:false + reason + error", r.status === 200 && r.body.ok === false && r.body.reason === "outside-root" && typeof r.body.error === "string");
+  }
+
+  // --- Custom list (clickstop 2) ---
+  {
+    const r = await fetch(BASE + "/api/v1/custom-files");
+    check("custom-files GET: missing X-Tippani-Client -> 403", r.status === 403);
+  }
+  {
+    const r = await fetch(BASE + "/api/v1/custom-files", {
+      method: "POST",
+      headers: { "X-Tippani-Client": "test", "Content-Type": "application/json" },
+      body: JSON.stringify({ path: "/ok/a.md" }),
+    });
+    check("custom-files POST: mutation without bearer -> 401", r.status === 401);
+  }
+  {
+    const r = await call("/api/v1/custom-files", { headers: authHeaders });
+    check("custom-files: initially empty", r.status === 200 && r.body.ok === true && Array.isArray(r.body.files) && r.body.files.length === 0);
+  }
+  {
+    const r = await call("/api/v1/custom-files", { method: "POST", headers: authHeaders, body: { path: "/x/a.md" } });
+    check("custom-files add: ok + tile shape", r.status === 200 && r.body.ok === true && r.body.files.length === 1 && r.body.files[0].name === "a.md" && r.body.files[0].openHref.includes("open-file-view"));
+  }
+  {
+    const r = await call("/api/v1/custom-files", { method: "POST", headers: authHeaders, body: { path: "/x/note.txt" } });
+    check("custom-files add: non-.md rejected 400", r.status === 400 && r.body.ok === false && r.body.reason === "not-md");
+  }
+  {
+    const r = await call("/api/v1/custom-files", { headers: authHeaders });
+    check("custom-files: GET reflects the add", r.status === 200 && r.body.files.length === 1 && r.body.files[0].path === "/x/a.md");
+  }
+  {
+    const r = await call("/api/v1/custom-files", { method: "DELETE", headers: authHeaders, body: { path: "/x/a.md" } });
+    check("custom-files remove: ok + empty", r.status === 200 && r.body.ok === true && r.body.files.length === 0);
+  }
+
+  // --- Personal Comments: human reply ---
+  {
+    const r = await fetch(BASE + "/api/v1/personal-comments/c1/reply", { method: "POST" });
+    check("personal reply: missing X-Tippani-Client -> 403", r.status === 403);
+  }
+  {
+    const r = await fetch(BASE + "/api/v1/personal-comments/c1/reply", {
+      method: "POST",
+      headers: { "X-Tippani-Client": "test", "Content-Type": "application/json" },
+      body: JSON.stringify({ repo: "Repo", branch: "main", path: "/docs/spec.md", content: "Response" }),
+    });
+    check("personal reply: mutation without bearer -> 401", r.status === 401);
+  }
+  {
+    const body = { repo: "Repo", branch: "main", path: "/docs/spec.md", content: "Response" };
+    const r = await call("/api/v1/personal-comments/c1/reply", { method: "POST", headers: authHeaders, body });
+    check("personal reply: success returns updated comment", r.status === 200 && r.body.ok === true && r.body.comment.replies[0].content === "Response" && r.body.dataSeq === 7);
+    check("personal reply: forwards coordinates, id, and content", lastPersonalReplyArgs.repo === "Repo" && lastPersonalReplyArgs.branch === "main" && lastPersonalReplyArgs.path === "/docs/spec.md" && lastPersonalReplyArgs.id === "c1" && lastPersonalReplyArgs.content === "Response");
+  }
+  {
+    const r = await call("/api/v1/personal-comments/c1/reply", { method: "POST", headers: authHeaders, body: { repo: "Repo", branch: "main", path: "/docs/spec.md", content: "reject" } });
+    check("personal reply: service rejection -> 400", r.status === 400 && r.body.ok === false);
+  }
+
+  // --- Remote (pre-PR) spec authoring (clickstop 2, step 11) ---
+  const RPROJ = "Big Data", RREPO = "MyRepo", RBRANCH = "spec/x";
+  {
+    const r = await fetch(BASE + "/api/v1/specs/draft", { method: "PUT" });
+    check("remote-draft: missing X-Tippani-Client -> 403", r.status === 403);
+  }
+  {
+    const r = await fetch(BASE + "/api/v1/specs/draft", {
+      method: "PUT", headers: { "X-Tippani-Client": "test", "Content-Type": "application/json" },
+      body: JSON.stringify({ project: RPROJ, repo: RREPO, branch: RBRANCH, path: "docs/spec.md", body: "x" }),
+    });
+    check("remote-draft: mutation without bearer -> 401", r.status === 401);
+  }
+  {
+    const r = await call("/api/v1/specs/draft", { method: "PUT", headers: authHeaders, body: { repo: RREPO, branch: RBRANCH, path: "docs/spec.md", body: "x" } });
+    check("remote-draft: missing project -> 400 (never guessed)", r.status === 400);
+    const r0 = await call("/api/v1/specs/draft", { method: "PUT", headers: authHeaders, body: { project: RPROJ, branch: RBRANCH } });
+    check("remote-draft: missing repo/path -> 400", r0.status === 400);
+    const r2 = await call("/api/v1/specs/draft", { method: "PUT", headers: authHeaders, body: { project: RPROJ, repo: RREPO, branch: RBRANCH, path: "docs/spec.md" } });
+    check("remote-draft: non-string body -> 400", r2.status === 400);
+  }
+  {
+    // Stage sets the draft; GET round-trips it.
+    const r = await call("/api/v1/specs/draft", { method: "PUT", headers: authHeaders, body: { project: RPROJ, repo: RREPO, branch: RBRANCH, path: "docs/spec.md", body: "# Spec\n\nhi", baseObjectId: "base1" } });
+    check("remote-draft: stage -> ok", r.status === 200 && r.body.ok === true && r.body.draft.body === "# Spec\n\nhi");
+    const g = await call(`/api/v1/specs/draft?project=${encodeURIComponent(RPROJ)}&repo=${RREPO}&branch=${RBRANCH}&path=docs/spec.md`, { headers: authHeaders });
+    check("remote-draft: GET round-trips the staged body", g.status === 200 && g.body.draft && g.body.draft.body === "# Spec\n\nhi");
+  }
+  {
+    // Two-writer collision: while the user holds the file, an agent stage 409s;
+    // the user's own mirror write bypasses the lock.
+    await call("/api/v1/specs/draft/lock", { method: "POST", headers: authHeaders, body: { project: RPROJ, repo: RREPO, branch: RBRANCH, path: "docs/lock.md" } });
+    const agent = await call("/api/v1/specs/draft", { method: "PUT", headers: authHeaders, body: { project: RPROJ, repo: RREPO, branch: RBRANCH, path: "docs/lock.md", body: "agent" } });
+    check("remote-draft: agent-vs-user collision -> 409 (not a silent overwrite)", agent.status === 409);
+    const mirror = await call("/api/v1/specs/draft", { method: "PUT", headers: authHeaders, body: { project: RPROJ, repo: RREPO, branch: RBRANCH, path: "docs/lock.md", body: "user", source: "user-mirror" } });
+    check("remote-draft: user-mirror bypasses the lock", mirror.status === 200);
+  }
+  {
+    // A forced store write failure returns {ok:false} (no false success).
+    const r = await call("/api/v1/specs/draft", { method: "PUT", headers: authHeaders, body: { project: RPROJ, repo: RREPO, branch: RBRANCH, path: "/fail/write.md", body: "x" } });
+    check("remote-draft: write failure -> {ok:false}", r.status === 500 && r.body.ok === false);
+  }
+  {
+    // /state omits the heavy draft bodies without ?full=1.
+    const slim = (await call("/api/v1/state", { headers: authHeaders })).body;
+    check("remote-draft: /state omits bodies without full", slim.remoteSpecDrafts === undefined);
+    const full = (await call("/api/v1/state?full=1", { headers: authHeaders })).body;
+    check("remote-draft: /state?full=1 includes staged drafts", full.remoteSpecDrafts && typeof full.remoteSpecDrafts === "object");
+  }
+  {
+    // Multi-file push is one call (all-or-nothing): stage a second file on the
+    // same branch, push -> both land in a single push.
+    await call("/api/v1/specs/draft", { method: "PUT", headers: authHeaders, body: { project: RPROJ, repo: RREPO, branch: RBRANCH, path: "docs/two.md", body: "second" } });
+    const staged = (await call("/api/v1/state?full=1", { headers: authHeaders })).body.remoteSpecDrafts;
+    check("remote-draft: two files staged on the branch", Object.keys(staged).length >= 2);
+    const noProj = await call("/api/v1/specs/draft/push", { method: "POST", headers: authHeaders, body: { repo: RREPO, branch: RBRANCH } });
+    check("remote-draft: push without project -> 400 (never guessed)", noProj.status === 400);
+    const push = await call("/api/v1/specs/draft/push", { method: "POST", headers: authHeaders, body: { project: RPROJ, repo: RREPO, branch: RBRANCH, message: "Add specs" } });
+    check("remote-draft: push -> ok, all files in one commit", push.status === 200 && push.body.ok === true && push.body.pushedFiles.length >= 2 && !!push.body.commitId);
+  }
+  {
+    // Stale oldObjectId -> 409 (someone moved the branch), not a lost write.
+    await call("/api/v1/specs/draft", { method: "PUT", headers: authHeaders, body: { project: RPROJ, repo: RREPO, branch: RBRANCH, path: "docs/stale.md", body: "z" } });
+    const push = await call("/api/v1/specs/draft/push", { method: "POST", headers: authHeaders, body: { project: RPROJ, repo: RREPO, branch: RBRANCH, oldObjectId: "stale" } });
+    check("remote-draft: stale oldObjectId -> 409", push.status === 409 && push.body.ok === false);
+  }
+
+  // --- Open PR + link work item (clickstop 2, step 12) ---
+  {
+    const r = await fetch(BASE + "/api/v1/pr/open", { method: "POST" });
+    check("pr-open: missing X-Tippani-Client -> 403", r.status === 403);
+  }
+  {
+    const r = await fetch(BASE + "/api/v1/pr/open", {
+      method: "POST", headers: { "X-Tippani-Client": "test", "Content-Type": "application/json" },
+      body: JSON.stringify({ title: "t", sourceBranch: "a", targetBranch: "b" }),
+    });
+    check("pr-open: mutation without bearer -> 401", r.status === 401);
+  }
+  {
+    const r = await call("/api/v1/pr/open", { method: "POST", headers: authHeaders, body: { project: "Big Data", repo: "MyRepo", sourceBranch: "a", targetBranch: "b" } });
+    check("pr-open: missing title -> 400", r.status === 400);
+    const rp = await call("/api/v1/pr/open", { method: "POST", headers: authHeaders, body: { title: "t", sourceBranch: "a", targetBranch: "b" } });
+    check("pr-open: missing project/repo -> 400 (never guessed)", rp.status === 400);
+  }
+  {
+    // A work item requires an explicit type — the route never infers it.
+    const r = await call("/api/v1/pr/open", { method: "POST", headers: authHeaders, body: { project: "Big Data", repo: "MyRepo", title: "t", sourceBranch: "a", targetBranch: "b", workItemTitle: "Spec review" } });
+    check("pr-open: workItemTitle without type -> 400 (never inferred)", r.status === 400);
+  }
+  {
+    const r = await call("/api/v1/pr/open", { method: "POST", headers: authHeaders, body: { project: "Big Data", repo: "MyRepo", title: "Add spec", sourceBranch: "spec/x", targetBranch: "main", isDraft: true, workItemTitle: "Spec review", workItemType: "Task" } });
+    check("pr-open: valid -> PR opened + work item linked", r.status === 200 && r.body.ok === true && r.body.pullRequestId === 77 && r.body.workItemId === 88 && r.body.linked === true);
+    check("pr-open: forwarded the caller's title/type + repo (not inferred)", lastOpenPrArgs.title === "Add spec" && lastOpenPrArgs.workItemType === "Task" && lastOpenPrArgs.repo === "MyRepo");
+  }
+  {
+    const r = await call("/api/v1/pr/open", { method: "POST", headers: authHeaders, body: { project: "Big Data", repo: "MyRepo", title: "boom", sourceBranch: "a", targetBranch: "b" } });
+    check("pr-open: ADO failure -> 502 + ok:false", r.status === 502 && r.body.ok === false);
   }
 
 } finally {

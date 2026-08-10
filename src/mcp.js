@@ -20,6 +20,12 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { buildTools, createHttpClient } from "./mcp-tools.js";
+import {
+  AUTHOR_SPEC_INSTRUCTIONS,
+  AUTHOR_SPEC_PROMPT_NAME,
+  authorSpecPromptConfig,
+  authorSpecPromptMessages,
+} from "./routing-directive.js";
 import { createPortalSession } from "./portal-launcher.js";
 import { inspectAdoToken, tokenRejectionMessage } from "./ado-token-check.js";
 import { cliFallbackEnabled, acquireAdoTokenFromCli } from "./ado-token-cli.js";
@@ -54,7 +60,7 @@ if (process.env.TIPPANI_ADO_TOKEN) {
 } else {
   console.error(
     "tippani-mcp: no Azure DevOps token \u2014 starting in local-only mode. " +
-    "Local review (open_branch / open_branch_file / personal comments) works " +
+        "Local review (open_branch / open_branch_file / annotations) works " +
     "without one; ADO tools (open_pr, list_prs) will need a token."
   );
 }
@@ -70,7 +76,16 @@ const tools = buildTools(http, session);
 
 const server = new McpServer(
   { name: "tippani", version: "0.1.0" },
-  { capabilities: { tools: {} } }
+  // `instructions` is sent in the initialize response — the first guidance the
+  // host model sees: author specs through Tippani's tools, never raw git/ADO.
+  { capabilities: { tools: {}, prompts: {} }, instructions: AUTHOR_SPEC_INSTRUCTIONS }
+);
+
+// The author-spec prompt carries the same routing directive on demand.
+server.registerPrompt(
+  AUTHOR_SPEC_PROMPT_NAME,
+  authorSpecPromptConfig,
+  (args) => ({ messages: authorSpecPromptMessages(args || {}) })
 );
 
 for (const t of tools) {

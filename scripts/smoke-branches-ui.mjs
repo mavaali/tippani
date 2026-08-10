@@ -103,7 +103,67 @@ async function main() {
     check("SERVER_LOCAL_REPO empty by default (no --local-repo)", /SERVER_LOCAL_REPO = "";/.test(disc.html));
 
     check("runBranches wired to /api/v1/branches", /runBranches/.test(disc.html) && /\/api\/v1\/branches/.test(disc.html));
+    check("New branch Repo picker accepts the all-repos fallback when no main exists",
+      /brCreateRepos = d\.repos \|\| \[\]/.test(disc.html) && /repos = brCreateRepos/.test(disc.html));
     check("branches tab activatable from ?tab", /=== 'branches'/.test(disc.html));
+    check("Review queue exposes staged PR creation", !!doc.getElementById("prNewBtn") && !!doc.getElementById("prCreatePanel"));
+    check("Discovery surfaces its initial connection error on Review queue, Specs, and Work items",
+      doc.getElementById("qStatus")?.textContent === "offline" &&
+      doc.getElementById("spStatus")?.textContent === "offline" &&
+      doc.getElementById("wiStatus")?.textContent === "offline");
+    check("PR staging form has explicit target coordinates and intent fields",
+      !!doc.getElementById("prCreateProject") && !!doc.getElementById("prCreateRepo") &&
+      !!doc.getElementById("prCreateSource") && !!doc.getElementById("prCreateTarget") &&
+      !!doc.getElementById("prCreateTitle") && !!doc.getElementById("prCreateDescription") &&
+      !!doc.getElementById("prCreateDraft") && !!doc.getElementById("prCreateWorkItemTitle") &&
+      !!doc.getElementById("prCreateWorkItemType"));
+    check("Review queue stages through /api/v1/pr/stage and never opens directly",
+      /fetch\('\/api\/v1\/pr\/stage'/.test(disc.html) && !/fetch\('\/api\/v1\/pr\/open'/.test(disc.html));
+    check("Review queue renders staged PR intent cards", /refreshStagedPrs/.test(disc.html) && /pr-staged-card/.test(disc.html));
+    check("Review queue staging refreshes the top-row staged ticker like Branches",
+      /async function refreshStagedPrs\(\)[\s\S]*?__tpStagedRefresh[\s\S]*?async function stagePr\(\)/.test(disc.html));
+
+    const stagedPr = await api("POST", "/api/v1/pr/stage", {
+      org: "https://dev.azure.com/smoke", project: "SmokeProject", repo: "repo-1",
+      repoName: "smoke-repo", title: "Smoke staged PR", sourceBranch: "dev/smoke/spec", targetBranch: "main", isDraft: true,
+    });
+    check("Review queue staging route accepts a complete PR intent",
+      stagedPr.status === 200 && stagedPr.json?.ok === true, JSON.stringify(stagedPr.json));
+    const stagedState = await api("GET", "/api/v1/staged");
+    check("staged PR intent remains local for aggregate publication",
+      stagedState.status === 200 && stagedState.json?.prs?.some((pr) => pr.title === "Smoke staged PR" && pr.repoName === "smoke-repo"), JSON.stringify(stagedState.json?.prs));
+
+    check("Staged PR cards expose a delete control wired to unstagePr",
+      /pr-staged-del/.test(disc.html) &&
+      /async function unstagePr\([\s\S]*?\/api\/v1\/pr\/unstage/.test(disc.html));
+    const unstagedPr = await api("POST", "/api/v1/pr/unstage", { repo: "repo-1", branch: "dev/smoke/spec" });
+    check("Unstage route removes the staged PR intent",
+      unstagedPr.status === 200 && unstagedPr.json?.ok === true && unstagedPr.json?.removed === 1 &&
+      !(unstagedPr.json?.prs || []).some((pr) => pr.title === "Smoke staged PR"), JSON.stringify(unstagedPr.json));
+
+    check("Draft PR cards expose a staged Publish control wired to the publish routes",
+      /pr-publish-btn/.test(disc.html) &&
+      /stagePrPublishFromCard[\s\S]*?\/api\/v1\/pr\/publish\/stage/.test(disc.html) &&
+      /unstagePrPublishFromCard[\s\S]*?\/api\/v1\/pr\/publish\/unstage/.test(disc.html));
+    const stagedPub = await api("POST", "/api/v1/pr/publish/stage", {
+      org: "https://dev.azure.com/smoke", project: "SmokeProject", repo: "repo-1", repoName: "smoke-repo",
+      pullRequestId: 4242, title: "Smoke publish",
+    });
+    check("Publish-stage route accepts a draft PR publish intent",
+      stagedPub.status === 200 && stagedPub.json?.ok === true &&
+      stagedPub.json?.prPublishes?.some((p) => p.pullRequestId === 4242), JSON.stringify(stagedPub.json));
+    const pubState = await api("GET", "/api/v1/staged");
+    check("staged publish intent remains local in the aggregate inventory",
+      pubState.status === 200 && pubState.json?.prPublishes?.some((p) => p.pullRequestId === 4242), JSON.stringify(pubState.json?.prPublishes));
+    const dupPub = await api("POST", "/api/v1/pr/publish/stage", {
+      org: "https://dev.azure.com/smoke", project: "SmokeProject", repo: "repo-1", pullRequestId: 4242, title: "Smoke publish",
+    });
+    check("Publish-stage rejects a duplicate publish intent for the same PR",
+      dupPub.status === 200 && dupPub.json?.ok === false, JSON.stringify(dupPub.json));
+    const unstagedPub = await api("POST", "/api/v1/pr/publish/unstage", { pullRequestId: 4242 });
+    check("Publish-unstage removes the staged publish intent",
+      unstagedPub.status === 200 && unstagedPub.json?.ok === true && unstagedPub.json?.removed === 1 &&
+      !(unstagedPub.json?.prPublishes || []).some((p) => p.pullRequestId === 4242), JSON.stringify(unstagedPub.json));
 
     // ---- POST /api/v1/branches : offline-degraded ----
     const br = await api("POST", "/api/v1/branches", { project: "AnyProject" });
@@ -152,6 +212,24 @@ async function main() {
     check("/spec local renders the review page (200)", specLocal.status === 200, `status=${specLocal.status}`);
     check("/spec local is reviewing + Personal Comments + Local badge",
       /RO_REVIEWING = true/.test(specLocal.html) && /Personal Comments/.test(specLocal.html) && /ro-mode-local/.test(specLocal.html));
+    const specLocalDoc = new JSDOM(specLocal.html).window.document;
+    const personalCommentsHead = specLocalDoc.querySelector("#roMargin .ro-margin-head");
+    check("read-only Personal Comments has button left, label right",
+      personalCommentsHead?.firstElementChild?.classList.contains("ro-toggle") &&
+      personalCommentsHead?.firstElementChild?.textContent.trim() === "»" &&
+      personalCommentsHead?.lastElementChild?.classList.contains("ro-margin-title") &&
+      personalCommentsHead?.lastElementChild?.textContent.trim() === "Personal Comments");
+    check("read-only Personal Comments collapsed rail expands left",
+      specLocalDoc.querySelector("#roMargin .ro-rail")?.firstChild?.textContent.trim() === "«");
+    check("read-only Personal Comments support human replies",
+      /pc-reply-btn/.test(specLocal.html) &&
+      /pc-replybox/.test(specLocal.html) &&
+      /personal-comments\/' \+ encodeURIComponent[\s\S]{0,100}'\/reply/.test(specLocal.html) &&
+      /\.pc-editing, \.pc-replying/.test(specLocal.html));
+    const personalCommentsScript = [...specLocal.html.matchAll(/<script>([\s\S]*?)<\/script>/g)].map((m) => m[1]).find((s) => s.includes("pcCommitReply"));
+    let personalCommentsScriptError = null;
+    try { new Function(personalCommentsScript || ""); } catch (e) { personalCommentsScriptError = String(e); }
+    check("read-only Personal Comments script parses", !!personalCommentsScript && personalCommentsScriptError === null, personalCommentsScriptError);
     check("/spec local never proxies images via ADO",
       !/spec\/media\?repo=/.test(specLocal.html) && (!/spec\/media\?/.test(specLocal.html) || /spec\/media\?local=/.test(specLocal.html)));
     check("/spec local anchors margin cards to the body (file-level comment can't clip under the header)",

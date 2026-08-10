@@ -1,5 +1,34 @@
 # Changelog
 
+## Unreleased — Remote spec authoring + Discovery + docs
+
+End-to-end **remote authoring** with no working tree: stage a branch, add or
+edit `.md` files, stage a PR (with an optional Spec-review work-item link), and
+publish the whole set with one `push_staged_changes`. From branch `clickstop-2`.
+
+- **Discovery home** — Specs (ADO Code Search), Review queue, Work items (WIQL),
+  Branches (remote + local), and a personal Reading list, all in one screen.
+- **Staged everywhere** — replies, resolutions, file adds/edits, PR intents, and
+  draft→published promotions are staged locally; one **Push to remote** crosses
+  into Azure DevOps. Staged PR cards can be deleted before publishing.
+- **Shared staged-changes ticker** refreshed from both Branches and the Review
+  queue.
+- **"Personal comments" are now "Annotations"** — the private, line-anchored
+  notes are renamed across the UI, the MCP tools (`add_annotation`,
+  `read_annotations`, `resolve_annotation`, …), and the docs. Fittingly,
+  *tippani* itself means "annotation".
+- **Links behave sensibly** — clicking a link inside a rendered spec opens a
+  Markdown file that lives under the current file's root folder **in Tippani**
+  (the read-only reviewing view), and everything else — external URLs,
+  non-Markdown files, and files outside that root — in your **OS default
+  browser**. Relative doc links like `docs/x.md` no longer 404. Only links in
+  rendered content are intercepted; breadcrumbs, the contents rail, and in-page
+  anchors are unaffected.
+- **MCP** — exactly 40 tools; the four authoring tools are `stage_branch`,
+  `stage_spec`, `stage_spec_pr`, and `push_staged_changes`.
+- **Docs** — rewritten [README](README.md) (User Manual + hub), a full
+  [User Guide](docs/user-guide.md) with screenshots of every screen, and a
+  complete [MCP & API Reference](docs/mcp-api.md).
 ## Unreleased — Credibility + zero-setup demo
 
 Two fixes to what tippani claims about itself, plus a front door that needs no
@@ -28,7 +57,7 @@ A working demo portal already existed but shipped to nobody: it lived in
 `scripts/`, which the npm package excludes, and nothing referenced it.
 
 - `npx tippani --demo` opens the portal on a sample spec with sample comment
-  threads. No ADO, no credentials, no clone. Honours `--port` and `--headless`.
+  threads. No account, no credentials, no clone. Honours `--port` and `--headless`.
 - Moved `scripts/demo.js` to `src/demo.js` so it ships and bundles; exposed as
   `startDemo()` and still runnable directly (`npm run demo`).
 - **Deduped ~85 lines** of design-system and helper code the demo had copied
@@ -41,12 +70,9 @@ A working demo portal already existed but shipped to nobody: it lived in
 
 ### Fixed — documentation drift
 - README advertised **19 MCP tools**; there are **40**. Documented the missing
-  groups: discovery, local review, and private annotations.
-- README said the MCP shim "will refuse to start" without an ADO token. It boots
-  in local-only mode.
-- README described an ADO-PR-only tool. Local-clone review, private annotations,
-  and WYSIWYG editing are now in the feature list, and the pitch leads with the
-  problem (a code diff is the wrong surface for prose) rather than the backend.
+  groups: discovery, local review, and annotations.
+- README said the MCP shim "will refuse to start" without an access token. It
+  boots in local-only mode; a token is only needed for the host tools.
 
 ### Removed
 - Dead `getSpecFiles()` (defined, never called).

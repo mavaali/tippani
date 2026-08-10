@@ -81,10 +81,51 @@ async function main() {
     check("3-view toggle present (current/diff/proposed)",
       ["current", "diff", "proposed"].every((v) => views.includes(v) || fdoc.querySelector(`[onclick*="setView('${v}')"]`)),
       views.join(","));
+    check("saved new staged files enable Diff/Proposed against an empty baseline",
+      /comparisonOriginal\s*=\s*\(\)\s*=>\s*\(BRANCH && BRANCH\.pureStaged \? "" : CURRENT_MARKDOWN\)/.test(file.html) &&
+      /const pureStagedContent =/.test(file.html) &&
+      !/Not available for staged files/.test(file.html));
+    check("saving a new staged file leaves its empty Current baseline unchanged",
+      !/content\.innerHTML = rendered\.html/.test(file.html) &&
+      /setViewButtonsEnabled\(\)/.test(file.html));
     check("Find button present", !!fdoc.getElementById("findBtn"));
     check("Edit toggle present", !!fdoc.getElementById("editToggle"));
     check("Editor formatting toolbar band present", !!fdoc.getElementById("fmtToolbar"));
     check("Editor + current-view containers present", !!fdoc.getElementById("spec-editor") && !!fdoc.getElementById("spec-current"));
+
+    const leftPaneHead = fdoc.querySelector("#sidebarLeft .tp-pane-head");
+    const rightPaneHead = fdoc.querySelector("#sidebarRight .tp-pane-head");
+    const leftRail = fdoc.querySelector("#sidebarLeft .tp-rail");
+    const rightRail = fdoc.querySelector("#sidebarRight .tp-rail");
+    check("PR Contents pane has collapse-left and expand-right controls",
+      leftPaneHead?.querySelector(".tp-collapse-btn")?.textContent.trim() === "«" &&
+      leftRail?.firstElementChild?.textContent.trim() === "»");
+    check("PR Comments pane has button left, label right",
+      rightPaneHead?.firstElementChild?.classList.contains("tp-collapse-btn") &&
+      rightPaneHead?.lastElementChild?.classList.contains("sidebar-section-label"));
+    check("PR Comments pane has collapse-right and expand-left controls",
+      rightPaneHead?.querySelector(".tp-collapse-btn")?.textContent.trim() === "»" &&
+      rightRail?.firstElementChild?.textContent.trim() === "«" &&
+      rightRail?.querySelector(".tp-rail-label")?.textContent.trim() === "Comments");
+    check("pane collapse is shared and persisted outside branch mode",
+      /function tpPaneCollapse\(side\)/.test(file.html) &&
+      /tp-pane-.*-collapsed/.test(file.html) &&
+      !/if \(!window\.__BRANCH\) return;[\s\S]{0,200}tp-pane-left-collapsed/.test(file.html));
+    check("old edit-only T/C/F pane toggles are removed",
+      !fdoc.getElementById("editPaneControls") &&
+      !fdoc.getElementById("toggleTocPane") &&
+      !fdoc.getElementById("toggleCommentsPane") &&
+      !fdoc.getElementById("focusEditPane") &&
+      !/fsrp-edit-(left|right)-collapsed/.test(file.html));
+    check("staged-file Personal Comments support human replies",
+      /pc-reply-btn/.test(file.html) &&
+      /pc-replybox/.test(file.html) &&
+      /personal-comments\/' \+ encodeURIComponent[\s\S]{0,100}'\/reply/.test(file.html) &&
+      /\.pc-editing, \.pc-replying/.test(file.html));
+    const personalCommentsScript = [...file.html.matchAll(/<script>([\s\S]*?)<\/script>/g)].map((m) => m[1]).find((s) => s.includes("pcCommitReply"));
+    let personalCommentsScriptError = null;
+    try { new Function(personalCommentsScript || ""); } catch (e) { personalCommentsScriptError = String(e); }
+    check("staged-file Personal Comments script parses", !!personalCommentsScript && personalCommentsScriptError === null, personalCommentsScriptError);
 
     check("NAV_WATCHER uses the ?edit=1-safe guard (navShouldNavigate)", /navShouldNavigate/.test(file.html));
     check("editor auto-load path wired (isEditing + setMarkdown in poll)",
@@ -121,10 +162,43 @@ async function main() {
     const prsRedirect = await fetch(BASE + "/prs", { headers: { "X-Tippani-Client": CLIENT }, redirect: "manual" });
     check("/prs redirects to /discovery", prsRedirect.status >= 300 && prsRedirect.status < 400 && (prsRedirect.headers.get("location") || "").startsWith("/discovery"), `status=${prsRedirect.status} loc=${prsRedirect.headers.get("location")}`);
 
+    // ---- purely staged new file: empty Current, populated Proposed buffer ----
+    const stagedFile = { project: "SmokeProject", repo: "smoke-pure-staged", repoName: "SmokeRepo", branch: "feature/test", path: "Specs/pure-staged.md" };
+    const stagedCreate = await api("POST", "/api/v1/files/stage", { ...stagedFile, path: undefined, folder: "Specs", title: "pure-staged" });
+    const stagedContent = await api("POST", "/api/v1/files/content", { ...stagedFile, content: "# Proposed only\n\nNew staged content." });
+    const stagedPage = await getPage("/staged-file?" + new URLSearchParams(stagedFile));
+    const stagedDoc = new JSDOM(stagedPage.html).window.document;
+    check("purely staged file renders with normalized title (200)", stagedCreate.json?.ok && stagedCreate.json?.files?.at(-1)?.title === "pure-staged.md" && stagedContent.json?.ok && stagedPage.status === 200);
+    check("purely staged Current is empty", stagedDoc.getElementById("spec-content")?.textContent.trim() === "");
+    check("purely staged Proposed buffer retains content", stagedPage.html.includes("Proposed only") && stagedPage.html.includes('"pureStaged":true'));
+    check("branch edit toolbar exposes Personal Comment command", !!stagedDoc.getElementById("fmtComment"));
+    check("edit-mode comment maps proposed lines to Current with line diff",
+      /diffLines\(comparisonOriginal\(\), editor\.getMarkdown\(\)\)/.test(stagedPage.html) &&
+      /__tpPcCreateDraft\(\{ editLine, currentLine \}\)/.test(stagedPage.html));
+    check("added-line comments retain edit line but are unanchored in Current",
+      /data-edit-line/.test(stagedPage.html) &&
+      /line: card\.__data\.line, editLine: card\.__data\.editLine/.test(stagedPage.html) &&
+      /currentLine != null/.test(stagedPage.html));
+    check("Personal Comment cards use editor line geometry while editing",
+      /editorTopForLine/.test(stagedPage.html) && /scrollEditorToLine\(line\)/.test(stagedPage.html));
+    const stagedComment = await api("POST", "/api/v1/personal-comments", { ...stagedFile, content: "Discard with staged file" });
+    const stagedCommentQuery = "/api/v1/personal-comments?" + new URLSearchParams({ repo: stagedFile.repo, branch: stagedFile.branch, path: stagedFile.path });
+    const stagedCommentsBefore = await api("GET", stagedCommentQuery);
+    const stagedUnstage = await api("POST", "/api/v1/files/unstage", stagedFile);
+    const stagedRecreate = await api("POST", "/api/v1/files/stage", { ...stagedFile, path: undefined, folder: "Specs", title: "pure-staged" });
+    const stagedCommentsAfter = await api("GET", stagedCommentQuery);
+    check("removing and recreating a staged file does not resurrect its Personal Comments",
+      stagedComment.json?.ok && stagedCommentsBefore.json?.comments?.length === 1 && stagedUnstage.json?.ok && stagedRecreate.json?.ok && stagedCommentsAfter.json?.comments?.length === 0);
+    await api("POST", "/api/v1/files/unstage", stagedFile);
+
     // ---- auto-load (last-write-wins) server side ----
     await api("DELETE", "/api/v1/specs/0/draft");
     const before = (await api("GET", "/api/v1/state?full=1")).json?.specDrafts?.["0"];
-    const staged = await api("POST", "/api/v1/specs/0/edit", { edits: [{ kind: "find", find: "Overview", replace: "UISMOKE_AUTOLOAD", where: "first" }] });
+    const cachedPr = JSON.parse(readFileSync(cachePath, "utf8"));
+    const firstPath = cachedPr.changedFiles?.[0]?.path;
+    const firstBody = firstPath && cachedPr.fileContents?.[firstPath];
+    const autoLoadAnchor = String(firstBody || "").split(/\r?\n/).find((line) => line.trim().length >= 4) || "";
+    const staged = await api("POST", "/api/v1/specs/0/edit", { edits: [{ kind: "find", find: autoLoadAnchor, replace: autoLoadAnchor + "\nUISMOKE_AUTOLOAD", where: "first" }] });
     const st = await api("GET", "/api/v1/state?full=1");
     check("live-staged draft appears in state for the open editor to auto-load",
       staged.status === 200 && !!st.json?.specDrafts?.["0"] &&

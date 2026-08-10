@@ -1,6 +1,6 @@
 // Tests for the branch-page file helpers: README detection, path split, the
 // read-only /spec link, row shaping, and the visible-count helper.
-import { isReadmeFile, splitSpecPath, buildSpecHref, branchFileRows, visibleFileCount, mdPathsFromChanges } from "./branch-files.js";
+import { isReadmeFile, splitSpecPath, buildSpecHref, buildEditorHref, branchFileRows, visibleFileCount, mdPathsFromChanges, stagedFileComparison } from "./branch-files.js";
 
 let pass = 0, fail = 0;
 function ok(name, cond) { if (cond) pass++; else { fail++; console.error("  FAIL: " + name); } }
@@ -48,7 +48,13 @@ const paths = ["/docs/b.md", "/README.md", "/docs/a.md", "/notes.txt", "/docs/re
 const rows = branchFileRows(paths, ctx);
 eq("drops non-md, sorts by path", rows.map(r => r.path), ["/docs/a.md", "/docs/b.md", "/docs/readme.md", "/README.md"]);
 eq("flags readmes", rows.map(r => r.isReadme), [false, false, true, true]);
-eq("row carries dir + name", rows[0], { path: "/docs/a.md", dir: "docs", name: "a.md", isReadme: false, href: buildSpecHref({ ...ctx, path: "/docs/a.md" }) });
+eq("row carries dir + name", rows[0], { path: "/docs/a.md", dir: "docs", name: "a.md", isReadme: false, href: buildEditorHref({ ...ctx, path: "/docs/a.md" }) });
+eq("remote rows link to the editor", rows[0].href.startsWith("/staged-file?"), true);
+eq("editor href pins repo/branch/path", buildEditorHref({ repoId: "R1", repoName: "n", project: "P", ref: "refs/heads/dev/x", path: "/d/f.md" }), "/staged-file?project=P&repo=R1&repoName=n&branch=dev%2Fx&path=%2Fd%2Ff.md");
+eq("staged edit keeps remote and proposed separate", stagedFileComparison({ content: "new", existing: true, hasStagedEdit: true, remoteContent: "old" }), { current: "old", proposed: "new", pureStaged: false, hasStagedEdit: true });
+eq("unstaged remote file has no proposal", stagedFileComparison({ content: "old", existing: true }), { current: "old", proposed: "old", pureStaged: false, hasStagedEdit: false });
+eq("new staged file compares against empty remote", stagedFileComparison({ content: "new" }), { current: "", proposed: "new", pureStaged: true, hasStagedEdit: false });
+eq("local rows stay read-only (/spec)", branchFileRows(["/d/a.md"], { localPath: "/r", ref: "b" })[0].href.startsWith("/spec?"), true);
 eq("empty -> []", branchFileRows([], ctx), []);
 eq("null -> []", branchFileRows(null, ctx), []);
 

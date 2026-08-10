@@ -6,7 +6,7 @@ import { extractFrontmatter, reattachFrontmatter } from "./frontmatter.js";
 let pass = 0, fail = 0;
 function check(name, cond) { if (cond) pass++; else { fail++; console.error("  FAIL: " + name); } }
 
-const FM = "---\ntitle: Hello World\nms.date: 07/14/2026\n# a comment\nauthor: kayu\n---\n";
+const FM = "---\ntitle: Hello World\nms.date: 07/14/2026\n# a comment\nauthor: jane\n---\n";
 const BODY = "# Heading\n\nSome **markdown** body.\n";
 const DOC = FM + BODY;
 

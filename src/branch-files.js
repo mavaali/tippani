@@ -54,6 +54,25 @@ export function buildSpecHref({ repoId, repoName, project, ref, path: filePath, 
   return "/spec?" + q;
 }
 
+// Remote branch files open the in-app editor (staged edits), not the read-only
+// /spec page. Carries the repo/branch/path context the editor needs.
+export function buildEditorHref({ repoId, repoName, project, ref, path: filePath } = {}) {
+  const branch = String(ref || "").replace(/^refs\/heads\//, "");
+  const pairs = [["project", project], ["repo", repoId], ["repoName", repoName], ["branch", branch], ["path", filePath]];
+  const q = pairs.filter(([, v]) => v != null && v !== "").map(([k, v]) => `${k}=${encodeURIComponent(String(v))}`).join("&");
+  return "/staged-file?" + q;
+}
+
+export function stagedFileComparison({ content = "", existing = false, hasStagedEdit = false, remoteContent = "" } = {}) {
+  const proposed = String(content == null ? "" : content);
+  return {
+    current: existing && hasStagedEdit ? String(remoteContent == null ? "" : remoteContent) : (existing ? proposed : ""),
+    proposed,
+    pureStaged: !existing,
+    hasStagedEdit: !!(existing && hasStagedEdit),
+  };
+}
+
 // Shape md file paths into sorted rows. Every row is returned (README included,
 // flagged); the UI hides READMEs by default and a checkbox reveals them, so the
 // toggle is instant and needs no refetch. Non-.md paths are dropped.
@@ -68,7 +87,7 @@ export function branchFileRows(paths, ctx = {}) {
       dir,
       name,
       isReadme: isReadmeFile(path),
-      href: buildSpecHref({ ...ctx, path }),
+      href: ctx.localPath ? buildSpecHref({ ...ctx, path }) : buildEditorHref({ ...ctx, path }),
     });
   }
   return rows.sort((a, b) => a.path.toLowerCase().localeCompare(b.path.toLowerCase()));

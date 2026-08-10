@@ -6,7 +6,7 @@
 // input.
 
 import { EventEmitter } from "events";
-import { createPortalSession, openInBrowser, buildOpenArgv } from "./portal-launcher.js";
+import { createPortalSession, openInBrowser } from "./portal-launcher.js";
 
 let pass = 0, fail = 0;
 function check(name, cond) {
@@ -72,12 +72,12 @@ try {
     reset();
     registry.push({ port: 3847, prId: 952607, token: "existing", url: "http://localhost:3847" });
     const s = newSession();
-    const r = await s.ensurePortal({ prId: 952607 });
+    const r = await s.ensurePortal({ prId: 952607, headless: false });
     check("adopt: reused + adopted", r.reused === true && r.adopted === true);
     check("adopt: no spawn", spawnCalls.length === 0);
     check("adopt: bound to existing url", s.getBaseUrl() === "http://localhost:3847");
     check("adopt: uses existing token", s.getToken() === "existing");
-    check("adopt: opened browser to adopted portal", openedUrls.includes("http://localhost:3847"));
+    check("adopt: opened browser to adopted portal (headless:false)", openedUrls.includes("http://localhost:3847"));
     s.stop();
   }
 
@@ -85,7 +85,7 @@ try {
   {
     reset();
     const s = newSession();
-    const r = await s.ensurePortal({ prId: 111, org: "https://dev.azure.com/o", project: "P", repo: "R" });
+    const r = await s.ensurePortal({ prId: 111, org: "https://dev.azure.com/o", project: "P", repo: "R", headless: false });
     check("launch: not reused", r.reused === false && r.prId === 111);
     check("launch: spawned once", spawnCalls.length === 1);
     check("launch: on base port 3847", s.getBaseUrl() === "http://localhost:3847");
@@ -96,7 +96,18 @@ try {
       spawnCalls[0].args.includes("--repo=R"));
     check("launch: injects ADO token env", spawnCalls[0].opts.env.TIPPANI_ADO_TOKEN === "ado-test-token");
     check("launch: portal headless (shim owns browser)", spawnCalls[0].args.includes("--headless"));
-    check("launch: opened browser once to portal", openedUrls.length === 1 && openedUrls[0] === "http://localhost:3847");
+    check("launch: opened browser once to portal (headless:false)", openedUrls.length === 1 && openedUrls[0] === "http://localhost:3847");
+    s.stop();
+  }
+
+  // --- headless is the default: return the URL, open NO browser on the host ---
+  {
+    reset();
+    const s = newSession();
+    const r = await s.ensurePortal({ prId: 4242, org: "https://dev.azure.com/o", project: "P", repo: "R" });
+    check("headless default: launched + returns url", r.reused === false && r.url === "http://localhost:3847");
+    check("headless default: spawned the portal", spawnCalls.length === 1);
+    check("headless default: opened NO browser", openedUrls.length === 0);
     s.stop();
   }
 
@@ -192,55 +203,13 @@ try {
     s.stop();
   }
 
-  // --- openInBrowser: pluggable opener (item 7) ---
+  // --- openInBrowser: native default-browser open only (no host command) ---
   {
     let openedUrl = null;
     const res = await openInBrowser("http://localhost:3847/prs", {
-      openCmd: "", spawnFn: () => { throw new Error("should not spawn"); }, openFn: (u) => { openedUrl = u; },
+      openFn: (u) => { openedUrl = u; },
     });
-    check("open: falls back to OS open when no cmd", res.via === "open" && openedUrl === "http://localhost:3847/prs");
-  }
-  {
-    let spawned = null;
-    const res = await openInBrowser("http://localhost:3848/file/0", {
-      openCmd: "vsc-open {url}", spawnFn: (bin, args, opts) => { spawned = { bin, args, opts }; return { unref() {} }; }, openFn: () => { throw new Error("should not open externally"); },
-    });
-    check("open: runs host cmd with {url} as a discrete argv element",
-      res.via === "cmd" && spawned.bin === "vsc-open" &&
-      spawned.args.length === 1 && spawned.args[0] === "http://localhost:3848/file/0");
-    check("open: never uses a shell", spawned.opts && spawned.opts.shell !== true);
-    check("open: returns argv, not a shell string",
-      Array.isArray(res.argv) && res.argv.join(" ") === "vsc-open http://localhost:3848/file/0");
-  }
-  {
-    let spawned = null;
-    await openInBrowser("http://x/y", { openCmd: "myopen", spawnFn: (bin, args) => { spawned = { bin, args }; return { unref() {} }; }, openFn: () => {} });
-    check("open: appends URL as its own argv element when no {url}",
-      spawned.bin === "myopen" && spawned.args.length === 1 && spawned.args[0] === "http://x/y");
-  }
-  // Command-injection guard: a URL carrying shell metacharacters must stay ONE
-  // inert argv element — never split, never shell-interpreted.
-  {
-    let spawned = null;
-    const evil = "http://localhost:3847/file/0?line=1;rm -rf ~ $(id) `whoami`";
-    await openInBrowser(evil, { openCmd: "vsc-open {url}", spawnFn: (bin, args, opts) => { spawned = { bin, args, opts }; return { unref() {} }; }, openFn: () => {} });
-    check("open: malicious URL stays a single argv element",
-      spawned.bin === "vsc-open" && spawned.args.length === 1 && spawned.args[0] === evil);
-    check("open: malicious URL never spawns a shell", spawned.opts.shell !== true);
-  }
-  // buildOpenArgv: quote-aware tokenization + injection-proof substitution.
-  {
-    check("buildOpenArgv: substitutes {url} as its own element",
-      JSON.stringify(buildOpenArgv("code --open-url {url}", "http://h/p?a=1;b")) ===
-      JSON.stringify(["code", "--open-url", "http://h/p?a=1;b"]));
-    check("buildOpenArgv: respects quoted args with spaces",
-      JSON.stringify(buildOpenArgv('open -a "Google Chrome" {url}', "http://h")) ===
-      JSON.stringify(["open", "-a", "Google Chrome", "http://h"]));
-    check("buildOpenArgv: appends URL when no placeholder",
-      JSON.stringify(buildOpenArgv("myopen", "http://h")) === JSON.stringify(["myopen", "http://h"]));
-    check("buildOpenArgv: injection chars in URL stay one element",
-      JSON.stringify(buildOpenArgv("x {url}", "a b; rm -rf ~ && echo pwned")) ===
-      JSON.stringify(["x", "a b; rm -rf ~ && echo pwned"]));
+    check("open: uses the OS default browser (openFn)", res.via === "open" && openedUrl === "http://localhost:3847/prs");
   }
 } catch (e) {
   // A thrown block used to be masked by the bare try/finally + process.exit(0),
