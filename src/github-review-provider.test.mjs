@@ -1,8 +1,6 @@
 import {
   createGitHubReviewProvider,
   mapPullRequest,
-  parseViewedMarker,
-  viewedMarker,
 } from "./github-review-provider.js";
 
 let pass = 0, fail = 0;
@@ -126,15 +124,6 @@ const lastCall = (client, name) =>
     state: "closed",
   })).status === 2);
 }
-{
-  const marker = viewedMarker({ 101: 5 });
-  eq("viewed marker round-trip", parseViewedMarker(marker), { 101: 5 });
-  eq("non-marker -> null", parseViewedMarker("hello"), null);
-  let threw = false;
-  try { parseViewedMarker("<!-- tippani:viewed:{bad} -->"); }
-  catch { threw = true; }
-  ok("corrupt viewed marker throws", threw);
-}
 
 // --- construction / identity / PR -----------------------------------------
 {
@@ -156,7 +145,7 @@ const lastCall = (client, name) =>
     owner: "o", repo: "r",
   });
   eq("getCurrentUser neutral identity", await provider.getCurrentUser(), {
-    id: "U", displayName: "My Name", uniqueName: "me",
+    id: "me", displayName: "My Name", uniqueName: "me",
   });
   ok("getPullRequest maps raw PR",
     (await provider.getPullRequest(7)).pullRequestId === 7);
@@ -188,7 +177,9 @@ const lastCall = (client, name) =>
     targetRefName: "refs/heads/main",
   }, 10);
   eq("list PR filters author+reviewer", result.map((pr) => pr.pullRequestId), [7]);
-  eq("list PR request state/base", lastCall(client, "paginate").args, [
+  const pullsCall = callsOf(client, "paginate").find((call) =>
+    call.args[0] === "/repos/o/r/pulls");
+  eq("list PR request state/base", pullsCall.args, [
     "/repos/o/r/pulls",
     {
       query: {
@@ -201,6 +192,24 @@ const lastCall = (client, name) =>
     },
   ]);
 }
+{
+  const reviewed = rawPr({
+    requested_reviewers: [],
+  });
+  const client = fakeClient({
+    paginate: async (path) => path.endsWith("/pulls")
+      ? [reviewed]
+      : [{ user: { login: "reviewer" }, state: "CHANGES_REQUESTED" }],
+  });
+  const result = await createGitHubReviewProvider(client, {
+    owner: "o", repo: "r",
+  }).listPullRequests({ status: 1, reviewerId: "reviewer" });
+  eq("reviewer filter includes submitted reviewers, not only pending requests",
+    result.map((pr) => pr.pullRequestId), [7]);
+  ok("submitted-review endpoint consulted",
+    callsOf(client, "paginate").some((call) =>
+      call.args[0].endsWith("/pulls/7/reviews")));
+}
 
 // --- content + changed files -----------------------------------------------
 {
@@ -208,6 +217,8 @@ const lastCall = (client, name) =>
     request: async () => "# raw markdown",
     paginate: async () => [
       { filename: "docs/a.md", status: "modified" },
+      { filename: "docs/new.md", status: "added" },
+      { filename: "docs/moved.md", status: "renamed" },
       { filename: "image.png", status: "added" },
       { filename: "gone.md", status: "removed" },
     ],
@@ -229,7 +240,11 @@ const lastCall = (client, name) =>
     },
   ]);
   eq("changed files classification", await provider.listChangedFiles(7), {
-    mdFiles: [{ path: "/docs/a.md", changeType: "modified" }],
+    mdFiles: [
+      { path: "/docs/a.md", changeType: 2 },
+      { path: "/docs/new.md", changeType: 1 },
+      { path: "/docs/moved.md", changeType: 8 },
+    ],
     otherFiles: [{ path: "/image.png", ext: ".png" }],
   });
 }
@@ -312,6 +327,49 @@ const lastCall = (client, name) =>
       "/pulls/7/comments/101/replies"));
 }
 {
+  let readCount = 0;
+  const postedShas = [];
+  const client = fakeClient({
+    request: async (method, path, options) => {
+      if (method === "GET" && path === "/repos/o/r/pulls/7") {
+        readCount++;
+        return rawPr({
+          head: {
+            ...rawPr().head,
+            sha: readCount === 1 ? "sha-A" : "sha-B",
+          },
+        });
+      }
+      if (method === "POST" && path.endsWith("/comments")) {
+        postedShas.push(options.body.commit_id);
+        return { id: 101 };
+      }
+      return {};
+    },
+    graphql: async () => ({
+      repository: {
+        pullRequest: {
+          reviewThreads: {
+            nodes: [threadNode()],
+            pageInfo: { hasNextPage: false, endCursor: null },
+          },
+        },
+      },
+    }),
+  });
+  const provider = createGitHubReviewProvider(client, {
+    owner: "o", repo: "r",
+  });
+  await provider.createComment(7, {
+    filePath: "/docs/spec.md", line: 1, body: "first",
+  });
+  await provider.createComment(7, {
+    filePath: "/docs/spec.md", line: 1, body: "second",
+  });
+  eq("createComment refreshes PR head before every anchored write",
+    postedShas, ["sha-A", "sha-B"]);
+}
+{
   const client = fakeClient({
     graphql: async () => ({
       repository: {
@@ -357,60 +415,59 @@ const lastCall = (client, name) =>
 
 // --- viewed state -----------------------------------------------------------
 {
-  let comments = [];
-  const client = fakeClient({
-    paginate: async () => comments,
-    request: async (method, path, options) => {
-      if (method === "POST") {
-        const comment = { id: 50, body: options.body.body };
-        comments = [comment];
-        return comment;
-      }
-      if (method === "PATCH") {
-        comments[0].body = options.body.body;
-        return comments[0];
-      }
-      return {};
+  const state = new Map();
+  const writes = [];
+  const client = fakeClient();
+  const provider = createGitHubReviewProvider(client, {
+    owner: "o", repo: "r",
+    viewedStore: {
+      read: async (key) => state.get(key) || {},
+      write: async (key, map) => {
+        writes.push([key, map]);
+        state.set(key, { ...map });
+      },
     },
   });
-  const provider = createGitHubReviewProvider(client, {
-    owner: "o", repo: "r",
-  });
-  eq("no marker -> empty viewed", await provider.readViewed(7), {});
+  eq("no local state -> empty viewed", await provider.readViewed(7), {});
   await provider.setViewed(7, { 101: 5 });
-  eq("created marker round trip", await provider.readViewed(7), { 101: 5 });
+  eq("private local viewed round trip", await provider.readViewed(7), { 101: 5 });
   await provider.setViewed(7, { 101: 6 });
-  eq("updated existing marker", await provider.readViewed(7), { 101: 6 });
-  ok("second write PATCHed rather than creating duplicate",
-    callsOf(client, "request").some((call) => call.args[0] === "PATCH"));
+  eq("updated local state", await provider.readViewed(7), { 101: 6 });
+  eq("store key is owner/repo#PR", writes[0][0], "o/r#7");
+  ok("viewed state makes no GitHub API call", client.calls.length === 0);
 }
 {
-  const client = fakeClient({
-    paginate: async () => [{
-      id: 1,
-      body: "<!-- tippani:viewed:{bad} -->",
-    }],
-  });
-  const provider = createGitHubReviewProvider(client, {
+  const provider = createGitHubReviewProvider(fakeClient(), {
     owner: "o", repo: "r",
+    viewedStore: {
+      read: async () => "corrupt",
+      write: async () => {},
+    },
   });
-  await rejects("strict viewed read propagates corrupt marker",
+  await rejects("strict viewed read propagates corrupt local state",
     () => provider.readViewed(7));
   eq("lenient viewed read -> {}", await provider.getViewed(7), {});
 }
 {
-  const client = fakeClient({
-    paginate: async () => {
-      const error = new Error("forbidden");
-      error.status = 403;
-      throw error;
-    },
-  });
-  eq("viewed auth failure maps sign-in error",
+  const client = fakeClient();
+  eq("viewed store failure maps local-state error",
     await createGitHubReviewProvider(client, {
       owner: "o", repo: "r",
+      viewedStore: {
+        read: async () => { throw new Error("disk"); },
+        write: async () => {},
+      },
     }).loadViewedState(7, false),
-    { map: {}, error: "GitHub sign-in expired." });
+    { map: {}, error: "Couldn't load local GitHub viewed state." });
+  eq("offline viewed state skips store",
+    await createGitHubReviewProvider(client, {
+      owner: "o", repo: "r",
+      viewedStore: {
+        read: async () => { throw new Error("must not read"); },
+        write: async () => {},
+      },
+    }).loadViewedState(7, true),
+    { map: {}, error: null });
 }
 
 // --- file review history ----------------------------------------------------
@@ -458,7 +515,11 @@ const lastCall = (client, name) =>
     client, "paginate",
   )[0].args, [
     "/repos/o/r/commits",
-    { query: { path: "docs/spec.md", sha: "main" } },
+    {
+      query: { path: "docs/spec.md", sha: "main" },
+      perPage: 100,
+      maxPages: 1,
+    },
   ]);
 }
 
@@ -511,6 +572,39 @@ const lastCall = (client, name) =>
     }),
     /already been updated/,
   );
+}
+{
+  let tipReads = 0;
+  let putCalled = false;
+  const client = fakeClient({
+    request: async (method, path) => {
+      if (path.includes("/git/ref/")) {
+        tipReads++;
+        return { object: { sha: tipReads === 1 ? "base" : "moved" } };
+      }
+      if (method === "GET" && path.includes("/contents/")) {
+        return { sha: "new-blob-sha" };
+      }
+      if (method === "PUT") {
+        putCalled = true;
+        return { commit: { sha: "should-not-happen" } };
+      }
+      return {};
+    },
+  });
+  await rejects(
+    "movement between first tip check and metadata read -> conflict",
+    () => createGitHubReviewProvider(client, {
+      owner: "o", repo: "r",
+    }).commitFile("spec/x", {
+      filePath: "/docs/a.md",
+      content: "x",
+      message: "m",
+      expectedOldObjectId: "base",
+    }),
+    /already been updated/,
+  );
+  ok("raced commit never reaches PUT", !putCalled);
 }
 
 console.log(`\ngithub-review-provider.test: ${pass} passed, ${fail} failed`);

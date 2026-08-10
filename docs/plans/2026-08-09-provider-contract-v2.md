@@ -1,7 +1,7 @@
 # GitHub provider for tippani — design v2 (capability-split contract)
 
 **Date:** 2026-08-09
-**Supersedes:** [2026-07-13-github-provider-design.md](2026-07-13-github-provider-design.md) — the original `ReviewProvider` contract is retained as one of six capability interfaces below, unchanged in shape. Nothing in that doc's GitHub-mapping research (threads, viewed-state, commitFile) is invalidated; it is incorporated by reference in the "Review & comment" section.
+**Supersedes:** [2026-07-13-github-provider-design.md](2026-07-13-github-provider-design.md) — the original `ReviewProvider` contract is retained as one of six capability interfaces below. Its thread mapping remains valid; implementation review rejected the proposed viewed-state marker comment as publicly visible/noisy, and strengthened the Contents API commit race guard (see Phase 1 notes).
 **Status:** Phase 0 implemented across capability slices (PRs #76 onward); GitHub implementation not started.
 **Why superseded:** The July design audited 55 call sites across two files and proposed one interface. Since then, "clickstop-2" (PR #71, merged) added end-to-end remote spec authoring — stage a branch, add folders and files, open a PR, link a work item, publish everything in one push — plus Discovery's work-item search and full-text spec search, and #68's image/Git-LFS blob proxy. Re-auditing the current `main` (tag `v1.7.0`) finds **32 distinct Azure DevOps backend methods across 49 call sites in two files** (`src/index.js`, `src/ado-read.js`) — a larger and functionally broader surface than "review + single-file commit." A twelve-method interface scoped to review cannot express any of it. Per the original doc's own framing: *"the interface is the whole bet."* This revises the bet before a GitHub port is built against a contract already known to be too small.
 
@@ -26,7 +26,7 @@ Counted directly with a broad baseline scan: `grep -oE '(gitApi|coreApi|witApi|s
 
 ## Architecture — six capability interfaces, not one
 
-Thor's review of this codebase's provider design (2026-08-09) argued a single `ReviewProvider` covering all 32 methods becomes exactly the kind of leaky, over-wide interface the original doc warned against — a `GitHubProvider` would have to either fake support for capabilities GitHub can't cleanly provide (there is no GitHub concept matching ADO's WIQL work-item query, for instance) or the interface silently grows unrelated methods onto an object nominally about "reviewing a PR." Splitting by capability lets each interface stay small, lets a provider legitimately decline a capability it can't support (rather than throwing inside a method that claims to be universal), and keeps the original `ReviewProvider`'s already-researched GitHub mapping (threads via GraphQL `reviewThreads`, viewed-state via a marker comment, `commitFile` via the Contents API `sha` token) untouched.
+Thor's review of this codebase's provider design (2026-08-09) argued a single `ReviewProvider` covering all 32 methods becomes exactly the kind of leaky, over-wide interface the original doc warned against — a `GitHubProvider` would have to either fake support for capabilities GitHub can't cleanly provide (there is no GitHub concept matching ADO's WIQL work-item query, for instance) or the interface silently grows unrelated methods onto an object nominally about "reviewing a PR." Splitting by capability lets each interface stay small and lets a provider legitimately decline a capability it can't support rather than throwing inside a method that claims universal support.
 
 ```
 // Unchanged from the July design — this is the whole GitHub-mapping research
@@ -158,7 +158,7 @@ Six small provider factories implement the six interfaces. They share the same u
 
 | Interface | GitHub feasibility | Notes |
 |---|---|---|
-| `ReviewProvider` | **Full.** Already researched in the July doc — GraphQL `reviewThreads`, REST comment/reply, GraphQL `resolveReviewThread`, Contents API `sha` for `commitFile`, marker-comment for viewed-state. `submitReview` maps to `POST /pulls/{n}/reviews` with `event: APPROVE`/`REQUEST_CHANGES`; `probePushPermission` maps to the repository permission (`permissions.push`) exposed by GitHub's repository API. |
+| `ReviewProvider` | **Full, with one capability difference.** GraphQL `reviewThreads`, REST comment/reply, GraphQL resolve/unresolve, Contents API commit, formal review submit, and repository push permission all map cleanly. GitHub has no private notification-free PR property equivalent to ADO's viewed marker, so viewed state is local/private rather than shared through a public issue comment. |
 | `RepoContentProvider` | **Full.** `listProjects` maps to organizations/repositories appropriate to the GitHub account scope; `POST /git/refs` creates a branch; `GET /git/ref/heads/{branch}` reads a tip; Contents API or Git Data API tree/commit endpoints handle multi-file push. A single-file `PUT /contents` per file is NOT atomic across files the way ADO's `createPush` change-array is — a GitHub implementation must use the lower-level Git Data API (tree + one commit) to preserve clickstop-2's all-or-nothing guarantee. `listItems` maps to `GET /contents/{path}`. |
 | `AuthoringProvider` | **Full.** Create via `POST /pulls`; publish a draft through GraphQL `markPullRequestReadyForReview`. Work-item linking is not an authoring capability — it belongs to the optional `WorkItemProvider` below. |
 | `SearchProvider` | **`searchSpecs`: full** via the GitHub code search API (`GET /search/code`), same `ext:md` filter pattern. **`searchPullRequests`: full** via `GET /search/issues?q=type:pr`. |
@@ -172,7 +172,7 @@ GitHub capability behind an injected `fetch` client (Node 18+ already supplies
 fetch; no Octokit dependency).
 
 - REST: PR get/list/files, raw contents, review-comment create/reply, formal
-  review submit, repository permission, issue-comment viewed marker, commits /
+  review submit, repository permission, local viewed state, commits /
   associated PRs, refs, and Contents API commit.
 - GraphQL: paginated `reviewThreads`, `resolveReviewThread`, and
   `unresolveReviewThread`.
@@ -182,16 +182,20 @@ fetch; no Octokit dependency).
   the stable numeric handle and keeps the thread node id private for resolve.
   A review comment id that cannot be represented as a safe JavaScript integer
   fails loudly rather than silently losing precision.
-- Viewed state: one invisible issue comment
-  (`<!-- tippani:viewed:{...} -->`), updated in place. Strict reads throw on a
-  corrupt marker; display-only reads degrade to `{}`.
-- Optimistic concurrency: Tippani's expected branch tip is checked first
-  (409 on movement), then GitHub's file blob SHA is fetched for the Contents
-  API update. This preserves the existing branch-level editor conflict guard
-  while satisfying GitHub's file-level `sha` requirement.
+- Viewed state: private local storage keyed by `owner/repo#PR`, injected into
+  the provider. A public issue-comment marker was rejected in review because an
+  HTML-only comment is visually empty but still creates a timeline entry and
+  notifies PR subscribers. Strict reads throw on corrupt local state;
+  display-only reads degrade to `{}`.
+- Optimistic concurrency: Tippani's expected branch tip is checked before and
+  after fetching GitHub's file blob SHA (409 on movement); the Contents API
+  then enforces the blob SHA. A concurrent file edit after the second tip check
+  is rejected by GitHub's SHA precondition; an unrelated commit is preserved.
 - GitHub inline review comments can only target lines GitHub considers part of
   the PR diff. ADO permits a wider line-anchor surface; GitHub API rejection is
   surfaced rather than silently falling back to an unanchored issue comment.
+- Reviewer queues union pending `requested_reviewers` with authors of submitted
+  reviews, so a PR does not disappear after the reviewer requests changes.
 
 This implementation is not wired into CLI/provider selection yet; that happens
 after Review + RepoContent + Blob are all available, so the first user-facing

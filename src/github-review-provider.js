@@ -11,8 +11,6 @@ import {
   githubPath,
 } from "./github-client.js";
 
-const VIEWED_MARKER = "tippani:viewed:";
-
 function branchName(ref) {
   return String(ref || "").replace(/^refs\/heads\//, "");
 }
@@ -31,7 +29,9 @@ function mapPullRequest(pr, { owner, repo } = {}) {
     title: pr.title || "",
     description: pr.body || "",
     createdBy: {
-      id: pr.user?.node_id || pr.user?.id || null,
+      // Tippani feeds this id back into provider list filters. GitHub list
+      // responses expose creator/reviewer identity as login, not node_id.
+      id: pr.user?.login || null,
       displayName: pr.user?.login || "",
       uniqueName: pr.user?.login || null,
     },
@@ -55,26 +55,15 @@ function mapPullRequest(pr, { owner, repo } = {}) {
   };
 }
 
-function parseViewedMarker(body) {
-  const text = String(body || "");
-  const start = text.indexOf(`<!-- ${VIEWED_MARKER}`);
-  if (start < 0) return null;
-  const jsonStart = start + `<!-- ${VIEWED_MARKER}`.length;
-  const end = text.indexOf("-->", jsonStart);
-  if (end < 0) throw new Error("Corrupt tippani viewed-state marker");
-  const value = JSON.parse(text.slice(jsonStart, end).trim());
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? value
-    : {};
-}
-
-function viewedMarker(map) {
-  return `<!-- ${VIEWED_MARKER}${JSON.stringify(map)} -->`;
-}
-
 function normalizePath(path) {
   const value = String(path || "").replace(/\\/g, "/");
   return (value.startsWith("/") ? value : `/${value}`).toLowerCase();
+}
+
+function mapChangeType(status) {
+  if (status === "added" || status === "copied") return 1;
+  if (status === "renamed") return 8;
+  return 2;
 }
 
 const THREADS_QUERY = `
@@ -127,6 +116,7 @@ const UNRESOLVE_THREAD_MUTATION = `
 export function createGitHubReviewProvider(client, {
   owner,
   repo,
+  viewedStore,
 } = {}) {
   if (!client) throw new Error("GitHub review provider requires a client");
   if (!owner || !repo) {
@@ -135,15 +125,16 @@ export function createGitHubReviewProvider(client, {
 
   const threadNodeByHandle = new Map();
   const rootCommentByHandle = new Map();
-  const prHeadSha = new Map();
+  const localViewed = new Map();
+  const viewed = viewedStore || {
+    read: async (key) => localViewed.get(key) || {},
+    write: async (key, map) => { localViewed.set(key, { ...map }); },
+  };
 
   const repoPath = (...segments) =>
     githubPath("repos", owner, repo, ...segments);
 
   function rememberPr(raw) {
-    if (raw?.number && raw?.head?.sha) {
-      prHeadSha.set(Number(raw.number), raw.head.sha);
-    }
     return mapPullRequest(raw, { owner, repo });
   }
 
@@ -158,7 +149,7 @@ export function createGitHubReviewProvider(client, {
   async function getCurrentUser() {
     const user = await client.request("GET", "/user");
     return {
-      id: user.node_id || user.id || null,
+      id: user.login || null,
       displayName: user.name || user.login || "",
       uniqueName: user.login || null,
     };
@@ -187,26 +178,33 @@ export function createGitHubReviewProvider(client, {
       },
       maxPages: Math.max(1, Math.ceil(top / 100)),
     });
-    return rows
-      .filter((pr) => {
+    const basic = rows.filter((pr) => {
         if (criteria.creatorId && pr.user?.login !== criteria.creatorId) {
           return false;
-        }
-        if (criteria.reviewerId) {
-          const requested = pr.requested_reviewers || [];
-          if (!requested.some((reviewer) =>
-            reviewer.login === criteria.reviewerId)) {
-            return false;
-          }
         }
         if (criteria.status === 3 && !pr.merged_at) return false;
         if (criteria.status === 2 && (pr.merged_at || pr.state !== "closed")) {
           return false;
         }
         return true;
-      })
-      .slice(0, top)
-      .map(rememberPr);
+      });
+    let filtered = basic;
+    if (criteria.reviewerId) {
+      const reviewer = criteria.reviewerId;
+      const matches = await Promise.all(basic.map(async (pr) => {
+        if ((pr.requested_reviewers || []).some((item) =>
+          item.login === reviewer)) {
+          return true;
+        }
+        const reviews = await client.paginate(
+          repoPath("pulls", pr.number, "reviews"),
+          { maxPages: 10 },
+        );
+        return reviews.some((review) => review.user?.login === reviewer);
+      }));
+      filtered = basic.filter((_pr, index) => matches[index]);
+    }
+    return filtered.slice(0, top).map(rememberPr);
   }
 
   async function getFileContent(filePath, ref) {
@@ -229,7 +227,7 @@ export function createGitHubReviewProvider(client, {
         .filter((file) => file.filename.toLowerCase().endsWith(".md"))
         .map((file) => ({
           path: `/${file.filename}`,
-          changeType: file.status,
+          changeType: mapChangeType(file.status),
         })),
       otherFiles: kept
         .filter((file) => !file.filename.toLowerCase().endsWith(".md"))
@@ -293,9 +291,9 @@ export function createGitHubReviewProvider(client, {
   }
 
   async function ensureHeadSha(number) {
-    if (prHeadSha.has(Number(number))) {
-      return prHeadSha.get(Number(number));
-    }
+    // The author may push while the portal is open. Fetch immediately before
+    // every anchored comment; a process-lifetime cache would post against the
+    // old commit and produce outdated comments or 422s.
     const pr = await getRawPullRequest(number);
     return pr.head.sha;
   }
@@ -375,22 +373,15 @@ export function createGitHubReviewProvider(client, {
     return repository?.permissions?.push ?? null;
   }
 
-  async function viewedComment(number) {
-    const comments = await client.paginate(
-      repoPath("issues", number, "comments"),
-    );
-    for (const comment of comments) {
-      if (String(comment.body || "").includes(`<!-- ${VIEWED_MARKER}`)) {
-        return comment;
-      }
-    }
-    return null;
-  }
+  const viewedKey = (number) => `${owner}/${repo}#${Number(number)}`;
 
   async function readViewed(number) {
-    const comment = await viewedComment(number);
-    if (!comment) return {};
-    return parseViewedMarker(comment.body) ?? {};
+    const map = await viewed.read(viewedKey(number));
+    if (map == null) return {};
+    if (!map || typeof map !== "object" || Array.isArray(map)) {
+      throw new Error("Corrupt local GitHub viewed state");
+    }
+    return { ...map };
   }
 
   async function getViewed(number) {
@@ -398,29 +389,18 @@ export function createGitHubReviewProvider(client, {
   }
 
   async function setViewed(number, map) {
-    const existing = await viewedComment(number);
-    if (existing) {
-      return client.request(
-        "PATCH", githubPath("repos", owner, repo, "issues", "comments",
-          existing.id),
-        { body: { body: viewedMarker(map) } },
-      );
-    }
-    return client.request(
-      "POST", repoPath("issues", number, "comments"),
-      { body: { body: viewedMarker(map) } },
-    );
+    await viewed.write(viewedKey(number), { ...map });
+    return map;
   }
 
   async function loadViewedState(number, isOffline) {
     if (isOffline) return { map: {}, error: null };
     try {
       return { map: await readViewed(number), error: null };
-    } catch (error) {
-      const auth = error?.status === 401 || error?.status === 403;
+    } catch {
       return {
         map: {},
-        error: auth ? "GitHub sign-in expired." : "Couldn't reach GitHub.",
+        error: "Couldn't load local GitHub viewed state.",
       };
     }
   }
@@ -436,6 +416,8 @@ export function createGitHubReviewProvider(client, {
           path: String(filePath).replace(/^\/+/, ""),
           sha: branchName(branch),
         },
+        perPage: 100,
+        maxPages: 1,
       });
       const byNumber = new Map();
       for (const commit of commits.slice(0, 100)) {
@@ -506,6 +488,19 @@ export function createGitHubReviewProvider(client, {
     if (!metadata?.sha || Array.isArray(metadata)) {
       throw new Error(`GitHub file not found: ${filePath}`);
     }
+    // Close the race between the first tip check and metadata read. If the
+    // branch moved during that interval, reject before constructing the PUT.
+    // A file edit after this second check is still rejected by GitHub's blob
+    // sha precondition; an unrelated commit is safe to preserve.
+    if (expectedOldObjectId) {
+      const afterMetadata = await getBranchTip(branch);
+      if (afterMetadata !== expectedOldObjectId) {
+        throw new GitHubApiError(
+          "Branch has already been updated",
+          { status: 409, method: "PUT", url: repoPath("contents") },
+        );
+      }
+    }
     const result = await client.request(
       "PUT", repoPath("contents", ...path.split("/")),
       {
@@ -543,4 +538,4 @@ export function createGitHubReviewProvider(client, {
   };
 }
 
-export { mapPullRequest, parseViewedMarker, viewedMarker };
+export { mapPullRequest };
