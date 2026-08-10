@@ -1,0 +1,144 @@
+import { createAdoSearchProvider } from "./ado-search-provider.js";
+
+let pass = 0, fail = 0;
+function ok(name, cond) { if (cond) pass++; else { fail++; console.error("  FAIL: " + name); } }
+function eq(name, a, b) { ok(name + ` (got ${JSON.stringify(a)})`, JSON.stringify(a) === JSON.stringify(b)); }
+
+function fakeConnection() {
+  const calls = [];
+  const rest = {
+    get: async (...args) => {
+      calls.push({ name: "get", args });
+      return {
+        result: {
+          value: [{
+            pullRequestId: 1,
+            title: "PR",
+            createdBy: { displayName: "Author" },
+            status: "completed",
+            sourceRefName: "refs/heads/spec/x",
+            targetRefName: "refs/heads/main",
+            repository: {
+              name: "Repo",
+              project: { name: "Project" },
+            },
+          }],
+        },
+      };
+    },
+    create: async (...args) => {
+      calls.push({ name: "create", args });
+      return {
+        result: {
+          results: [
+            {
+              path: "/a.md",
+              repository: {
+                id: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+                name: "Repo",
+              },
+              project: { name: "Power BI" },
+              versions: [{ branchName: "refs/heads/trunk" }],
+            },
+            // duplicate: filtered by repoId|path
+            {
+              path: "/a.md",
+              repository: {
+                id: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+                name: "Repo",
+              },
+            },
+            // non-markdown + TFVC-like missing GUID: both filtered
+            { path: "/a.png", repository: { id: "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb" } },
+            { path: "/b.md", repository: { name: "TFVC" } },
+          ],
+        },
+      };
+    },
+  };
+  return { conn: { rest }, calls };
+}
+const last = (calls, name) => [...calls].reverse().find((c) => c.name === name);
+
+{
+  let threw = false; try { createAdoSearchProvider({}); } catch { threw = true; }
+  ok("constructor requires REST connection", threw);
+}
+{
+  const f = fakeConnection();
+  const p = createAdoSearchProvider(f.conn, { org: "https://dev.azure.com/acme/" });
+  eq("PR search returns neutral summary", await p.searchPullRequests({
+    status: 3,
+    creatorId: "creator",
+    reviewerId: "reviewer",
+    targetRefName: "refs/heads/main",
+  }, 25), [{
+    id: 1,
+    title: "PR",
+    author: "Author",
+    status: "completed",
+    isDraft: false,
+    source: "spec/x",
+    target: "main",
+    repo: "Repo",
+    project: "Project",
+    created: null,
+    webUrl: null,
+  }]);
+  const url = new URL(last(f.calls, "get").args[0]);
+  eq("PR search host/path", url.origin + url.pathname,
+    "https://dev.azure.com/acme/_apis/git/pullrequests");
+  eq("PR search params", Object.fromEntries(url.searchParams), {
+    "api-version": "7.1",
+    "$top": "25",
+    "searchCriteria.status": "completed",
+    "searchCriteria.creatorId": "creator",
+    "searchCriteria.reviewerId": "reviewer",
+    "searchCriteria.targetRefName": "refs/heads/main",
+  });
+}
+{
+  const f = fakeConnection();
+  const p = createAdoSearchProvider(f.conn, { org: "https://dev.azure.com/acme" });
+  ok("unknown PR status still returns projected PR",
+    (await p.searchPullRequests({ status: 99 }))[0].id === 1);
+  const url = new URL(last(f.calls, "get").args[0]);
+  eq("unknown status param", url.searchParams.get("searchCriteria.status"), "active");
+}
+{
+  const f = fakeConnection();
+  const p = createAdoSearchProvider(f.conn, { org: "https://dev.azure.com/acme" });
+  eq("code search returns neutral filtered/deduped hits", await p.searchSpecs(
+    "Power BI", "query text", 100,
+  ), [{
+    path: "/a.md",
+    repoId: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+    repoName: "Repo",
+    project: "Power BI",
+    branch: "trunk",
+  }]);
+  const [url, body] = last(f.calls, "create").args;
+  eq("code search sibling host URL", url,
+    "https://almsearch.dev.azure.com/acme/_apis/search/codesearchresults?api-version=7.1");
+  eq("code search body", body, {
+    searchText: "query text ext:md",
+    "$skip": 0,
+    "$top": 100,
+    filters: { Project: ["Power BI"] },
+  });
+}
+
+{
+  const rest = {
+    get: async () => ({ result: null }),
+    create: async () => ({ result: null }),
+  };
+  const p = createAdoSearchProvider(
+    { rest }, { org: "https://dev.azure.com/acme" },
+  );
+  eq("missing PR envelope -> []", await p.searchPullRequests(), []);
+  eq("missing code-search envelope -> []", await p.searchSpecs("P", "q", 5), []);
+}
+
+console.log(`\nado-search-provider.test: ${pass} passed, ${fail} failed`);
+process.exit(fail === 0 ? 0 : 1);

@@ -77,6 +77,7 @@ import { createAdoReviewProvider } from "./ado-review-provider.js";
 import { createAdoRepoContentProvider } from "./ado-repo-content-provider.js";
 import { createAdoAuthoringProvider } from "./ado-authoring-provider.js";
 import { createAdoWorkItemProvider } from "./ado-work-item-provider.js";
+import { createAdoSearchProvider } from "./ado-search-provider.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -331,6 +332,7 @@ const _adoReviewProviders = new WeakMap();
 const _adoRepoContentProviders = new WeakMap();
 const _adoAuthoringProviders = new WeakMap();
 const _adoWorkItemProviders = new WeakMap();
+const _adoSearchProviders = new WeakMap();
 function adoReview(conn) {
   if (!conn) throw new Error("ADO review provider requires a connection");
   let provider = _adoReviewProviders.get(conn);
@@ -370,6 +372,15 @@ function adoWorkItems(conn) {
   }
   return provider;
 }
+function adoSearch(conn) {
+  if (!conn) throw new Error("ADO search provider requires a connection");
+  let provider = _adoSearchProviders.get(conn);
+  if (!provider) {
+    provider = createAdoSearchProvider(conn, { org: ADO_ORG });
+    _adoSearchProviders.set(conn, provider);
+  }
+  return provider;
+}
 
 async function getPullRequest(conn, prId) {
   return adoReview(conn).getPullRequest(prId);
@@ -387,19 +398,8 @@ async function listPullRequests(conn, criteria, top = 50) {
 // method, so this calls the org-level REST endpoint directly (same auth handler
 // as every other call, via conn.rest). Best-effort: returns [] on failure.
 async function listOrgPullRequests(conn, criteria, top = 50) {
-  const base = ADO_ORG.replace(/\/+$/, "");
-  const statusName = { 1: "active", 2: "abandoned", 3: "completed", 4: "all" }[criteria.status] || "active";
-  const params = new URLSearchParams();
-  params.set("api-version", "7.1");
-  params.set("$top", String(top));
-  params.set("searchCriteria.status", statusName);
-  if (criteria.creatorId) params.set("searchCriteria.creatorId", criteria.creatorId);
-  if (criteria.reviewerId) params.set("searchCriteria.reviewerId", criteria.reviewerId);
-  if (criteria.targetRefName) params.set("searchCriteria.targetRefName", criteria.targetRefName);
-  const url = `${base}/_apis/git/pullrequests?${params.toString()}`;
   try {
-    const resp = await conn.rest.get(url);
-    return (resp && resp.result && resp.result.value) || [];
+    return await adoSearch(conn).searchPullRequests(criteria, top);
   } catch (e) {
     console.error("listOrgPullRequests failed:", e.message);
     return [];
@@ -7814,7 +7814,7 @@ async function main() {
         listOrgPullRequests(_conn, authoredCrit, top),
         currentUserId ? listOrgPullRequests(_conn, reviewingCrit, top) : Promise.resolve([]),
       ]);
-      const prs = mergeRolePrs(authoredRaw.map(summarizePr), reviewingRaw.map(summarizePr));
+      const prs = mergeRolePrs(authoredRaw, reviewingRaw);
       return { prs, role: "queue", project: ADO_PROJECT };
     }
 
@@ -7864,17 +7864,12 @@ async function main() {
     const q = (query == null ? "" : String(query)).trim();
     const proj = (project && String(project).trim()) || ADO_PROJECT;
     if (!q) return { specs: [], project: proj, count: 0 };
-    // almssearch is a sibling host: dev.azure.com/{org} -> almsearch.dev.azure.com/{org}
-    const searchBase = ADO_ORG.replace("://dev.azure.com", "://almsearch.dev.azure.com");
-    const url = `${searchBase}/_apis/search/codesearchresults?api-version=7.1`;
     // Page size: the MCP path (no enrichment) takes the full Code Search page and
     // limits itself; the browser UI enriches each hit, so it keeps the page tighter.
     const pageTop = Number.isFinite(top) && top > 0 ? Math.min(top, 1000) : (enrich ? 100 : 1000);
-    const body = { searchText: `${q} ext:md`, "$skip": 0, "$top": pageTop, filters: { Project: [proj] } };
     let result;
     try {
-      const resp = await _conn.rest.create(url, body);
-      result = resp && resp.result;
+      result = await adoSearch(_conn).searchSpecs(proj, q, pageTop);
     } catch (e) {
       // search_specs relies on ADO Code Search (almsearch.dev.azure.com), a
       // per-org extension. A brand-new org without it provisioned fails here
@@ -7889,34 +7884,14 @@ async function main() {
         error: specSearchUnavailableMessage(detail, ADO_ORG),
       };
     }
-    const hits = (result && result.results) || [];
-    const seen = new Set();
-    const specs = [];
-    for (const h of hits) {
-      const path = h.path || "";
-      if (!path.toLowerCase().endsWith(".md")) continue;
-      const repoId = h.repository && h.repository.id;
-      const repoName = (h.repository && h.repository.name) || "";
-      // Only Git repos have a GUID id + can be opened read-only via getItemContent.
-      if (!repoId || !/^[0-9a-f-]{36}$/i.test(repoId)) continue;
-      const key = repoId + "|" + path;
-      if (seen.has(key)) continue;
-      seen.add(key);
-      const hitProject = (h.project && h.project.name) || proj;
-      // The canonical branch is the one Code Search indexed (the repo's default
-      // mainline) — not always literally "main". Carry it so the read-only view
-      // fetches the right ref without ever showing a branch selector.
-      const branch = ((h.versions && h.versions[0] && h.versions[0].branchName) || "main").replace(/^refs\/heads\//, "");
-      specs.push({
-        path,
-        name: path.split("/").pop(),
-        repo: repoName,
-        repoId,
-        project: hitProject,
-        branch,
-        url: buildSpecWebUrl(ADO_ORG, hitProject, repoName, path),
-      });
-    }
+    const specs = (result || []).map((hit) => ({
+      ...hit,
+      name: hit.path.split("/").pop(),
+      repo: hit.repoName,
+      url: buildSpecWebUrl(
+        ADO_ORG, hit.project, hit.repoName, hit.path,
+      ),
+    }));
     // The MCP path takes the results raw — no cap and no implicit per-file commit
     // lookups. The agent limits result size itself and asks for authorship only if
     // it wants it, so Tippani must not interfere. Only the browser UI enriches each

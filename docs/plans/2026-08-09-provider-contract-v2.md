@@ -82,13 +82,13 @@ interface AuthoringProvider {
 
 // New. Two structurally different searches that happen to share a UI tab.
 interface SearchProvider {
-  searchSpecs(repo, query) -> [{path, snippet}]     // ADO: Code Search REST API
-                                                     // (almsearch.dev.azure.com)
-  searchPullRequests(criteria) -> [PR]              // ADO: org-wide PR list via
-                                                     // conn.rest.get — this is
-                                                     // the ONE existing capability
-                                                     // with no typed SDK method,
-                                                     // already a raw REST call
+  searchSpecs(project, query, top) -> [{path, repoId, repoName, project, branch}]
+                                                     // ADO Code Search REST API
+                                                     // (almsearch.dev.azure.com);
+                                                     // filters/dedupes Git .md hits
+  searchPullRequests(criteria, top) -> [PRSummary]   // ADO org-wide PR REST;
+                                                     // provider projects raw PRs
+                                                     // to the neutral summary shape
 }
 
 // New. WIQL is ADO-specific; there is no query-language equivalent on GitHub.
