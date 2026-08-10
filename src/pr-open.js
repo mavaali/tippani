@@ -90,7 +90,8 @@ export async function findOrCreateSpecReviewWorkItem(deps, { title, type, descri
 /** Open a draft/normal PR and find-or-create-and-link a Spec review work item.
  *  Every ADO call is wrapped by `call` (the ado-call timeout in production) so a
  *  hung call rejects instead of hanging. Deps: createPr(req)->{pullRequestId,url},
- *  findWorkItems, createWorkItem, linkWorkItem(id, patch). The result reports
+ *  findWorkItems, createWorkItem,
+ *  linkWorkItem(id,{projectId,repositoryId,pullRequestId,comment}). The result reports
  *  only what actually happened — no ADO-MCP, no raw git. */
 export async function openSpecReviewPr(deps, args = {}) {
   const {
@@ -115,8 +116,12 @@ export async function openSpecReviewPr(deps, args = {}) {
     workItemId = wi.id;
     workItemCreated = wi.created;
     if (prId != null && workItemId != null) {
-      const uri = prArtifactUri({ projectId, repositoryId, pullRequestId: prId });
-      await call(() => deps.linkWorkItem(workItemId, buildPrLinkPatch(uri, { comment: "Spec review" })));
+      await call(() => deps.linkWorkItem(workItemId, {
+        projectId,
+        repositoryId,
+        pullRequestId: prId,
+        comment: "Spec review",
+      }));
       linked = true;
     }
   }

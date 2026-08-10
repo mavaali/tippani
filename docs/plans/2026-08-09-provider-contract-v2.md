@@ -96,9 +96,10 @@ interface SearchProvider {
 // a GitHubProvider can decline it outright rather than faking a WIQL dialect
 // against GitHub Issues. See "Capability gaps" below.
 interface WorkItemProvider {
-  queryWorkItems(project, wiql) -> [WorkItem]
-  createWorkItem(project, type, fields) -> WorkItem
-  updateWorkItem(id, fields) -> WorkItem
+  queryWorkItemRefs(project, wiql) -> [{id}]
+  getWorkItems(project, ids, fields) -> [WorkItem]
+  createWorkItem(project, type, patch) -> WorkItem
+  updateWorkItem(id, patch, project?) -> WorkItem
   linkToPullRequest(workItemId, {projectId, repositoryId, pullRequestId}) -> WorkItem
 }
 
@@ -133,7 +134,7 @@ interface BlobProvider {
 | `getFileCommits` / `getLastCommitAuthor` | RepoContentProvider | `getFileCommits` |
 | `listBranchFiles` | RepoContentProvider | `resolveRepository`, `diffBranches` |
 | `openPr`, `publishStagedPrs` | AuthoringProvider | `createPullRequest`, `publishPullRequest` |
-| work-item search/create/link (index.js ~7982-7998, ~6594-6598) | WorkItemProvider | `queryWorkItems`, `createWorkItem`, `updateWorkItem` |
+| work-item search/create/link (index.js ~7982-7998, ~6594-6598) | WorkItemProvider | `queryWorkItemRefs`, `getWorkItems`, `createWorkItem`, `updateWorkItem`, `linkToPullRequest` |
 | code search (index.js ~8015-8023) | SearchProvider | `searchSpecs` |
 
 ## `AdoProvider` — implements all six
