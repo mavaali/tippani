@@ -75,7 +75,6 @@ const stagedBranches = [];
 const stagedFiles = [];
 const stagedPrs = [];
 let aggregatePushCalls = 0;
-const setAdoTokenCalls = [];
 async function fakeSetViewed(threadId, commentId) {
   viewedCalls.push({ threadId, commentId });
   return { ok: true, status: 200, body: { ok: true, viewedCommentId: commentId == null ? null : String(commentId) } };
@@ -95,7 +94,6 @@ registerControlApi(app, {
   resolveThread: fakeResolve,
   stageResolve: (threadId) => { stageResolveCalls.push(threadId); return { ok: true, status: 200, body: { ok: true, staged: true, synced: false } }; },
   setViewed: fakeSetViewed,
-  setAdoToken: (token) => { setAdoTokenCalls.push(token); return token !== "bad-token"; },
   specDrafts,
   listPrs: async (q) => ({ prs: [{ id: 7, title: "Demo PR", author: "Kay" }], mine: q.creator !== "any", status: 1 }),
   // Clickstop 2: open_local_file forwards here.
@@ -156,7 +154,7 @@ const byName = Object.fromEntries(tools.map((t) => [t.name, t]));
 try {
   // --- Surface checks ---
   const expected = [
-    "open_pr", "refresh_ado_token",
+    "open_pr",
     "list_threads", "triage_summary", "show_feedback",
     "open_thread", "open_file", "go_to_line", "get_thread", "focus_thread",
     "stage_draft", "clear_draft", "stage_resolve_thread", "get_spec",
@@ -172,12 +170,12 @@ try {
     "add_reading_list_file", "remove_reading_list_file",
     "close_tippani",
   ];
-  check("tools: exactly 48 registered", tools.length === 48);
+  check("tools: exactly 47 registered", tools.length === 47);
   for (const n of expected) {
     check(`tools: includes ${n}`, !!byName[n]);
     check(`tools: ${n} has description`, typeof byName[n].description === "string" && byName[n].description.length > 20);
   }
-  for (const n of ["post_reply", "resolve_thread", "mark_viewed", "stage_spec_edit", "commit_spec", "create_branch", "push_spec", "create_spec_pr"]) {
+  for (const n of ["refresh_ado_token", "post_reply", "resolve_thread", "mark_viewed", "stage_spec_edit", "commit_spec", "create_branch", "push_spec", "create_spec_pr"]) {
     check(`tools: excludes direct/redundant ${n}`, !byName[n]);
   }
 
@@ -228,17 +226,6 @@ try {
     check("list_threads: focus reported", r.focus.focusedThreadId === null);
   }
 
-  // --- refresh_ado_token ---
-  {
-    const r = await byName.refresh_ado_token.handler({ token: "fresh-token" });
-    check("refresh_ado_token: forwards token to setAdoToken", setAdoTokenCalls.includes("fresh-token"));
-    check("refresh_ado_token: reports ok on accepted token", r && r.ok === true);
-    let rejected = false, rejStatus = 0;
-    try { await byName.refresh_ado_token.handler({ token: "bad-token" }); }
-    catch (e) { rejected = true; rejStatus = e.status; }
-    check("refresh_ado_token: rejected token surfaces as a 400 throw", rejected && rejStatus === 400);
-  }
-
   // --- open_file (single-tab default: steers the open tab via /api/v1/nav) ---
   {
     const r1 = await byName.open_file.handler({ fileIndex: 2 });
@@ -270,10 +257,10 @@ try {
 
   // --- reading list add/remove (custom-files) ---
   {
-    const before = browsePortalCalls.length;
+    const before = activePortalCalls.length;
     const added = await byName.add_reading_list_file.handler({ path: "/docs/notes.md" });
     check("add_reading_list_file: ok + path forwarded", added.ok === true && customFileAdds.includes("/docs/notes.md"));
-    check("add_reading_list_file: ensured a browse portal", browsePortalCalls.length === before + 1);
+    check("add_reading_list_file: ensured the active portal", activePortalCalls.length === before + 1);
     const removed = await byName.remove_reading_list_file.handler({ path: "/docs/notes.md" });
     check("remove_reading_list_file: ok + path forwarded", removed.ok === true && customFileRemoves.includes("/docs/notes.md"));
   }
