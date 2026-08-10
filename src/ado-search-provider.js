@@ -3,8 +3,11 @@
 // - org-wide PR search on dev.azure.com
 // - ADO Code Search on almsearch.dev.azure.com
 //
-// Result shaping, dedupe, Git-only filtering, enrichment, and user-facing
-// failure policy remain in index.js.
+// Provider projects backend envelopes to neutral PR/spec hits. UI-only fields
+// (web URL, last-modified enrichment) and user-facing failure policy remain in
+// index.js.
+
+import { summarizePr } from "./pr-criteria.js";
 
 export function createAdoSearchProvider(conn, { org } = {}) {
   if (!conn?.rest) throw new Error("ADO search provider requires a REST connection");
@@ -34,7 +37,7 @@ export function createAdoSearchProvider(conn, { org } = {}) {
     }
     const url = `${orgBase}/_apis/git/pullrequests?${params.toString()}`;
     const response = await conn.rest.get(url);
-    return response?.result?.value || [];
+    return (response?.result?.value || []).map(summarizePr);
   }
 
   async function searchSpecs(project, query, top) {
@@ -50,7 +53,31 @@ export function createAdoSearchProvider(conn, { org } = {}) {
       filters: { Project: [project] },
     };
     const response = await conn.rest.create(url, body);
-    return response?.result || null;
+    const hits = response?.result?.results || [];
+    const seen = new Set();
+    const specs = [];
+    for (const hit of hits) {
+      const path = hit.path || "";
+      if (!path.toLowerCase().endsWith(".md")) continue;
+      const repoId = hit.repository?.id;
+      const repoName = hit.repository?.name || "";
+      // TFVC hits cannot be opened through Git item APIs. ADO Git repository
+      // ids are GUIDs; project/repo names alone are not sufficient.
+      if (!repoId || !/^[0-9a-f-]{36}$/i.test(repoId)) continue;
+      const key = `${repoId}|${path}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      specs.push({
+        path,
+        repoId,
+        repoName,
+        project: hit.project?.name || project,
+        branch: (
+          hit.versions?.[0]?.branchName || "main"
+        ).replace(/^refs\/heads\//, ""),
+      });
+    }
+    return specs;
   }
 
   return { searchPullRequests, searchSpecs };

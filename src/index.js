@@ -7814,7 +7814,7 @@ async function main() {
         listOrgPullRequests(_conn, authoredCrit, top),
         currentUserId ? listOrgPullRequests(_conn, reviewingCrit, top) : Promise.resolve([]),
       ]);
-      const prs = mergeRolePrs(authoredRaw.map(summarizePr), reviewingRaw.map(summarizePr));
+      const prs = mergeRolePrs(authoredRaw, reviewingRaw);
       return { prs, role: "queue", project: ADO_PROJECT };
     }
 
@@ -7884,34 +7884,14 @@ async function main() {
         error: specSearchUnavailableMessage(detail, ADO_ORG),
       };
     }
-    const hits = (result && result.results) || [];
-    const seen = new Set();
-    const specs = [];
-    for (const h of hits) {
-      const path = h.path || "";
-      if (!path.toLowerCase().endsWith(".md")) continue;
-      const repoId = h.repository && h.repository.id;
-      const repoName = (h.repository && h.repository.name) || "";
-      // Only Git repos have a GUID id + can be opened read-only via getItemContent.
-      if (!repoId || !/^[0-9a-f-]{36}$/i.test(repoId)) continue;
-      const key = repoId + "|" + path;
-      if (seen.has(key)) continue;
-      seen.add(key);
-      const hitProject = (h.project && h.project.name) || proj;
-      // The canonical branch is the one Code Search indexed (the repo's default
-      // mainline) — not always literally "main". Carry it so the read-only view
-      // fetches the right ref without ever showing a branch selector.
-      const branch = ((h.versions && h.versions[0] && h.versions[0].branchName) || "main").replace(/^refs\/heads\//, "");
-      specs.push({
-        path,
-        name: path.split("/").pop(),
-        repo: repoName,
-        repoId,
-        project: hitProject,
-        branch,
-        url: buildSpecWebUrl(ADO_ORG, hitProject, repoName, path),
-      });
-    }
+    const specs = (result || []).map((hit) => ({
+      ...hit,
+      name: hit.path.split("/").pop(),
+      repo: hit.repoName,
+      url: buildSpecWebUrl(
+        ADO_ORG, hit.project, hit.repoName, hit.path,
+      ),
+    }));
     // The MCP path takes the results raw — no cap and no implicit per-file commit
     // lookups. The agent limits result size itself and asks for authorship only if
     // it wants it, so Tippani must not interfere. Only the browser UI enriches each
