@@ -53,3 +53,36 @@ export function reviewPrecheck({ isOffline = false, hasConn = false, prId = 0 } 
   if (!prId) return { ok: false, code: "no-pr", error: "No pull request is open." };
   return { ok: true };
 }
+
+// Orchestrates the /api/review request end to end: validate the type, guard
+// the preconditions, and — only if both pass — actually invoke the vote.
+//
+// This exists as its own function (not left inline in the Express handler)
+// specifically because the shipped bug in this route was structural: the old
+// handler computed a vote and returned {ok:true} WITHOUT ever calling ADO.
+// A test against voteForReviewType/reviewPrecheck alone cannot catch that
+// class of bug — both would still report correctly while the handler quietly
+// skips the call. Testing this function with a spy `submitVote` proves the
+// call actually happens, with the right (conn, prId, vote) arguments, and
+// only on the success path.
+//
+// `submitVote(conn, prId, vote)` and `formatError(err, context)` are injected
+// rather than imported so this stays ADO-agnostic and unit-testable without a
+// real connection; index.js passes the real `submitReviewVote` /
+// `friendlyAdoError`, tests pass fakes.
+export async function handleReviewRequest({ type, isOffline, hasConn, prId, conn, submitVote, formatError } = {}) {
+  const vote = voteForReviewType(type);
+  if (vote === null) {
+    return { status: 400, body: { ok: false, code: "bad-type", error: "Unknown review type." } };
+  }
+  const pre = reviewPrecheck({ isOffline, hasConn, prId });
+  if (!pre.ok) {
+    return { status: 409, body: { ok: false, code: pre.code, error: pre.error } };
+  }
+  try {
+    await submitVote(conn, prId, vote);
+    return { status: 200, body: { ok: true, vote, message: voteLabel(vote) } };
+  } catch (e) {
+    return { status: 502, body: { ok: false, code: "ado-error", error: formatError(e, "submit review") } };
+  }
+}

@@ -36,3 +36,12 @@ jobs:
       # produces, so they stay a dev-machine step.
       - name: Unit tests
         run: npm test
+
+      # smoke:built-demo builds dist/cli.cjs and boots the REAL bundle, not
+      # source. It exists because an esbuild import.meta.url rewrite bug
+      # double-booted the demo server inside the bundle while every src/*.test
+      # passed — a class of failure that only exists once esbuild has run.
+      # Unlike the other smokes, --demo needs no ADO connection or cached PR
+      # fixture, so this one CAN run in CI (and should, every push/PR).
+      - name: Built-artifact smoke (dist/cli.cjs --demo)
+        run: npm run smoke:built-demo

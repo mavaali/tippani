@@ -71,7 +71,7 @@ import { branchesForRepo, repoOptions, branchNamePlaceholder, sortBranches, shor
 import { branchFileRows, visibleFileCount, mdPathsFromChanges, buildSpecHref, stagedFileComparison } from "./branch-files.js";
 import { validateLocalRepo, resolveGitDir, parseGitHead, parsePackedRefs, mergeLocalBranches, parseOriginHeadDefault, userCreatedBranches } from "./local-repo.js";
 import { baseCandidates, safeLocalPath } from "./local-git.js";
-import { voteForReviewType, voteLabel, reviewPrecheck } from "./review-vote.js";
+import { handleReviewRequest } from "./review-vote.js";
 import { newComment as pcNew, addComment as pcAdd, updateComment as pcUpdate, removeComment as pcRemove, findComment as pcFind, sortComments as pcSort, setResolved as pcSetResolved, addReply as pcAddReply, navTargetId as pcNavTarget, reanchorComments as pcReanchor } from "./personal-comments.js";
 import { personalCommentsKey as pcStoreKey, loadPersonalComments as pcStoreLoad, savePersonalComments as pcStoreSave, deletePersonalComments as pcStoreDelete, migrateKey as pcStoreMigrate } from "./personal-comments-store.js";
 
@@ -9093,20 +9093,20 @@ if ($path) { [Console]::Out.Write($path) }
 
   // Approve / Request changes. This is a WRITE to ADO and is deliberately not
   // queued offline: a stale vote synced later could approve a PR whose content
-  // has since moved on.
+  // has since moved on. Orchestration (validate -> precheck -> vote) lives in
+  // handleReviewRequest (review-vote.js) so it's testable with a fake ADO
+  // connection — this route is just the HTTP<->function adapter.
   app.post("/api/review", async (req, res) => {
-    const vote = voteForReviewType(req.body && req.body.type);
-    if (vote === null) {
-      return res.status(400).json({ ok: false, code: "bad-type", error: "Unknown review type." });
-    }
-    const pre = reviewPrecheck({ isOffline: _isOffline, hasConn: !!_conn, prId: _prId });
-    if (!pre.ok) return res.status(409).json({ ok: false, code: pre.code, error: pre.error });
-    try {
-      await submitReviewVote(_conn, _prId, vote);
-      res.json({ ok: true, vote, message: voteLabel(vote) });
-    } catch (e) {
-      res.status(502).json({ ok: false, code: "ado-error", error: friendlyAdoError(e, "submit review") });
-    }
+    const { status, body } = await handleReviewRequest({
+      type: req.body && req.body.type,
+      isOffline: _isOffline,
+      hasConn: !!_conn,
+      prId: _prId,
+      conn: _conn,
+      submitVote: submitReviewVote,
+      formatError: friendlyAdoError,
+    });
+    res.status(status).json(body);
   });
 
   // Sync pending actions to ADO
