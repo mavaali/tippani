@@ -15,6 +15,7 @@
   ],
   "scripts": {
     "start": "node src/index.js",
+    "demo": "node src/demo.js",
     "test:table": "node src/client/table.test.mjs",
     "test:diff": "node src/client/diff.test.mjs",
     "test:invariant": "node src/client/invariant.test.mjs",
@@ -39,7 +40,7 @@
     "test:prcriteria": "node src/pr-criteria.test.mjs",
     "test:imagesrc": "node src/image-src.test.mjs",
     "test:workitem": "node src/work-item.test.mjs",
-    "test": "node src/client/table.test.mjs && node src/client/diff.test.mjs && node src/client/invariant.test.mjs && node src/conflict.test.mjs && node src/canedit.test.mjs && node src/api-state.test.mjs && node src/control-api.test.mjs && node src/mcp.test.mjs && node src/mcp-shutdown.test.mjs && node src/portal-launcher.test.mjs && node src/portal-registry.test.mjs && node src/ado-token-check.test.mjs && node src/comment-xss.test.mjs && node src/config-util.test.mjs && node src/spec-source-map.test.mjs && node src/table-diff.test.mjs && node src/viewed-map.test.mjs && node src/frontmatter.test.mjs && node src/spec-edit.test.mjs && node src/feedback-filter.test.mjs && node src/pr-criteria.test.mjs && node src/nav-guard.test.mjs && node src/mermaid-normalize.test.mjs && node src/mermaid-view.test.mjs && node src/image-src.test.mjs && node src/work-item.test.mjs && node src/html-util.test.mjs && node src/ado-read.test.mjs && node src/ado-token-cli.test.mjs && node src/branch-list.test.mjs && node src/local-repo.test.mjs && node src/branch-files.test.mjs && node src/personal-comments.test.mjs && node src/personal-comments-store.test.mjs && node src/local-git.test.mjs && node src/mcp-local-boot.test.mjs",
+    "test": "node src/client/table.test.mjs && node src/client/diff.test.mjs && node src/client/invariant.test.mjs && node src/conflict.test.mjs && node src/canedit.test.mjs && node src/api-state.test.mjs && node src/control-api.test.mjs && node src/mcp.test.mjs && node src/mcp-shutdown.test.mjs && node src/portal-launcher.test.mjs && node src/portal-registry.test.mjs && node src/ado-token-check.test.mjs && node src/comment-xss.test.mjs && node src/config-util.test.mjs && node src/spec-source-map.test.mjs && node src/table-diff.test.mjs && node src/viewed-map.test.mjs && node src/frontmatter.test.mjs && node src/spec-edit.test.mjs && node src/feedback-filter.test.mjs && node src/pr-criteria.test.mjs && node src/nav-guard.test.mjs && node src/mermaid-normalize.test.mjs && node src/mermaid-view.test.mjs && node src/image-src.test.mjs && node src/work-item.test.mjs && node src/html-util.test.mjs && node src/ado-read.test.mjs && node src/ado-token-cli.test.mjs && node src/branch-list.test.mjs && node src/local-repo.test.mjs && node src/branch-files.test.mjs && node src/personal-comments.test.mjs && node src/personal-comments-store.test.mjs && node src/local-git.test.mjs && node src/mcp-local-boot.test.mjs && node src/review-vote.test.mjs",
     "smoke:review-ux-mcp": "node scripts/smoke-review-ux-mcp.mjs",
     "smoke:review-ux-ui": "node scripts/smoke-review-ux-ui.mjs",
     "smoke:review-ux": "node scripts/smoke-review-ux-mcp.mjs && node scripts/smoke-review-ux-ui.mjs",
@@ -53,7 +54,8 @@
     "test:branchlist": "node src/branch-list.test.mjs",
     "test:localrepo": "node src/local-repo.test.mjs",
     "test:branchfiles": "node src/branch-files.test.mjs",
-    "test:personalcomments": "node src/personal-comments.test.mjs"
+    "test:personalcomments": "node src/personal-comments.test.mjs",
+    "test:reviewvote": "node src/review-vote.test.mjs"
   },
   "keywords": [
     "azure-devops",

@@ -6,7 +6,19 @@
 
 > टिप्पणी — *annotation* (Sanskrit)
 
-Offline-capable CLI to **read, annotate, and edit** Azure DevOps PR markdown specs — a clean, three-column workspace for non-technical contributors who shouldn't need to learn ADO's diff view. Render specs, comment inline, and edit them WYSIWYG, committing straight back to the PR branch.
+**A code diff is the wrong surface for reviewing prose.**
+
+When your specs live in git — PRDs, design docs, RFCs, ADRs — the people who most need to read them are the ones least equipped to. Tippani renders those markdown files as documents: a table of contents, real headings, working Mermaid diagrams, and a comment you drop by hovering a paragraph. It's a three-column reading workspace that happens to be wired to a pull request, so comments post to real threads and edits commit to the real branch.
+
+Offline-capable, local-first, and drivable by an AI agent you watch work.
+
+## Try it — no setup
+
+```bash
+npx tippani --demo
+```
+
+Opens the portal on a sample spec with sample comment threads. No Azure DevOps, no login, no clone. Nothing is sent anywhere.
 
 ## Quick Start
 
@@ -46,14 +58,20 @@ Or download a standalone binary from the [latest release](https://github.com/mav
 - **File picker** — multi-file PRs show a landing page; single-file PRs auto-open
 - **Three-column layout** — TOC sidebar, rendered spec, comment threads (all resizable)
 - **Inline commenting** — hover any content block → click `+` → comment posts to ADO
+- **WYSIWYG editing** — edit the spec in place and commit back to the PR branch
 - **Offline mode** — cache PR data, comment offline, sync when reconnected
+- **Local review, no PR** — point at a git clone and review a spec on any branch, with no pull request and no Azure DevOps at all
+- **Private annotations** — personal, line-anchored notes on a draft spec that stay on your machine and survive edits to the document
 - **Dark mode** — auto-detects system preference
 - **Active/resolved threads** — color-coded with inline bubbles on spec content
-- **Review actions** — Approve / Request Changes from the bottom bar
+- **Review actions** — Approve / Request Changes from the bottom bar, recorded as your vote on the PR
 
 ## Usage
 
 ```bash
+# Try it on a sample spec — no ADO, no config
+npx tippani --demo
+
 # Open a PR for review (uses saved config)
 npx tippani <PR_ID>
 
@@ -65,6 +83,9 @@ npx tippani <PR_ID> --offline
 
 # Force re-fetch from ADO
 npx tippani <PR_ID> --refresh
+
+# Review a local git clone — no PR needed
+npx tippani --local-repo=/path/to/clone
 ```
 
 ## Configuration
@@ -129,15 +150,17 @@ To build a Windows `.exe`, run `npm run build` on a Windows machine with Node.js
 
 ## Architecture
 
-Single-file CLI (`src/index.js`) that:
-1. Authenticates to ADO via PAT or `az cli`
+CLI (`src/index.js`) that:
+1. Authenticates to ADO via `az cli` or PAT — or skips ADO entirely for local-clone review
 2. Fetches PR metadata, changed files, file contents, comment threads
 3. Caches everything locally for offline use
 4. Starts a local Express server on port 3847
 5. Renders markdown to HTML via `remark` + `rehype`
 6. Opens the browser to Tippani
 
-Comments are written to a local queue first, then synced to ADO. If offline, they stay in the queue until the next sync.
+Comments are written to a local queue first, then synced to ADO. If offline, they stay in the queue until the next sync. Review votes are the exception — they are never queued, since a stale vote synced later could approve a PR whose content has moved on.
+
+`src/demo.js` serves the same portal over fixture data for `--demo`. It shares the design system and helpers with the real portal so the demo can't drift from what ships.
 
 ## AI / MCP integration
 
@@ -145,7 +168,7 @@ Tippani exposes a [Model Context Protocol](https://modelcontextprotocol.io) serv
 
 **Self-bootstrapping — you don't start tippani first.** The shim launches (or adopts) a review portal per PR on demand via the `open_pr` tool, opening a visible browser window for you while the agent drives it. Multiple PRs can run at once on separate ports, discovered across processes via a per-port registry under `~/.tippani/instances/`.
 
-**Setup (Claude Desktop):** install tippani globally (`npm i -g tippani`), then add to your `claude_desktop_config.json`. The shim authenticates to Azure DevOps with a token you pass in via `TIPPANI_ADO_TOKEN` (an ADO REST/git access token) — it will refuse to start without one. Optionally set `TIPPANI_ADO_AUDIENCE` to have it verify the token's audience on startup:
+**Setup (Claude Desktop):** install tippani globally (`npm i -g tippani`), then add to your `claude_desktop_config.json`. For Azure DevOps work, pass an ADO REST/git access token via `TIPPANI_ADO_TOKEN`; without one the shim still starts in local-only mode (local-clone review works, and the ADO tools ask for a token if used). Optionally set `TIPPANI_ADO_AUDIENCE` to have it verify the token's audience on startup:
 
 ```json
 {
@@ -158,11 +181,14 @@ Tippani exposes a [Model Context Protocol](https://modelcontextprotocol.io) serv
 }
 ```
 
-**Tools (19):**
+**Tools (40):**
 
-- **Portal & navigation** — `open_pr` (call first), `open_file`, `open_thread`, `show_feedback` (cross-PR triage page).
+- **Portal & navigation** — `open_pr` (call first), `open_file`, `open_thread`, `show_feedback` (cross-PR triage page), `set_view`, `set_feedback_filter`, `refresh_spec`.
 - **Reading** — `list_threads`, `get_thread`, `get_spec`, `get_spec_draft`, `triage_summary`; focus with `focus_thread`.
-- **Stage-then-review** — stage locally with `stage_draft`, `stage_spec_edit`, `stage_resolve_thread`; nothing reaches Azure DevOps until you finalize with `post_reply`, `commit_spec`, or `resolve_thread`. `commit_spec` requires explicit content — a staged proposal is review-only and never committed implicitly, so it can't overwrite your own edits. Also `clear_draft`, `clear_spec_edit`, and `mark_viewed` (acknowledge a thread without resolving it).
+- **Stage-then-review** — stage locally with `stage_draft`, `stage_spec_edit`, `stage_resolve_thread`; nothing reaches Azure DevOps until you finalize with `post_reply`, `commit_spec`, or `resolve_thread`. `commit_spec` requires explicit content — a staged proposal is review-only and never committed implicitly, so it can't overwrite your own edits. Also `edit_spec` (surgical anchored edits), `clear_draft`, `clear_spec_edit`, and `mark_viewed` (acknowledge a thread without resolving it).
+- **Discovery** — `list_prs`, `search_specs`, `search_work_items`, `get_file_commits`.
+- **Local review (no PR, no ADO)** — `open_branch`, `open_branch_file`.
+- **Private annotations** — `read_personal_comments`, `add_personal_comment`, `edit_personal_comment`, `delete_personal_comment`, `reply_personal_comment`, `resolve_personal_comment`, plus navigation and bulk-cleanup tools.
 
 Staged whole-file edits show up in the portal as a GitHub-style Current/Proposed diff you can accept-and-refine in the editor before committing.
 
