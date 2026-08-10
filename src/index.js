@@ -33,7 +33,7 @@ import { registerControlApi } from "./control-api.js";
 import { renderSpecBody } from "./spec-source-map.js";
 import { isReadOnlyWiql, summarizeWorkItem, buildWorkItemUrl, WORK_ITEM_FIELDS } from "./work-item.js";
 import { isTableBlock, computeTableDiff } from "./table-diff.js";
-import { parseViewedMap, updateViewed } from "./viewed-map.js";
+import { updateViewed } from "./viewed-map.js";
 import { writeInstance, removeInstance } from "./portal-registry.js";
 import { reattachFrontmatter } from "./frontmatter.js";
 import { identityFromAdoToken, isExpiredJwt } from "./ado-token-check.js";
@@ -56,11 +56,10 @@ import { makeRepoSession, createSessionTokens } from "./repo-session.js";
 import { saveSpecDraft, loadSpecDraft, deleteSpecDraft } from "./spec-draft-store.js";
 import { openSpecReviewPr } from "./pr-open.js";
 import { specSearchUnavailableMessage } from "./spec-search-error.js";
-import { prContentVersion, toVersionDescriptor, adoErrorInContent } from "./pr-version.js";
+import { prContentVersion, toVersionDescriptor } from "./pr-version.js";
 import { renderCrumbBar, renderBrand } from "./breadcrumb.js";
 import {
   decodeConfigValue,
-  extOf,
   deriveRepoContext,
   summarizeNonMarkdown,
 } from "./config-util.js";
@@ -75,6 +74,7 @@ import { handleReviewRequest } from "./review-vote.js";
 import { newComment as pcNew, addComment as pcAdd, updateComment as pcUpdate, removeComment as pcRemove, findComment as pcFind, sortComments as pcSort, setResolved as pcSetResolved, addReply as pcAddReply, navTargetId as pcNavTarget, reanchorComments as pcReanchor } from "./personal-comments.js";
 import { personalCommentsKey as pcStoreKey, loadPersonalComments as pcStoreLoad, savePersonalComments as pcStoreSave, deletePersonalComments as pcStoreDelete, migrateKey as pcStoreMigrate } from "./personal-comments-store.js";
 import { createStagedInventory, normFolder, parentFolder } from "./staged-inventory.js";
+import { createAdoReviewProvider } from "./ado-review-provider.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -320,17 +320,33 @@ function getAdoConnection(pat) {
   return new azdev.WebApi(ADO_ORG, authHandler);
 }
 
+// One ReviewProvider instance per ADO connection. Repo/project are dynamic
+// getters: applyRepoContextFromPR re-points the review globals after a global
+// PR lookup, and the already-created provider must observe the new coordinates.
+// A WeakMap avoids rebuilding the adapter on every request without extending
+// the connection's lifetime.
+const _adoReviewProviders = new WeakMap();
+function adoReview(conn) {
+  if (!conn) throw new Error("ADO review provider requires a connection");
+  let provider = _adoReviewProviders.get(conn);
+  if (!provider) {
+    provider = createAdoReviewProvider(conn, {
+      getRepo: () => ADO_REPO,
+      getProject: () => ADO_PROJECT,
+    });
+    _adoReviewProviders.set(conn, provider);
+  }
+  return provider;
+}
+
 async function getPullRequest(conn, prId) {
-  const gitApi = await conn.getGitApi();
-  return gitApi.getPullRequestById(prId);
+  return adoReview(conn).getPullRequest(prId);
 }
 
 // List pull requests for the configured project (item 6). `criteria` is a
 // GitPullRequestSearchCriteria (see pr-criteria.buildPrCriteria).
 async function listPullRequests(conn, criteria, top = 50) {
-  const gitApi = await conn.getGitApi();
-  const prs = await gitApi.getPullRequestsByProject(ADO_PROJECT, criteria, undefined, undefined, top);
-  return prs || [];
+  return adoReview(conn).listPullRequests(criteria, top);
 }
 
 // List pull requests across the WHOLE org (every project) matching the criteria
@@ -398,30 +414,7 @@ function applyRepoContextFromPR(pr) {
 }
 
 async function getFileContent(conn, filePath, ver) {
-  const gitApi = await conn.getGitApi();
-  const versionDesc = toVersionDescriptor(ver);
-  const item = await gitApi.getItemContent(
-    ADO_REPO,
-    filePath,
-    ADO_PROJECT,
-    undefined,
-    undefined,
-    undefined,
-    undefined,
-    undefined,
-    versionDesc
-  );
-  const chunks = [];
-  for await (const chunk of item) {
-    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-  }
-  const text = Buffer.concat(chunks).toString("utf-8");
-  // An unresolvable version (deleted source branch, gc'd commit) makes ADO stream
-  // its error envelope as the "content". Never return that as a file body — throw
-  // so callers cache nothing and render a clean placeholder instead.
-  const adoErr = adoErrorInContent(text);
-  if (adoErr) throw new Error(adoErr);
-  return text;
+  return adoReview(conn).getFileContent(filePath, ver);
 }
 
 // Version descriptor for reading the bound PR's file content: prefer the PR's
@@ -467,82 +460,32 @@ async function getImageBlob(conn, filePath, ver) {
 // capped), and pull the file-anchored threads from each. Best-effort — returns
 // [] on any failure so the read-only view still renders.
 async function getFileReviewHistory(conn, repoId, filePath, branch = "main") {
-  const norm = (p) => { let s = (p || "").replace(/\\/g, "/"); if (!s.startsWith("/")) s = "/" + s; return s.toLowerCase(); };
-  const target = norm(filePath);
-  try {
-    const gitApi = await conn.getGitApi();
-    const commits = await gitApi.getCommits(
-      repoId,
-      { itemPath: filePath, itemVersion: { version: branch, versionType: 0 } },
-      undefined, 0, 100
-    );
-    const commitIds = (commits || []).map((c) => c.commitId).filter(Boolean);
-    if (!commitIds.length) return [];
-    let results = [];
-    try {
-      const q = await gitApi.getPullRequestQuery({ queries: [{ type: 1, items: commitIds }, { type: 2, items: commitIds }] }, repoId);
-      results = (q && q.results) || [];
-    } catch (e) { console.error("getPullRequestQuery failed:", e.message); }
-    const prMap = new Map();
-    for (const r of results) {
-      for (const cid of Object.keys(r || {})) {
-        for (const pr of (r[cid] || [])) {
-          if (pr && pr.pullRequestId && !prMap.has(pr.pullRequestId)) prMap.set(pr.pullRequestId, pr);
+  const history = await adoReview(conn).getFileReviewHistory(
+    repoId, filePath, branch,
+  );
+  // The provider returns raw ADO comments. Rendering stays above the provider
+  // line: a future GitHub provider supplies the same neutral comment content
+  // without importing Tippani's markdown pipeline.
+  for (const item of history) {
+    for (const thread of item.threads || []) {
+      for (const comment of thread.comments || []) {
+        try {
+          const rendered = await renderMarkdownSafe(comment.content || "");
+          const textOnly = rendered.replace(/<[^>]+>/g, "").trim();
+          comment._html = (!textOnly && comment.content)
+            ? `<p>${escHtml(String(comment.content).replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim())}</p>`
+            : rendered;
+        } catch {
+          comment._html = escHtml(comment.content || "");
         }
       }
     }
-    // Closed PRs only — exclude active. getPullRequestQuery returns status as
-    // a STRING ("active"/"completed"/"abandoned"), not the numeric enum.
-    const isActive = (s) => s === 1 || s === 0 || s === "active" || s === "notSet";
-    let prs = [...prMap.values()].filter((pr) => !isActive(pr.status));
-    prs.sort((a, b) => new Date(b.closedDate || b.creationDate || 0) - new Date(a.closedDate || a.creationDate || 0));
-    prs = prs.slice(0, 10);
-    const history = [];
-    for (const pr of prs) {
-      let threads = [];
-      try { threads = await gitApi.getThreads(repoId, pr.pullRequestId); } catch { /* skip */ }
-      const fileThreads = (threads || []).filter((t) => (t.comments && t.comments.length) && t.threadContext && norm(t.threadContext.filePath) === target);
-      // Pre-render each comment body: sanitized markdown (also strips the raw
-      // HTML that bot comments store in `content`, which would otherwise show as
-      // literal tags).
-      for (const t of fileThreads) {
-        for (const c of (t.comments || [])) {
-          try {
-            const rendered = await renderMarkdownSafe(c.content || "");
-            const textOnly = rendered.replace(/<[^>]+>/g, "").trim();
-            c._html = (!textOnly && c.content)
-              ? `<p>${escHtml(String(c.content).replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim())}</p>`
-              : rendered;
-          } catch { c._html = escHtml(c.content || ""); }
-        }
-      }
-      if (fileThreads.length) history.push({ pr, threads: fileThreads });
-    }
-    return history;
-  } catch (e) {
-    console.error("getFileReviewHistory failed:", e.message);
-    return [];
   }
+  return history;
 }
 
 async function getPRChangedFiles(conn, prId) {
-  const gitApi = await conn.getGitApi();
-  const iterations = await gitApi.getPullRequestIterations(ADO_REPO, prId, ADO_PROJECT);
-  if (!iterations || iterations.length === 0) return { mdFiles: [], otherFiles: [] };
-  const lastIteration = iterations[iterations.length - 1];
-  const changes = await gitApi.getPullRequestIterationChanges(
-    ADO_REPO, prId, lastIteration.id, ADO_PROJECT
-  );
-  const entries = (changes.changeEntries || []).filter(
-    (c) => c.item?.path && !c.item.isFolder && c.changeType !== 16 // 16 = delete
-  );
-  const mdFiles = entries
-    .filter((c) => c.item.path.toLowerCase().endsWith(".md"))
-    .map((c) => ({ path: c.item.path, changeType: c.changeType }));
-  const otherFiles = entries
-    .filter((c) => !c.item.path.toLowerCase().endsWith(".md"))
-    .map((c) => ({ path: c.item.path, ext: extOf(c.item.path) }));
-  return { mdFiles, otherFiles };
+  return adoReview(conn).listChangedFiles(prId);
 }
 
 // Load a PR into module state: fetch it, re-point the repo context at its real
@@ -575,44 +518,28 @@ async function bindPr(prId) {
 }
 
 async function getCommentThreads(conn, prId) {
-  const gitApi = await conn.getGitApi();
-  return gitApi.getThreads(ADO_REPO, prId, ADO_PROJECT);
+  return adoReview(conn).listThreads(prId);
 }
 
 async function createCommentThread(conn, prId, filePath, line, content) {
-  const gitApi = await conn.getGitApi();
-  const thread = {
-    comments: [{ content, commentType: 1 }],
-    status: 1, // active
-    threadContext: {
-      filePath,
-      rightFileStart: { line, offset: 1 },
-      rightFileEnd: { line, offset: 1 },
-    },
-  };
-  return gitApi.createThread(thread, ADO_REPO, prId, ADO_PROJECT);
+  return adoReview(conn).createComment(prId, {
+    filePath, line, body: content,
+  });
 }
 
 async function replyToThread(conn, prId, threadId, content) {
-  const gitApi = await conn.getGitApi();
-  const comment = { content, commentType: 1 };
-  return gitApi.createComment(comment, ADO_REPO, prId, threadId, ADO_PROJECT);
+  return adoReview(conn).replyToThread(prId, threadId, content);
 }
 
 async function resolveThread(conn, prId, threadId) {
-  const gitApi = await conn.getGitApi();
-  return gitApi.updateThread({ status: 2 }, ADO_REPO, prId, threadId, ADO_PROJECT);
+  return adoReview(conn).resolveThread(prId, threadId);
 }
 
 // Record the signed-in user's review vote on the PR (the Approve / Request
 // changes bar). ADO addresses a vote by reviewer identity, so this needs the
 // authenticated user's id — an anonymous vote is not expressible.
 async function submitReviewVote(conn, prId, vote) {
-  const cd = await conn.connect();
-  const reviewerId = cd && cd.authenticatedUser && cd.authenticatedUser.id;
-  if (!reviewerId) throw new Error("Could not resolve your Azure DevOps identity, so the vote was not recorded.");
-  const gitApi = await conn.getGitApi();
-  return gitApi.createPullRequestReviewer({ vote }, ADO_REPO, prId, reviewerId, ADO_PROJECT);
+  return adoReview(conn).submitReview(prId, vote);
 }
 
 // Durable "viewed" state: ADO comment-thread properties are NOT updatable
@@ -621,30 +548,20 @@ async function submitReviewVote(conn, prId, vote) {
 // { threadId: lastViewedCommentId }). PR properties ARE updatable via a
 // dedicated API, so this is durable + shared in ADO (not a machine-local file).
 // A newer comment id makes a thread resurface as unread.
-const VIEWED_PR_PROP = "tippani.viewed";
 // Strict read: returns {} only when the property is genuinely absent, and THROWS
 // on a transient/corrupt read so a caller doing read-modify-write never wipes
 // existing markers by writing an empty map after a failed read.
 async function readViewedMap(conn, prId) {
-  const gitApi = await conn.getGitApi();
-  const props = await gitApi.getPullRequestProperties(ADO_REPO, prId, ADO_PROJECT);
-  const raw = props?.value?.[VIEWED_PR_PROP]?.$value ?? props?.[VIEWED_PR_PROP]?.$value ?? null;
-  return parseViewedMap(raw);
+  return adoReview(conn).readViewed(prId);
 }
 // Lenient read for DISPLAY only: on any failure fall back to no-markers so the
 // page still renders (threads just show as unread). NEVER use this result to
 // write back — use readViewedMap for read-modify-write.
 async function getViewedMap(conn, prId) {
-  try { return await readViewedMap(conn, prId); } catch { return {}; }
+  return adoReview(conn).getViewed(prId);
 }
 async function setViewedMap(conn, prId, map) {
-  const gitApi = await conn.getGitApi();
-  // NOTE: op:add replaces the whole property; there is no ETag/version guard, so
-  // concurrent writers are last-write-wins. Acceptable for the single-user flow;
-  // the guard that matters (never write after a failed read) is in updateViewed.
-  const patch = [{ op: "add", path: "/" + VIEWED_PR_PROP, value: JSON.stringify(map) }];
-  return gitApi.updatePullRequestProperties(
-    { "Content-Type": "application/json-patch+json" }, patch, ADO_REPO, prId, ADO_PROJECT);
+  return adoReview(conn).setViewed(prId, map);
 }
 
 // Load viewed markers for DISPLAY, distinguishing "genuinely none" from
@@ -654,13 +571,8 @@ async function setViewedMap(conn, prId, map) {
 // (usually an expired ADO token on a long-lived portal). Callers surface
 // `error` to the user instead of silently showing all-unread.
 async function loadViewedState(conn, prId, isOffline) {
-  if (isOffline || !conn) return { map: {}, error: null };
-  try {
-    return { map: await readViewedMap(conn, prId), error: null };
-  } catch (e) {
-    const auth = /401|unauthor|expired|credential|token/i.test(e?.message || "");
-    return { map: {}, error: auth ? "ADO sign-in expired." : "Couldn't reach Azure DevOps." };
-  }
+  if (!conn) return { map: {}, error: null };
+  return adoReview(conn).loadViewedState(prId, isOffline);
 }
 
 // Amber banner shown when the viewed markers couldn't be read, so a failed read
@@ -681,31 +593,21 @@ function viewedWarning(err) {
 // explicit repo/project so the authoring write path can target any repo without
 // leaning on the module globals.
 async function getBranchTip(conn, branchRef, repoId = ADO_REPO, project = ADO_PROJECT) {
-  const gitApi = await conn.getGitApi();
-  const shortBranch = branchRef.replace("refs/heads/", "");
-  // Clickstop 2, step 9: bound the ADO call so a wedged network call can't hang.
-  const refs = await adoCall(() => gitApi.getRefs(repoId, project, `heads/${shortBranch}`), { label: "getRefs" });
-  const ref = (refs || []).find((r) => r.name === branchRef);
-  if (!ref) throw new Error(`Branch ref not found: ${branchRef}`);
-  return ref.objectId;
+  return adoReview(conn).getBranchTip(branchRef, {
+    repo: repoId, project,
+  });
 }
 
 // Commit an edited file to a branch via the ADO push API. expectedOldObjectId, when
 // provided, is used as the push's oldObjectId (optimistic concurrency — the conflict
 // guard in #49 passes the load-time SHA); otherwise the live tip is used.
 async function pushFileToBranch(conn, branchRef, filePath, content, message, expectedOldObjectId) {
-  const gitApi = await conn.getGitApi();
-  const oldObjectId = expectedOldObjectId || (await getBranchTip(conn, branchRef));
-  // Clickstop 2, step 8: build the change set through the shared, tested builder
-  // (this edit is the single-edit case of the multi-file add/edit push).
-  const push = buildPushChangeSet({
-    edits: [{ path: filePath, content }],
+  return adoReview(conn).commitFile(branchRef, {
+    filePath,
+    content,
     message,
-    branchRef,
-    oldObjectId,
+    expectedOldObjectId,
   });
-  const result = await gitApi.createPush(push, ADO_REPO, ADO_PROJECT);
-  return result?.commits?.[0]?.commitId || result?.refUpdates?.[0]?.newObjectId || null;
 }
 
 // ADO security namespace + permission bit for Git "Contribute" (push) access.

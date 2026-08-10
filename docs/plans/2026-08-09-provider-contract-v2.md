@@ -41,6 +41,7 @@ interface ReviewProvider {
   resolveThread(threadId) / unresolve(threadId)
   getViewed(pr) -> {threadId: commentId}
   setViewed(pr, map)
+  getFileReviewHistory(repo, path, branch) -> [{pr, threads}]
   commitFile(pr, {path, content, message, baseSha}) -> commitId
   getBranchTip(branch) -> sha
   submitReview(pr, vote) -> void          // NEW: the #72 approve/request-changes
@@ -116,6 +117,7 @@ interface BlobProvider {
 | `getCommentThreads` / `createCommentThread` / `replyToThread` / `resolveThread` | ReviewProvider | `listThreads` / `createComment` / `replyToThread` / `resolveThread` |
 | `submitReviewVote` (added in #72) | ReviewProvider | `submitReview` — **new method, not in the July contract at all** |
 | `readViewedMap` / `getViewedMap` / `setViewedMap` | ReviewProvider | `getViewed` / `setViewed` |
+| `getFileReviewHistory` | ReviewProvider | `getFileReviewHistory` — raw PR/thread history; markdown rendering stays above the provider line |
 | `getBranchTip` / `pushFileToBranch` | ReviewProvider (PR-bound single file) **and** RepoContentProvider (branch-bound, no PR) | Two call shapes for the same ADO operation, split by whether a PR is in scope — matches clickstop-1's "a branch is a first-class review surface without a PR" design |
 | `resolveTarget`, `pushRemoteSpec`, `stageBranch` → `mcpCreateBranch` | RepoContentProvider | `createBranch`, `pushFiles` |
 | `listBranchFolders` | RepoContentProvider | `listFolders` |
