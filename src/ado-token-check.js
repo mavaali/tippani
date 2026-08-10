@@ -79,3 +79,17 @@ export function isExpiredJwt(token, nowMs = Date.now()) {
   if (typeof payload.exp !== "number") return false;
   return payload.exp * 1000 <= nowMs;
 }
+
+/** Return the signed-in identity carried by an ADO JWT, or null. */
+export function identityFromAdoToken(token) {
+  if (typeof token !== "string" || !token) return null;
+  const parts = token.split(".");
+  if (parts.length !== 3) return null;
+  try {
+    const payload = JSON.parse(Buffer.from(parts[1], "base64url").toString("utf8"));
+    const identity = payload.upn || payload.unique_name || payload.preferred_username || payload.email || payload.name;
+    return typeof identity === "string" && identity.trim() ? identity.trim() : null;
+  } catch {
+    return null;
+  }
+}

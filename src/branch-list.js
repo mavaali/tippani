@@ -47,6 +47,30 @@ export function branchesForRepo(refs, repo, org) {
   return rows;
 }
 
+export function repoOptions(repos) {
+  return (repos || [])
+    .filter((repo) => repo && repo.id)
+    .map((repo) => ({
+      id: repo.id,
+      name: repo.name || "",
+      project: (repo.project && repo.project.name) || "",
+    }));
+}
+
+export function branchAuthorAlias(user) {
+  const identity = String((user && (user.uniqueName || user.displayName)) || "user");
+  const local = identity.includes("@") ? identity.split("@")[0] : identity;
+  return local.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "") || "user";
+}
+
+export function branchNamePlaceholder(identity) {
+  const value = String(identity || "").trim();
+  if (!value) return "mybranch";
+  const local = value.includes("@") ? value.split("@")[0] : value;
+  const alias = local.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+  return alias ? `dev/${alias}/myspec` : "mybranch";
+}
+
 // Sort branch rows by repo, then branch name (case-insensitive, stable).
 export function sortBranches(list) {
   return (list || []).slice().sort((a, b) => {

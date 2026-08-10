@@ -70,6 +70,16 @@ export function savePersonalComments(dir, repoId, branch, filePath, comments) {
   }
 }
 
+export function deletePersonalComments(dir, repoId, branch, filePath) {
+  try {
+    fs.rmSync(storePath(dir, repoId, branch, filePath));
+    return true;
+  } catch (e) {
+    if (e && e.code === "ENOENT") return false;
+    throw e;
+  }
+}
+
 // One-time, per-(branch,file) migration from a legacy repo id to a stable one
 // (e.g. absolute clone path -> origin-URL identity, so moving the clone no
 // longer orphans notes). No-op when the destination already exists or the

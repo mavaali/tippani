@@ -6,6 +6,7 @@ import {
   createFocusStore,
   createDraftStore,
   createLockStore,
+  createKeyedLockStore,
   createInflightStore,
 } from "./api-state.js";
 
@@ -122,6 +123,21 @@ function check(name, cond) {
   const released = l.release(7);
   check("lock: release returns true on hit", released === true);
   check("lock: released is no longer locked", l.isLocked(7) === false);
+}
+
+// --- KeyedLockStore (string keys, clickstop 2 step 11) ---
+{
+  let t = 1000;
+  const l = createKeyedLockStore({ ttlMs: 100, now: () => t });
+  const K = "MyRepo\nspec/x\ndocs/spec.md";
+  check("keyed-lock: string key does NOT throw", (() => { try { l.touch(K); return true; } catch { return false; } })());
+  check("keyed-lock: isLocked true after touch", l.isLocked(K) === true);
+  check("keyed-lock: a different key is independent", l.isLocked("MyRepo\nspec/x\nother.md") === false);
+  t = 1050; l.touch(K); // sliding window
+  t = 1140; check("keyed-lock: sliding refresh keeps it active", l.isLocked(K) === true);
+  t = 1250; check("keyed-lock: expires after ttl", l.isLocked(K) === false);
+  l.touch(K); check("keyed-lock: release returns true on hit", l.release(K) === true);
+  check("keyed-lock: empty/non-string key throws", (() => { try { l.touch(""); return false; } catch { return true; } })());
 }
 
 // --- InflightStore ---

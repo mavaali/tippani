@@ -4,6 +4,7 @@
 
 import fs from "fs";
 import { z } from "zod";
+import { withHints, NEVER_RAW_RULE } from "./tool-hints.js";
 
 export function loadSessionToken(tokenPath) {
   try {
@@ -79,38 +80,71 @@ export function buildTools(http, session) {
     if (session && typeof session.ensureBrowsePortal === "function") await session.ensureBrowsePortal();
     return http.post(path, body || {});
   }
+  async function ensuredPut(path, body) {
+    if (session && typeof session.ensureBrowsePortal === "function") await session.ensureBrowsePortal();
+    return http.put(path, body || {});
+  }
   return [
     {
       name: "open_pr",
       description:
-        "Open a spec PR in the tippani review portal — launches a VISIBLE " +
-        "browser window so the user watches the review — and load its comment " +
-        "threads and changed files. Call this FIRST, before any other tippani " +
-        "tool; every other tool operates on the PR opened here. Returns the " +
-        "open comment threads. This is the only supported way to review a spec " +
-        "PR; do not use the Azure DevOps MCP or git for PR review.",
+        "Open a spec PR in the tippani review portal and load its comment " +
+        "threads and changed files. The portal runs headless: this returns a " +
+        "`portalUrl` for the review — SHOW that URL to the user (a clickable " +
+        "link) or open it yourself in a code block so they can watch the " +
+        "review. This opens a specific PR for review; the PR-review reading and " +
+        "comment tools (list_threads, get_thread, get_spec, set_view, and the " +
+        "reply/resolve tools) act on the PR opened here, so open the PR before " +
+        "using them. It is not the only entry point: to browse first use " +
+        "list_prs / search_specs / search_work_items, and to read branch or " +
+        "local files use open_branch / open_branch_file / open_local_file " +
+        "(those launch the portal themselves). This is the only supported way " +
+        "to review a spec PR; do not use the Azure DevOps MCP or git for PR " +
+        "review. Call this with ONLY prId — the signed-in account supplies the " +
+        "org and project automatically. Do NOT pass org/project yourself: " +
+        "guessing them sends the portal to the wrong org and it fails to launch. " +
+        "Supply org/project ONLY if a previous open_pr call returned an error " +
+        "saying the org or project could not be determined.",
       inputSchema: {
         prId: z.number().describe("Azure DevOps pull request id"),
         org: z.string().optional().describe(
-          "ADO org URL, e.g. https://dev.azure.com/myorg (falls back to saved config)"),
+          "Do NOT set this normally — the signed-in account supplies the org. " +
+          "Only pass it (e.g. https://dev.azure.com/myorg) if a previous open_pr " +
+          "call failed because the org could not be determined."),
         project: z.string().optional().describe(
-          "ADO project name (falls back to saved config)"),
+          "Do NOT set this normally — the signed-in account supplies the project. " +
+          "Only pass it if a previous open_pr call failed because the project " +
+          "could not be determined."),
         repo: z.string().optional().describe(
           "ADO repo name (optional; auto-detected from the PR)"),
         refresh: z.boolean().optional().describe(
           "Force re-fetch from ADO, ignoring any cache"),
+        headless: z.boolean().optional().describe(
+          "Default true: the portal is not opened on the host — you get the " +
+          "portalUrl back to show or open yourself. Set false ONLY if the user " +
+          "wants tippani to pop the portal in their OS default browser."),
       },
-      handler: async ({ prId, org, project, repo, refresh }) => {
+      handler: async ({ prId, org, project, repo, refresh, headless }) => {
         if (!session || typeof session.ensurePortal !== "function") {
           throw new Error("Portal launcher unavailable in this context.");
         }
-        const bind = await session.ensurePortal({ prId, org, project, repo, refresh });
+        const bind = await session.ensurePortal({ prId, org, project, repo, refresh, headless });
         const data = await http.get("/api/v1/threads");
         const threads = (data && data.threads) || [];
         const openThreads = threads.filter((t) => !t.resolved);
+        const isHeadless = headless !== false;
         return {
           prId: Number(prId),
           portalUrl: bind && bind.url,
+          headless: isHeadless,
+          note: isHeadless
+            ? "The review portal is running HEADLESS in the background — it is NOT open on the " +
+              "user's screen and you did NOT open it. Do not say it is 'open in the portal', " +
+              "'opened', or that a window/browser is up. Give the user the portalUrl as a " +
+              "clickable link so they can open it themselves if they want to watch, e.g. \"PR #" +
+              Number(prId) + " is loaded and ready in Tippani (running in the background) — open " +
+              "it to review: " + (bind && bind.url) + "\"."
+            : "Opened the portal in the user's default browser; you may also share the portalUrl.",
           openThreadCount: openThreads.length,
           threads,
         };
@@ -131,7 +165,7 @@ export function buildTools(http, session) {
         "needs-your-reply / awaiting-reviewer / viewed / for-your-information / resolved, " +
         "plus a per-thread list (anchor, category, gist). Use right after show_feedback to " +
         "give the user a brief spoken summary (e.g. 'X resolved, Y need your reply, Z can be " +
-        "ignored') and offer to mark the ignorable (FYI) threads as viewed via mark_viewed.",
+        "ignored') and help the user decide which threads need staged replies or resolutions.",
       inputSchema: {},
       handler: () => http.get("/api/v1/triage"),
     },
@@ -167,7 +201,7 @@ export function buildTools(http, session) {
         "Switch the spec reading view the user sees for a file: 'current' (the " +
         "committed text), 'diff' (proposed changes overlaid), or 'proposed' (the " +
         "proposed draft rendered clean). The browser view NEVER auto-flips when " +
-        "you stage an edit \u2014 call this after edit_spec / stage_spec_edit so the " +
+        "you stage an edit — call this after edit_spec so the " +
         "user actually sees the change. Optionally pass fileIndex to navigate to " +
         "that file first.",
       inputSchema: {
@@ -255,50 +289,14 @@ export function buildTools(http, session) {
       handler: ({ threadId }) => http.delete(`/api/v1/threads/${threadId}/draft`),
     },
     {
-      name: "post_reply",
-      description:
-        "Post a reply to ADO directly (bypasses staging). Use only when the user " +
-        "has explicitly approved a reply via this tool's caller. Returns 409 if " +
-        "another reply is already in flight for the same thread.",
-      inputSchema: {
-        threadId: z.number(),
-        content: z.string().describe("Reply body to post to ADO"),
-      },
-      handler: ({ threadId, content }) =>
-        http.post(`/api/v1/threads/${threadId}/reply`, { content }),
-    },
-    {
-      name: "resolve_thread",
-      description: "Mark a comment thread resolved in ADO.",
-      inputSchema: { threadId: z.number() },
-      handler: ({ threadId }) =>
-        http.post(`/api/v1/threads/${threadId}/resolve`, {}),
-    },
-    {
       name: "stage_resolve_thread",
       description:
         "Stage a thread resolution LOCALLY without pushing to ADO — it shows as resolved " +
-        "(pending) in the portal and is pushed only at Finalize. Use this (not resolve_thread) " +
+        "(pending) in the portal and is pushed only with push_staged_changes. " +
         "during review so resolves stay local and undoable until the user finalizes.",
       inputSchema: { threadId: z.number() },
       handler: ({ threadId }) =>
         http.post(`/api/v1/threads/${threadId}/stage-resolve`, {}),
-    },
-    {
-      name: "mark_viewed",
-      description:
-        "Mark a comment thread as viewed/acknowledged WITHOUT resolving it: it drops out " +
-        "of the \"needs your reply\" triage but stays open in ADO, and resurfaces if a newer " +
-        "comment is added. Durable (stored as an ADO thread property). Use for threads the " +
-        "user has read and intentionally left open. Pass clear=true to un-view.",
-      inputSchema: {
-        threadId: z.number(),
-        clear: z.boolean().optional().describe("Un-view the thread instead of marking it viewed"),
-      },
-      handler: ({ threadId, clear }) =>
-        clear
-          ? http.delete(`/api/v1/threads/${threadId}/viewed`)
-          : http.post(`/api/v1/threads/${threadId}/viewed`, {}),
     },
     {
       name: "get_spec",
@@ -310,29 +308,10 @@ export function buildTools(http, session) {
       handler: ({ fileIndex }) => http.get(`/api/v1/specs/${fileIndex}`),
     },
     {
-      name: "stage_spec_edit",
-      description:
-        "Stage a proposed whole-file edit for the user to review in tippani's " +
-        "editor before committing. The staged draft is review-only: the user sees " +
-        "your version as a diff and can load it into the editor to refine, then " +
-        "either commits their own version via Save or tells you to commit_spec with " +
-        "explicit content. You never commit without the user. Returns 409 if the " +
-        "user is currently editing that file (try again in ~10s).",
-      inputSchema: {
-        fileIndex: z.number().describe("0-based index into the PR's changed files"),
-        content: z.string().describe("Full proposed markdown for the file"),
-        source: z.string().optional().describe("Free-form attribution e.g. model name"),
-      },
-      handler: ({ fileIndex, content, source }) =>
-        http.put(`/api/v1/specs/${fileIndex}/draft`, { content, source }),
-    },
-    {
       name: "get_spec_draft",
       description:
-        "Read the current staged spec proposal for a file (the version you staged " +
-        "via stage_spec_edit). Review-only — it does not reflect unsaved edits the " +
-        "user is making in the portal editor. To commit, pass explicit content to " +
-        "commit_spec.",
+        "Read the current staged spec proposal for a PR file. Review-only — it " +
+        "does not reflect unsaved edits the user is making in the portal editor.",
       inputSchema: { fileIndex: z.number() },
       handler: ({ fileIndex }) => http.get(`/api/v1/specs/${fileIndex}/draft`),
     },
@@ -343,33 +322,18 @@ export function buildTools(http, session) {
       handler: ({ fileIndex }) => http.delete(`/api/v1/specs/${fileIndex}/draft`),
     },
     {
-      name: "commit_spec",
-      description:
-        "Commit a spec file to the PR's source branch. You must pass the full " +
-        "content to commit — the staged draft is review-only and is never committed " +
-        "implicitly (this prevents a stale proposal from overwriting the user's " +
-        "saved edits). Use only after the user approves. Returns 409 if the branch " +
-        "moved since load (reload and retry).",
-      inputSchema: {
-        fileIndex: z.number(),
-        content: z.string().describe("Full markdown to commit (required)"),
-        message: z.string().optional().describe("Commit message"),
-      },
-      handler: ({ fileIndex, content, message }) =>
-        http.post(`/api/v1/specs/${fileIndex}/commit`, { content, message }),
-    },
-    {
       name: "edit_spec",
       description:
         "Make surgical edits to one spec file without resending the whole body. " +
         "Applies one or more anchored edits and STAGES the result as a review-only " +
-        "draft (like stage_spec_edit \u2014 it never commits; use commit_spec to commit). " +
+        "draft. It never commits; publish staged work only through " +
+        "push_staged_changes. " +
         "Edits apply to the file's current staged draft if one exists, else the " +
         "committed body, so successive calls accumulate. All edits in a call are " +
         "atomic: if any can't be located, its guard doesn't match, or two overlap, " +
         "nothing is staged. After staging, call set_view('diff') or set_view('current') " +
         "so the user sees the change \u2014 the browser view does not auto-flip. Prefer " +
-        "this over stage_spec_edit for anything short of a full rewrite.",
+        "this for PR-bound surgical edits.",
       inputSchema: {
         fileIndex: z.number().describe("0-based index into the PR's changed files"),
         edits: z.array(z.object({
@@ -512,10 +476,10 @@ export function buildTools(http, session) {
     // selected comment, so most take no coordinates. Navigation/jump/visibility
     // steer the open page (it polls ~1.2s).
     {
-      name: "read_personal_comments",
+      name: "read_annotations",
       description:
-        "Read ALL personal comments on the spec file the user currently has open " +
-        "in the reviewing page (opened from a branch). Returns every comment " +
+        "Read ALL annotations on the spec file the user currently has open " +
+        "in the reviewing page (opened from a branch). Returns every annotation " +
         "(id, anchor line, author, text, resolved) plus which one is selected. " +
         "Read-only. Optionally target a specific file with repo+branch+path.",
       inputSchema: {
@@ -531,48 +495,48 @@ export function buildTools(http, session) {
       },
     },
     {
-      name: "add_personal_comment",
+      name: "add_annotation",
       description:
-        "Add a personal comment to the open spec file, anchored to a source line " +
+        "Add an annotation to the open spec file, anchored to a source line " +
         "(get_spec resolves headings/sections to lines). Saves immediately and " +
-        "selects the new comment in the open page.",
+        "selects the new annotation in the open page.",
       inputSchema: {
-        content: z.string().describe("Comment text (markdown allowed)"),
+        content: z.string().describe("Annotation text (markdown allowed)"),
         line: z.number().int().positive().optional().describe("1-based source line to anchor to"),
         repo: z.string().optional(), branch: z.string().optional(), path: z.string().optional(),
       },
       handler: (args) => ensuredPost("/api/v1/personal-comments/mcp/add", args),
     },
     {
-      name: "edit_personal_comment",
+      name: "edit_annotation",
       description:
-        "Edit a personal comment's text. Defaults to the SELECTED comment; pass " +
-        "id to target a specific one. Emptying the text keeps an empty comment " +
+        "Edit an annotation's text. Defaults to the SELECTED annotation; pass " +
+        "id to target a specific one. Emptying the text keeps an empty annotation " +
         "(use delete to remove).",
       inputSchema: {
-        content: z.string().describe("New comment text"),
-        id: z.string().optional().describe("Comment id (defaults to the selected comment)"),
+        content: z.string().describe("New annotation text"),
+        id: z.string().optional().describe("Annotation id (defaults to the selected annotation)"),
         repo: z.string().optional(), branch: z.string().optional(), path: z.string().optional(),
       },
       handler: (args) => ensuredPost("/api/v1/personal-comments/mcp/edit", args),
     },
     {
-      name: "delete_personal_comment",
+      name: "delete_annotation",
       description:
-        "Delete a personal comment. Defaults to the SELECTED comment; pass id to " +
+        "Delete an annotation. Defaults to the SELECTED annotation; pass id to " +
         "target a specific one.",
-      inputSchema: { id: z.string().optional().describe("Comment id (defaults to the selected comment)"), repo: z.string().optional(), branch: z.string().optional(), path: z.string().optional() },
+      inputSchema: { id: z.string().optional().describe("Annotation id (defaults to the selected annotation)"), repo: z.string().optional(), branch: z.string().optional(), path: z.string().optional() },
       handler: (args) => ensuredPost("/api/v1/personal-comments/mcp/delete", args),
     },
     {
-      name: "reply_personal_comment",
+      name: "reply_annotation",
       description:
-        "Post a reply on a personal comment — a follow-up note recorded under the " +
-        "comment (e.g. how you addressed the feedback). Defaults to the SELECTED " +
-        "comment; pass id to target a specific one. Reflects live in the open page.",
+        "Post a reply on an annotation — a follow-up note recorded under the " +
+        "annotation (e.g. how you addressed the feedback). Defaults to the SELECTED " +
+        "annotation; pass id to target a specific one. Reflects live in the open page.",
       inputSchema: {
-        content: z.string().describe("The reply text (Markdown), e.g. what you changed to address the comment"),
-        id: z.string().optional().describe("Comment id (defaults to the selected comment)"),
+        content: z.string().describe("The reply text (Markdown), e.g. what you changed to address the annotation"),
+        id: z.string().optional().describe("Annotation id (defaults to the selected annotation)"),
         repo: z.string().optional(), branch: z.string().optional(), path: z.string().optional(),
       },
       handler: async (args) => {
@@ -581,17 +545,17 @@ export function buildTools(http, session) {
       },
     },
     {
-      name: "resolve_personal_comment",
+      name: "resolve_annotation",
       description:
-        "Mark a personal comment resolved (or reopen it with resolved=false). " +
-        "Defaults to the SELECTED comment; pass id to target a specific one. When " +
+        "Mark an annotation resolved (or reopen it with resolved=false). " +
+        "Defaults to the SELECTED annotation; pass id to target a specific one. When " +
         "resolving after addressing feedback, pass `note` with a short summary of " +
-        "what you changed — it's posted as a reply on the comment BEFORE resolving, " +
+        "what you changed — it's posted as a reply on the annotation BEFORE resolving, " +
         "so the reviewer sees how it was handled (don't just silently resolve).",
       inputSchema: {
-        id: z.string().optional().describe("Comment id (defaults to the selected comment)"),
+        id: z.string().optional().describe("Annotation id (defaults to the selected annotation)"),
         resolved: z.boolean().optional().describe("true = resolve (default), false = reopen"),
-        note: z.string().optional().describe("Short summary of how you addressed the comment; posted as a reply before resolving"),
+        note: z.string().optional().describe("Short summary of how you addressed the annotation; posted as a reply before resolving"),
         repo: z.string().optional(), branch: z.string().optional(), path: z.string().optional(),
       },
       handler: async (args) => {
@@ -600,46 +564,46 @@ export function buildTools(http, session) {
       },
     },
     {
-      name: "delete_resolved_personal_comments",
+      name: "delete_resolved_annotations",
       description:
-        "Delete ALL resolved personal comments on the open spec file. Returns how " +
+        "Delete ALL resolved annotations on the open spec file. Returns how " +
         "many were removed. Reflects live in the open page.",
       inputSchema: {},
       handler: (args) => ensuredPost("/api/v1/personal-comments/mcp/delete-resolved", args || {}),
     },
     {
-      name: "delete_all_personal_comments",
+      name: "delete_all_annotations",
       description:
-        "Delete EVERY personal comment on the open spec file (resolved or not). " +
+        "Delete EVERY annotation on the open spec file (resolved or not). " +
         "Irreversible. Reflects live in the open page.",
       inputSchema: {},
       handler: (args) => ensuredPost("/api/v1/personal-comments/mcp/clear", args || {}),
     },
     {
-      name: "navigate_personal_comments",
+      name: "navigate_annotations",
       description:
-        "Move the selection to the next/previous personal comment (or first/last) " +
+        "Move the selection to the next/previous annotation (or first/last) " +
         "and scroll the open page to it. next/prev wrap around.",
       inputSchema: {
-        direction: z.enum(["next", "prev", "first", "last"]).describe("Which comment to select"),
+        direction: z.enum(["next", "prev", "first", "last"]).describe("Which annotation to select"),
       },
       handler: ({ direction }) => ensuredPost("/api/v1/personal-comments/mcp/nav", { direction }),
     },
     {
-      name: "jump_to_personal_comment",
+      name: "jump_to_annotation",
       description:
-        "Select and scroll the open page to a specific personal comment — by id, " +
+        "Select and scroll the open page to a specific annotation — by id, " +
         "or by the source line it's anchored to.",
       inputSchema: {
-        id: z.string().optional().describe("Comment id"),
+        id: z.string().optional().describe("Annotation id"),
         line: z.number().int().positive().optional().describe("Anchor line to jump to"),
       },
       handler: (args) => ensuredPost("/api/v1/personal-comments/mcp/jump", args),
     },
     {
-      name: "show_resolved_personal_comments",
+      name: "show_resolved_annotations",
       description:
-        "Hide or show resolved personal comments in the open reviewing page. " +
+        "Hide or show resolved annotations in the open reviewing page. " +
         "show=false hides resolved ones; show=true (default) shows them all.",
       inputSchema: { show: z.boolean().optional().describe("true = show resolved (default), false = hide") },
       handler: ({ show }) => ensuredPost("/api/v1/personal-comments/mcp/show-resolved", { show: show !== false }),
@@ -688,6 +652,24 @@ export function buildTools(http, session) {
       },
     },
     {
+      name: "open_local_file",
+      description:
+        "Open ONE arbitrary .md file read-only in the reviewing view by its " +
+        "absolute path on disk (no branch, no ADO), so the user can read it and " +
+        "the personal-comment tools have a target. The file must sit inside a " +
+        "folder the user has opened in Tippani (an approved root) — a path " +
+        "outside every approved root is rejected, never read. Read-only.",
+      inputSchema: {
+        path: z.string().describe("Absolute path to a .md file inside an approved root"),
+      },
+      handler: async (args) => {
+        if (session && typeof session.ensureBrowsePortal === "function") {
+          await session.ensureBrowsePortal();
+        }
+        return http.post("/api/v1/spec/open-file", args);
+      },
+    },
+    {
       name: "refresh_spec",
       description:
         "Refresh the spec file the user has open in the reviewing page — reloads " +
@@ -696,6 +678,86 @@ export function buildTools(http, session) {
         "after making a change the user asked for, to show them the result.",
       inputSchema: {},
       handler: (args) => ensuredPost("/api/v1/spec/refresh", args || {}),
+    },
+    // ---- Staged spec authoring tools -------------------------------------
+    {
+      name: "stage_branch",
+      description:
+        "Stage a branch creation in Tippani without creating anything in ADO. " +
+        "push_staged_changes creates it later. " + NEVER_RAW_RULE,
+      inputSchema: {
+        project: z.string().describe("ADO project name (required — the write target)"),
+        repo: z.string().describe("ADO repository id or name (required — the write target)"),
+        repoName: z.string().optional().describe("Repository display name"),
+        branch: z.string().describe("Branch name to stage, e.g. spec/my-feature"),
+        base: z.string().optional().describe("Base branch to fork from (defaults to main/master/develop/trunk)"),
+        org: z.string().describe("ADO org URL (required — the write target; config defaults are for PR review only, never a write)"),
+      },
+      handler: async (args) => {
+        const r = await ensuredPost("/api/v1/branches/stage", args);
+        return withHints("stage_branch", r, { repo: args.repo, branch: args.branch, path: null });
+      },
+    },
+    {
+      name: "stage_spec",
+      description:
+        "Stage a whole-file spec in the same aggregate store used by the portal. " +
+        "Set existing=true and pass the load-time branch tip when updating an " +
+        "existing file. Nothing is written to ADO until push_staged_changes. " + NEVER_RAW_RULE,
+      inputSchema: {
+        project: z.string().describe("ADO project name (required — the write target)"),
+        repo: z.string().describe("ADO repository id or name (required — the write target)"),
+        repoName: z.string().optional().describe("Repository display name"),
+        branch: z.string().describe("Branch to author on"),
+        path: z.string().describe("Spec file path within the repo, e.g. docs/spec.md"),
+        body: z.string().describe("Full markdown body of the spec"),
+        existing: z.boolean().optional().describe("True when updating an existing remote file"),
+        baseObjectId: z.string().optional().describe("Load-time branch tip; required for an existing file"),
+        org: z.string().describe("ADO org URL (required — the write target; config defaults are for PR review only, never a write)"),
+      },
+      handler: async ({ org, project, repo, repoName, branch, path, body, existing, baseObjectId }) => {
+        if (existing && !baseObjectId) throw new Error("baseObjectId is required when existing=true");
+        const target = { org, project, repo, repoName, branch, path };
+        const r = existing
+          ? await ensuredPost("/api/v1/files/edit", { ...target, content: body, baseObjectId })
+          : await ensuredPost("/api/v1/files/stage", target);
+        if (!existing && r && r.ok) await ensuredPost("/api/v1/files/content", { repo, branch, path, content: body });
+        return withHints("stage_spec", r, { repo, branch, path });
+      },
+    },
+    {
+      name: "stage_spec_pr",
+      description:
+        "Stage a pull-request intent without creating a PR or work item in ADO. " +
+        "push_staged_changes publishes it after its staged branch and files. " + NEVER_RAW_RULE,
+      inputSchema: {
+        project: z.string().describe("ADO project name (required — the write target)"),
+        repo: z.string().describe("ADO repository name (required — the write target)"),
+        title: z.string().describe("PR title (never inferred)"),
+        sourceBranch: z.string().describe("Branch to merge from"),
+        targetBranch: z.string().describe("Branch to merge into, e.g. main"),
+        description: z.string().optional().describe("PR description"),
+        isDraft: z.boolean().optional().describe("Open as a draft PR (default true)"),
+        workItemTitle: z.string().optional().describe("Spec review work item title to find or create"),
+        workItemType: z.string().optional().describe("Required when workItemTitle is set"),
+        org: z.string().describe("ADO org URL (required — the write target; config defaults are for PR review only, never a write)"),
+      },
+      handler: async (args) => {
+        const r = await ensuredPost("/api/v1/pr/stage", args);
+        return withHints("stage_spec_pr", r, { repo: args.repo, branch: args.sourceBranch, path: null });
+      },
+    },
+    {
+      name: "push_staged_changes",
+      description:
+        "Publish every currently staged branch, folder, file update, PR intent, " +
+        "reply, and resolution. This is the sole MCP authoring operation that " +
+        "writes staged changes to ADO; failures remain staged. " + NEVER_RAW_RULE,
+      inputSchema: {},
+      handler: async () => {
+        const r = await ensuredPost("/api/v1/branches/push", {});
+        return withHints("push_staged_changes", r, {});
+      },
     },
   ];
 }

@@ -8,6 +8,7 @@ import {
   personalCommentsKey,
   loadPersonalComments,
   savePersonalComments,
+  deletePersonalComments,
   migrateKey,
 } from "./personal-comments-store.js";
 
@@ -49,6 +50,14 @@ test("save is atomic — an existing store is never left half-written", () => {
   assert.equal(stray.length, 0, `stray temp files: ${stray.join(", ")}`);
   savePersonalComments(dir, R, B, F, [{ id: "1", content: "second" }]);
   assert.equal(loadPersonalComments(dir, R, B, F)[0].content, "second");
+});
+
+test("delete removes a store and absent delete is a no-op", () => {
+  const dir = tmpDir();
+  savePersonalComments(dir, R, B, F, [{ id: "1", content: "discard me" }]);
+  assert.equal(deletePersonalComments(dir, R, B, F), true);
+  assert.deepEqual(loadPersonalComments(dir, R, B, F), []);
+  assert.equal(deletePersonalComments(dir, R, B, F), false);
 });
 
 test("corrupt store is quarantined (not zeroed) and throws", () => {

@@ -2,15 +2,50 @@
 
 ## 1.7.0 (unreleased)
 
-The release that makes Tippani a place you can *start* — not just a viewer you
-hand a PR id to. Discovery turns the portal into a home screen; specs render
-their visuals; a branch or a local clone becomes a first-class review surface
-with private annotations; and the front door finally opens without an account.
+The release that makes Tippani a place you can *start* — and now *write* — not
+just a viewer you hand a PR id to. Discovery turns the portal into a home screen;
+specs render their visuals; a branch or a local clone becomes a first-class
+review surface with private annotations; you can author a whole spec and open its
+PR without a working tree; and the front door finally opens without an account.
 
 Covers [#68](https://github.com/mavaali/tippani/pull/68),
 [#69](https://github.com/mavaali/tippani/pull/69),
-[#70](https://github.com/mavaali/tippani/pull/70), and
+[#70](https://github.com/mavaali/tippani/pull/70),
+[#71](https://github.com/mavaali/tippani/pull/71), and
 [#72](https://github.com/mavaali/tippani/pull/72).
+
+### Added — write specs, not just review them ([#71](https://github.com/mavaali/tippani/pull/71))
+End-to-end **remote authoring with no working tree**: stage a branch, add or edit
+`.md` files, stage a PR (optionally linked to a Spec-review work item), and
+publish the whole set with one `push_staged_changes`. Clickstop 1 made a branch a
+first-class *review* surface but kept a single writer — the agent made every file
+change with its own tools. This closes that gap: the agent (or a person) can
+create and edit specs and open the PR **through Tippani itself**, with no clone
+and no half-finished commits scattered across the host.
+
+- **One publication boundary.** Replies, resolutions, file adds and edits, PR
+  intents, and draft→published promotions are all staged locally; a single
+  **Push to remote** crosses into Azure DevOps. A partial authoring session
+  leaves nothing on the remote, and a branch that moved underneath you is caught
+  before it overwrites newer work. Staged PR cards can be deleted before
+  publishing.
+- **Authoring tools** — `stage_branch` → `stage_spec` → `stage_spec_pr` →
+  `push_staged_changes`, with a shared staged-changes ticker refreshed from both
+  Branches and the Review queue.
+- **A personal Reading list** joins Specs, Review queue, Work items, and Branches
+  on the Discovery home.
+- **"Personal comments" are now "Annotations"** — renamed across the UI, the MCP
+  tools (`add_annotation`, `read_annotations`, `resolve_annotation`, …), and the
+  docs. Fittingly, *tippani* itself means "annotation".
+- **Links behave sensibly.** A link inside a rendered spec opens a Markdown file
+  under the current file's root folder **in Tippani**; everything else — external
+  URLs, non-Markdown files, files outside that root — opens in your OS browser.
+  Relative doc links like `docs/x.md` no longer 404. Only links in rendered
+  content are intercepted; breadcrumbs, the contents rail, and in-page anchors
+  are unaffected.
+- **Docs** — a rewritten [README](README.md) (User Manual + hub), a full
+  [User Guide](docs/user-guide.md) with screenshots of every screen, and a
+  complete [MCP & API Reference](docs/mcp-api.md).
 
 ### Added — try it with no setup ([#72](https://github.com/mavaali/tippani/pull/72))
 - **`npx tippani --demo`** opens the portal on a sample spec with sample comment
@@ -151,10 +186,13 @@ no-op. It now records the signed-in user's vote via `createPullRequestReviewer`.
   local mode; comment-tool grammar fixed.
 
 ### Documentation
-- README advertised **19 MCP tools**; there are **40**. Documented the missing
-  groups: discovery, local review, and annotations.
-- README said the MCP shim "will refuse to start" without an access token. It
-  boots in local-only mode; a token is only needed for the host tools.
+- The docs are rewritten wholesale in [#71](https://github.com/mavaali/tippani/pull/71)
+  (README as User Manual + hub, plus a User Guide and an MCP & API Reference).
+  Two factual corrections carried into that rewrite: the README advertised
+  **19 MCP tools** when there are **40** (the discovery, local-review, and
+  annotation groups were undocumented), and it claimed the MCP shim "will refuse
+  to start" without an access token — it boots in local-only mode, and a token is
+  needed only for the host tools.
 
 ### Internal
 - **CI.** `.github/workflows/ci.yml` runs the full suite on Node 20/22/24 for

@@ -11,7 +11,7 @@ export function registerControlApi(app, deps) {
   const {
     port,
     sessionToken,
-    setAdoToken,        // (token) => bool — swap the live ADO bearer (Coforce token push, optional)
+    setAdoToken,        // (token) => bool — swap the live ADO bearer (host token push, optional)
     focus,
     drafts,
     locks,
@@ -27,6 +27,7 @@ export function registerControlApi(app, deps) {
     specLocks,          // lock store keyed by fileIndex (optional)
     commitSpec,         // async (fileIndex, content, message) => {ok, status, body}
     specDiff,           // async (fileIndex) => {hunks, source?, updatedAt?} (optional)
+    specPreview,        // async (fileIndex, {original, proposed}) => {html, hunks, source} (optional) — live-buffer preview
     renderDraft,        // async (fileIndex, {draft}) => {html} (optional) — item 3 Current view
     listPrs,            // async (query) => {prs, ...} (optional) — item 6 list PRs
     searchWorkItems,    // async ({project, wiql}) => {workItems, ...} (optional) — Discovery WIQL search
@@ -36,15 +37,27 @@ export function registerControlApi(app, deps) {
     openLocalRepo,      // async ({path}) => {ok, path, branch} (optional) — Discovery local-repo tile
     listLocalBranches,  // async ({path}) => {ok, path, branches} (optional) — Discovery Branches tab (Local)
     pickLocalFolder,    // async () => {ok, path, branch} | {canceled} (optional) — native folder dialog
+    pickLocalMdFile,    // async () => {ok, path} | {canceled} (optional) — native .md file dialog (Custom list Browse)
+    resolveOpenFile,    // ({path}) => {ok, realpath} | {ok:false, reason, error} (optional) — clickstop 2 Open file
+    customFilesList,    // () => [{path, dir, name, addedAt, openHref}] (optional) — Custom-list tab tiles
+    customFileAdd,      // ({path}) => {ok, files} | {ok:false, reason, error} (optional) — add a .md, approve its folder
+    customFileRemove,   // ({path}) => {ok, files} (optional) — remove a .md, revoke its folder if it was the last
+    remoteSpecDrafts,   // durable staged-draft store keyed by (repo,branch,path) (optional) — clickstop 2 remote authoring
+    remoteSpecLocks,    // lock store keyed by (repo,branch,path) (optional) — two-writer 409 guard
+    pushRemoteSpec,     // async ({repo,branch,message,oldObjectId}) => {ok,status,body} (optional) — one-commit push of all staged files
+    openPr,             // async ({title,description,sourceBranch,targetBranch,isDraft,workItemTitle,workItemType,...}) => {ok,...} (optional) — clickstop 2 open PR + link work item
     listPersonalComments,   // async ({repo, branch, path}) => {ok, comments} (optional) — Personal Comments
     createPersonalComment,  // async ({repo, branch, path, line, content}) => {ok, comment} (optional)
     editPersonalComment,    // async ({repo, branch, path, id, content}) => {ok, comment|deleted} (optional)
     deletePersonalComment,  // async ({repo, branch, path, id}) => {ok, id} (optional)
     resolvePersonalComment, // async ({repo, branch, path, id, resolved}) => {ok, comment} (optional)
+    replyPersonalComment,   // async ({repo, branch, path, id, content}) => {ok, comment} (optional)
     mcpReadPersonalComments, mcpAddPersonalComment, mcpEditPersonalComment, mcpDeletePersonalComment,
     mcpResolvePersonalComment, mcpReplyPersonalComment, mcpDeleteResolvedPersonalComments, mcpClearPersonalComments,
     mcpNavPersonalComment, mcpJumpPersonalComment, mcpSetPcResolvedVisibility, // MCP personal-comment ops
-    mcpRefreshSpec, mcpOpenBranch, mcpOpenBranchFile, // MCP: refresh + open review surface
+    mcpRefreshSpec, mcpOpenBranch, mcpOpenBranchFile, mcpOpenFile, // MCP: refresh + open review surface
+    mcpCreateBranch, // MCP: create/adopt a branch for remote authoring (clickstop 2)
+    stageBranch, listStagedBranches, pushStagedBranches, stageSpecPr, unstageBranch, unstageSpecPr, stagePrPublish, unstagePrPublish, stageFile, unstageFile, updateStagedFileContent, listBranchFolders, createStagedFolder, deleteStagedFolder, renameStagedFolder, renderMarkdown, saveExistingEdit, // clickstop 2: staged (pre-push) branches
   } = deps;
 
   const ALLOWED_ORIGINS = new Set([
@@ -225,7 +238,7 @@ export function registerControlApi(app, deps) {
     catch (e) { res.status(400).json({ error: String(e?.message || e) }); }
   });
 
-  // POST /api/v1/ado-token { token } — Coforce pushes a freshly-minted ADO
+  // POST /api/v1/ado-token { token } — the host pushes a freshly-minted ADO
   // bearer here before the old one expires, so a long-lived portal never makes
   // ADO calls with a stale token. Swaps the connection in place. The token is
   // never echoed back.
@@ -240,6 +253,95 @@ export function registerControlApi(app, deps) {
     const ok = setAdoToken(token);
     if (!ok) return res.status(400).json({ error: "token rejected" });
     res.json({ ok: true });
+  });
+
+  // ---- Remote (pre-PR) spec authoring (clickstop 2, step 11) ----
+  // A whole-file markdown draft is STAGED durably keyed by (project,repo,branch,
+  // path), then PUSHED as one commit for the branch against the EXPLICIT
+  // (org?,project,repo) coordinates — never a configured default. Distinct from
+  // the PR-bound fileIndex draft path below. Registered BEFORE the
+  // `/specs/:fileIndex` param routes so the literal `/specs/draft` path isn't
+  // captured as fileIndex="draft".
+  function remoteKey(project, repo, branch, filePath) { return `${project}\n${repo}\n${branch}\n${filePath}`; }
+
+  app.get("/api/v1/specs/draft", requireAuth(), (req, res) => {
+    if (!remoteSpecDrafts) return res.status(501).json({ error: "remote spec drafts not wired" });
+    const { project, repo, branch, path: filePath } = req.query || {};
+    if (!project || !repo || !branch || !filePath) return res.status(400).json({ error: "project, repo, branch, path required" });
+    const d = remoteSpecDrafts.get(remoteKey(project, repo, branch, filePath));
+    res.json({ ok: true, draft: d || null });
+  });
+
+  app.put("/api/v1/specs/draft", requireAuth({ mutation: true }), (req, res) => {
+    if (!remoteSpecDrafts) return res.status(501).json({ error: "remote spec drafts not wired" });
+    const { org, project, repo, branch, path: filePath, body, baseObjectId, source } = req.body || {};
+    if (!project || !repo || !branch || !filePath) return res.status(400).json({ error: "project, repo, branch, path required" });
+    if (typeof body !== "string") return res.status(400).json({ error: "body (string) required" });
+    const key = remoteKey(project, repo, branch, filePath);
+    // Two-writer guard: while the user holds this file open in the editor, an
+    // agent stage collides into a 409 (not a silent overwrite). The user's own
+    // mirror writes bypass the lock, exactly like the fileIndex draft path.
+    if (remoteSpecLocks && remoteSpecLocks.isLocked(key) && source !== "user-mirror") {
+      return res.status(409).json({ error: "user is editing this file", retryAfterMs: 10_000 });
+    }
+    // The durable store THROWS on a write failure; surface {ok:false} rather
+    // than telling the agent a stage succeeded when it didn't.
+    try {
+      const d = remoteSpecDrafts.put(key, { org: org || null, project, repo, branch, path: filePath, body, baseObjectId: baseObjectId || null }, { source: source || "external" });
+      res.json({ ok: true, key, draft: d, version: focus.get().version });
+    } catch (e) {
+      res.status(500).json({ ok: false, error: "failed to stage draft: " + (e?.message || e) });
+    }
+  });
+
+  app.delete("/api/v1/specs/draft", requireAuth({ mutation: true }), (req, res) => {
+    if (!remoteSpecDrafts) return res.status(501).json({ error: "remote spec drafts not wired" });
+    const { project, repo, branch, path: filePath } = req.body || {};
+    if (!project || !repo || !branch || !filePath) return res.status(400).json({ error: "project, repo, branch, path required" });
+    const had = remoteSpecDrafts.delete(remoteKey(project, repo, branch, filePath));
+    res.json({ ok: true, removed: had, version: focus.get().version });
+  });
+
+  app.post("/api/v1/specs/draft/lock", requireAuth({ mutation: true }), (req, res) => {
+    if (!remoteSpecLocks) return res.status(501).json({ error: "remote spec locks not wired" });
+    const { project, repo, branch, path: filePath } = req.body || {};
+    if (!project || !repo || !branch || !filePath) return res.status(400).json({ error: "project, repo, branch, path required" });
+    const exp = remoteSpecLocks.touch(remoteKey(project, repo, branch, filePath));
+    res.json({ ok: true, expiresAt: exp });
+  });
+
+  // Push EVERY staged draft for (project,repo,branch) as ONE commit
+  // (all-or-nothing — buildPushChangeSet emits a single createPush) against the
+  // EXPLICIT (org?,project,repo) coordinates. The push dep enforces optimistic
+  // concurrency: a stale oldObjectId (someone else moved the branch) comes back
+  // 409, not a lost write.
+  app.post("/api/v1/specs/draft/push", requireAuth({ mutation: true }), async (req, res) => {
+    if (typeof pushRemoteSpec !== "function") return res.status(501).json({ error: "remote push not wired" });
+    const { org, project, repo, branch, message, oldObjectId } = req.body || {};
+    if (!project || !repo || !branch) return res.status(400).json({ error: "project, repo, branch required" });
+    try {
+      const r = await pushRemoteSpec({ org, project, repo, branch, message, oldObjectId });
+      res.status(r.status || (r.ok ? 200 : 500)).json(r.body ?? r);
+    } catch (e) {
+      res.status(502).json({ ok: false, error: String(e?.message || e) });
+    }
+  });
+
+  // Open a PR for the authored branch and find-or-create-and-link a Spec review
+  // work item (clickstop 2, step 12). Title/type come from the caller — Tippani
+  // never infers them; a missing title/type is a 400, not a guess.
+  app.post("/api/v1/pr/open", requireAuth({ mutation: true }), async (req, res) => {
+    if (typeof openPr !== "function") return res.status(501).json({ error: "open PR not wired" });
+    const { project, repo, title, sourceBranch, targetBranch, workItemTitle, workItemType } = req.body || {};
+    if (!project || !repo) return res.status(400).json({ error: "project, repo required (Tippani never guesses the repo)" });
+    if (!title || !sourceBranch || !targetBranch) return res.status(400).json({ error: "title, sourceBranch, targetBranch required" });
+    if (workItemTitle && !workItemType) return res.status(400).json({ error: "workItemType required when workItemTitle is set (never inferred)" });
+    try {
+      const r = await openPr(req.body);
+      res.status(r.ok === false ? 502 : 200).json(r);
+    } catch (e) {
+      res.status(502).json({ ok: false, error: String(e?.message || e) });
+    }
   });
 
   app.get("/api/v1/specs/:fileIndex", requireAuth(), async (req, res) => {
@@ -282,6 +384,32 @@ export function registerControlApi(app, deps) {
     if (idx === null) return res.json({ hunks: [] });
     try {
       res.json(await specDiff(idx));
+    } catch (e) {
+      res.status(500).json({ error: String(e?.message || e) });
+    }
+  });
+
+  // Stateless preview of the user's live (uncommitted) editor buffer: render it
+  // clean (Proposed) + diff it against the client-supplied committed baseline
+  // (Diff). No draft-store side effects — keeps personal edits separate from the
+  // agent's staged proposal. requireAuth() (same-origin browser passes).
+  app.post("/api/v1/specs/:fileIndex/preview", requireAuth(), async (req, res) => {
+    if (typeof specPreview !== "function") return res.status(501).json({ error: "spec preview not wired" });
+    const idx = validSpecIndex(req.params.fileIndex);
+    if (idx === null) return res.status(404).json({ error: "file index out of range" });
+    try {
+      const { original, proposed } = req.body || {};
+      res.json(await specPreview(idx, { original, proposed }));
+    } catch (e) {
+      res.status(500).json({ error: String(e?.message || e) });
+    }
+  });
+
+  app.post("/api/v1/spec-preview", requireAuth(), async (req, res) => {
+    if (typeof specPreview !== "function") return res.status(501).json({ error: "spec preview not wired" });
+    try {
+      const { original, proposed } = req.body || {};
+      res.json(await specPreview(0, { original, proposed }));
     } catch (e) {
       res.status(500).json({ error: String(e?.message || e) });
     }
@@ -488,6 +616,68 @@ export function registerControlApi(app, deps) {
     }
   });
 
+  // Custom-list Browse: pop a native OS .md file dialog and return the chosen
+  // absolute path (the browser file picker hides the real path the store needs).
+  // Validation happens on Add; this only returns the path. same-origin or bearer.
+  app.post("/api/v1/pick-md-file", requireAuth({ mutation: true }), async (_req, res) => {
+    if (typeof pickLocalMdFile !== "function") return res.status(501).json({ error: "file picker not wired" });
+    try {
+      res.json(await pickLocalMdFile());
+    } catch (e) {
+      res.status(502).json({ ok: false, error: String(e?.message || e) });
+    }
+  });
+
+  // Clickstop 2 (Open file tab): resolve a caller-typed path to a one-off .md.
+  // Returns the classification { ok, realpath } or { ok:false, reason, error } so
+  // the box renders a clickable card or an inline error. resolveOpenFile enforces
+  // the approved-root containment (a path is never read outside an approved root).
+  // same-origin (browser) or bearer (MCP). Missing handler -> 501.
+  app.post("/api/v1/open-file", requireAuth({ mutation: true }), async (req, res) => {
+    if (typeof resolveOpenFile !== "function") return res.status(501).json({ error: "open file not wired" });
+    try {
+      const { path: filePath } = req.body || {};
+      res.json(await resolveOpenFile({ path: filePath }));
+    } catch (e) {
+      res.status(502).json({ error: String(e?.message || e) });
+    }
+  });
+
+  // Clickstop 2 (Custom-list tab): a durable, user-curated list of one-off .md
+  // files. GET returns the current tiles; POST adds a file (validating it's a
+  // readable .md, then approving its folder); DELETE removes one (revoking its
+  // folder if it was the last file there). All three sit behind requireAuth +
+  // the Host allow-list; mutations also require the same-origin/bearer check.
+  app.get("/api/v1/custom-files", requireAuth(), (_req, res) => {
+    if (typeof customFilesList !== "function") return res.status(501).json({ error: "custom files not wired" });
+    try {
+      res.json({ ok: true, files: customFilesList() });
+    } catch (e) {
+      res.status(502).json({ ok: false, error: String(e?.message || e) });
+    }
+  });
+
+  app.post("/api/v1/custom-files", requireAuth({ mutation: true }), (req, res) => {
+    if (typeof customFileAdd !== "function") return res.status(501).json({ error: "custom files not wired" });
+    try {
+      const { path: filePath } = req.body || {};
+      const result = customFileAdd({ path: filePath });
+      res.status(result && result.ok ? 200 : 400).json(result);
+    } catch (e) {
+      res.status(502).json({ ok: false, error: String(e?.message || e) });
+    }
+  });
+
+  app.delete("/api/v1/custom-files", requireAuth({ mutation: true }), (req, res) => {
+    if (typeof customFileRemove !== "function") return res.status(501).json({ error: "custom files not wired" });
+    try {
+      const { path: filePath } = req.body || {};
+      res.json(customFileRemove({ path: filePath }));
+    } catch (e) {
+      res.status(502).json({ ok: false, error: String(e?.message || e) });
+    }
+  });
+
   // Personal Comments (read-only spec page, file-reviewing mode): a spec author's
   // own notes on a draft file, scoped to (repo, branch, path). GET reads; POST
   // creates; PUT edits (empty content deletes); DELETE removes. same-origin
@@ -505,8 +695,8 @@ export function registerControlApi(app, deps) {
   app.post("/api/v1/personal-comments", requireAuth({ mutation: true }), async (req, res) => {
     if (typeof createPersonalComment !== "function") return res.status(501).json({ error: "personal comments not wired" });
     try {
-      const { repo, branch, path: filePath, line, content } = req.body || {};
-      const result = await createPersonalComment({ repo, branch, path: filePath, line, content });
+      const { repo, branch, path: filePath, line, editLine, content } = req.body || {};
+      const result = await createPersonalComment({ repo, branch, path: filePath, line, editLine, content });
       res.status(result.ok ? 200 : 400).json(result);
     } catch (e) {
       res.status(502).json({ error: String(e?.message || e) });
@@ -529,6 +719,17 @@ export function registerControlApi(app, deps) {
     try {
       const src = { ...(req.query || {}), ...(req.body || {}) };
       const result = await deletePersonalComment({ repo: src.repo, branch: src.branch, path: src.path, id: String(req.params.id) });
+      res.status(result.ok ? 200 : 400).json(result);
+    } catch (e) {
+      res.status(502).json({ error: String(e?.message || e) });
+    }
+  });
+
+  app.post("/api/v1/personal-comments/:id/reply", requireAuth({ mutation: true }), async (req, res) => {
+    if (typeof replyPersonalComment !== "function") return res.status(501).json({ error: "personal comment replies not wired" });
+    try {
+      const { repo, branch, path: filePath, content } = req.body || {};
+      const result = await replyPersonalComment({ repo, branch, path: filePath, id: String(req.params.id), content });
       res.status(result.ok ? 200 : 400).json(result);
     } catch (e) {
       res.status(502).json({ error: String(e?.message || e) });
@@ -573,6 +774,79 @@ export function registerControlApi(app, deps) {
   app.post("/api/v1/spec/refresh", requireAuth({ mutation: true }), mcpAc(mcpRefreshSpec, "refresh spec"));
   app.post("/api/v1/spec/open-branch", requireAuth({ mutation: true }), mcpAc(mcpOpenBranch, "open branch"));
   app.post("/api/v1/spec/open-branch-file", requireAuth({ mutation: true }), mcpAc(mcpOpenBranchFile, "open branch file"));
+  app.post("/api/v1/spec/open-file", requireAuth({ mutation: true }), mcpAc(mcpOpenFile, "open file"));
+  app.post("/api/v1/spec/create-branch", requireAuth({ mutation: true }), mcpAc(mcpCreateBranch, "create branch"));
+
+  // Clickstop 2: staged branches — held in memory, created in ADO only on push.
+  app.post("/api/v1/branches/stage", requireAuth({ mutation: true }), (req, res) => {
+    if (typeof stageBranch !== "function") return res.status(501).json({ error: "staging not wired" });
+    res.json(stageBranch(req.body || {}));
+  });
+  app.get("/api/v1/staged", requireAuth(), (_req, res) => {
+    res.json(typeof listStagedBranches === "function" ? listStagedBranches() : { ok: true, count: 0, branches: [] });
+  });
+  app.post("/api/v1/branches/push", requireAuth({ mutation: true }), async (_req, res) => {
+    if (typeof pushStagedBranches !== "function") return res.status(501).json({ error: "push not wired" });
+    try { res.json(await pushStagedBranches()); } catch (e) { res.status(502).json({ error: String(e?.message || e) }); }
+  });
+  app.post("/api/v1/pr/stage", requireAuth({ mutation: true }), (req, res) => {
+    if (typeof stageSpecPr !== "function") return res.status(501).json({ error: "PR staging not wired" });
+    res.json(stageSpecPr(req.body || {}));
+  });
+  app.post("/api/v1/branches/unstage", requireAuth({ mutation: true }), (req, res) => {
+    if (typeof unstageBranch !== "function") return res.status(501).json({ error: "unstage not wired" });
+    res.json(unstageBranch(req.body || {}));
+  });
+  app.post("/api/v1/pr/unstage", requireAuth({ mutation: true }), (req, res) => {
+    if (typeof unstageSpecPr !== "function") return res.status(501).json({ error: "PR unstage not wired" });
+    res.json(unstageSpecPr(req.body || {}));
+  });
+  app.post("/api/v1/pr/publish/stage", requireAuth({ mutation: true }), (req, res) => {
+    if (typeof stagePrPublish !== "function") return res.status(501).json({ error: "PR publish staging not wired" });
+    res.json(stagePrPublish(req.body || {}));
+  });
+  app.post("/api/v1/pr/publish/unstage", requireAuth({ mutation: true }), (req, res) => {
+    if (typeof unstagePrPublish !== "function") return res.status(501).json({ error: "PR publish unstage not wired" });
+    res.json(unstagePrPublish(req.body || {}));
+  });
+  app.post("/api/v1/files/stage", requireAuth({ mutation: true }), (req, res) => {
+    if (typeof stageFile !== "function") return res.status(501).json({ error: "file staging not wired" });
+    res.json(stageFile(req.body || {}));
+  });
+  app.post("/api/v1/files/unstage", requireAuth({ mutation: true }), (req, res) => {
+    if (typeof unstageFile !== "function") return res.status(501).json({ error: "file unstage not wired" });
+    res.json(unstageFile(req.body || {}));
+  });
+  app.post("/api/v1/files/content", requireAuth({ mutation: true }), (req, res) => {
+    if (typeof updateStagedFileContent !== "function") return res.status(501).json({ error: "file content not wired" });
+    res.json(updateStagedFileContent(req.body || {}));
+  });
+  app.post("/api/v1/render", requireAuth(), async (req, res) => {
+    if (typeof renderMarkdown !== "function") return res.status(501).json({ error: "render not wired" });
+    try { res.json({ ok: true, html: await renderMarkdown(String((req.body && req.body.markdown) || "")) }); }
+    catch (e) { res.status(502).json({ error: String(e?.message || e) }); }
+  });
+  app.post("/api/v1/files/edit", requireAuth({ mutation: true }), (req, res) => {
+    if (typeof saveExistingEdit !== "function") return res.status(501).json({ error: "file edit not wired" });
+    res.json(saveExistingEdit(req.body || {}));
+  });
+  app.get("/api/v1/branches/folders", requireAuth(), async (req, res) => {
+    if (typeof listBranchFolders !== "function") return res.status(501).json({ error: "folders not wired" });
+    try { res.json(await listBranchFolders({ project: req.query.project, repo: req.query.repo, repoName: req.query.repoName, branch: req.query.branch, scope: req.query.scope })); }
+    catch (e) { res.status(502).json({ error: String(e?.message || e) }); }
+  });
+  app.post("/api/v1/branches/folders/create", requireAuth({ mutation: true }), (req, res) => {
+    if (typeof createStagedFolder !== "function") return res.status(501).json({ error: "folder create not wired" });
+    res.json(createStagedFolder(req.body || {}));
+  });
+  app.post("/api/v1/branches/folders/delete", requireAuth({ mutation: true }), (req, res) => {
+    if (typeof deleteStagedFolder !== "function") return res.status(501).json({ error: "folder delete not wired" });
+    res.json(deleteStagedFolder(req.body || {}));
+  });
+  app.post("/api/v1/branches/folders/rename", requireAuth({ mutation: true }), (req, res) => {
+    if (typeof renameStagedFolder !== "function") return res.status(501).json({ error: "folder rename not wired" });
+    res.json(renameStagedFolder(req.body || {}));
+  });
 
   app.post("/api/v1/personal-comments/:id/resolve", requireAuth({ mutation: true }), async (req, res) => {
     if (typeof resolvePersonalComment !== "function") return res.status(501).json({ error: "personal comments not wired" });
@@ -608,6 +882,7 @@ export function registerControlApi(app, deps) {
     if (req.query && (req.query.full === "1" || req.query.full === "true")) {
       body.drafts = drafts.list();
       body.specDrafts = specDrafts ? specDrafts.list() : {};
+      body.remoteSpecDrafts = remoteSpecDrafts ? remoteSpecDrafts.list() : {};
     }
     res.json(body);
   });

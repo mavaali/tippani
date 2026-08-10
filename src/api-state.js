@@ -199,6 +199,40 @@ export function createLockStore({ ttlMs = 10_000, now = Date.now } = {}) {
   };
 }
 
+// String-keyed sibling of createLockStore (clickstop 2, step 11). The remote
+// spec-authoring "user is editing" lock is keyed by a composite
+// `repo\nbranch\npath` string, not a numeric thread id, so it must NOT coerce
+// the key to a Number. Same sliding-window TTL semantics otherwise.
+export function createKeyedLockStore({ ttlMs = 10_000, now = Date.now } = {}) {
+  const locks = new Map();
+  function prune(t) {
+    for (const [key, exp] of locks.entries()) {
+      if (exp <= t) locks.delete(key);
+    }
+  }
+  return {
+    touch(key) {
+      if (!key || typeof key !== "string") throw new Error("lock: key must be a non-empty string");
+      const t = now();
+      prune(t);
+      locks.set(key, t + ttlMs);
+      return locks.get(key);
+    },
+    isLocked(key) {
+      const t = now();
+      prune(t);
+      return locks.has(key);
+    },
+    release(key) {
+      return locks.delete(key);
+    },
+    size() {
+      prune(now());
+      return locks.size;
+    },
+  };
+}
+
 // Conflict guard for /api/reply: per-thread "a reply is currently being
 // posted to ADO" flag. Used to return 409 if a second concurrent reply comes
 // in for the same thread before the first finishes (avoid double-post on

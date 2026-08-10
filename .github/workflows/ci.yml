@@ -32,7 +32,7 @@ jobs:
 
       # The full deterministic suite (every src/*.test.mjs). The offline portal
       # smokes are intentionally NOT run here — they need a locally-cached ADO PR
-      # fixture (~/.tippani/cache/pr-*.json) that only a live/human-like run
+      # fixture (~/.tippani/cache/pr-*.json) that only a live run
       # produces, so they stay a dev-machine step.
       - name: Unit tests
         run: npm test

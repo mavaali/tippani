@@ -17,7 +17,7 @@ import { StateField } from "@codemirror/state";
 import { markdown } from "@codemirror/lang-markdown";
 import { GFM } from "@lezer/markdown";
 import { defaultKeymap, history, historyKeymap } from "@codemirror/commands";
-import { search, searchKeymap, openSearchPanel } from "@codemirror/search";
+import { search, searchKeymap, openSearchPanel, closeSearchPanel, searchPanelOpen } from "@codemirror/search";
 import { tableField } from "./table-widget.js";
 import { diffLines, diffStats } from "./diff.js";
 import {
@@ -474,6 +474,14 @@ function mount(el, markdownText, opts = {}) {
       view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: String(md ?? "") } }),
     // Open the Find & Replace panel (manual equivalent of the edit_spec find kind).
     openSearch: () => { view.focus(); openSearchPanel(view); },
+    // Toggle the Find & Replace panel — open if closed, close if already open, so
+    // the Find button hides the controls on a second click.
+    toggleSearch: () => {
+      if (searchPanelOpen(view.state)) { closeSearchPanel(view); view.focus(); }
+      else { view.focus(); openSearchPanel(view); }
+    },
+    // Whether the Find & Replace panel is currently open.
+    isSearchOpen: () => searchPanelOpen(view.state),
     destroy: () => view.destroy(),
   };
 }

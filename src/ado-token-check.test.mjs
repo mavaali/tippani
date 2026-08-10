@@ -1,5 +1,5 @@
 // Unit tests for the offline ADO token inspector (ado-token-check.js).
-import { inspectAdoToken, tokenRejectionMessage, isExpiredJwt } from "./ado-token-check.js";
+import { identityFromAdoToken, inspectAdoToken, tokenRejectionMessage, isExpiredJwt } from "./ado-token-check.js";
 
 // A host-supplied expected audience (the Azure DevOps git/REST resource app id
 // is host config, not hardcoded in tippani). Any value works for the test.
@@ -65,6 +65,15 @@ try {
     check("nowMs after exp → true", isExpiredJwt(jwt(AUD, { exp: 1000 }), 2_000_000) === true);
     check("nowMs before exp → false", isExpiredJwt(jwt(AUD, { exp: 1000 }), 500_000) === false);
   }
+
+  // --- identityFromAdoToken ---
+  check("identity prefers upn", identityFromAdoToken(jwt(AUD, {
+    upn: "Kay@contoso.onmicrosoft.com",
+    unique_name: "other@example.com",
+  })) === "Kay@contoso.onmicrosoft.com");
+  check("identity falls back to name", identityFromAdoToken(jwt(AUD, { name: "Kay" })) === "Kay");
+  check("identity missing → null", identityFromAdoToken(jwt(AUD)) === null);
+  check("identity malformed token → null", identityFromAdoToken("not-a-jwt") === null);
 } finally {
   console.log(`\nado-token-check.test: ${pass} passed, ${fail} failed`);
   process.exit(fail === 0 ? 0 : 1);

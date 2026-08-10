@@ -12,6 +12,7 @@ import {
   createFocusStore,
   createDraftStore,
   createLockStore,
+  createKeyedLockStore,
 } from "./api-state.js";
 import { registerControlApi } from "./control-api.js";
 import { buildTools, createHttpClient, loadSessionToken } from "./mcp-tools.js";
@@ -45,6 +46,17 @@ const drafts = createDraftStore({ onChange: () => focus.bumpVersion() });
 const locks = createLockStore({ ttlMs: 60_000 });
 const specDrafts = createDraftStore({ onChange: () => focus.bumpVersion() });
 
+// Clickstop 2 step 13: in-memory remote-draft store backing the write tools.
+// Scoped by (project,repo,branch).
+const _remoteDraftMap = new Map();
+const remoteDraftStore = {
+  put(key, val, meta = {}) { const rec = { project: val.project, repo: val.repo, branch: val.branch, path: val.path, body: val.body, baseObjectId: val.baseObjectId || null, updatedAt: "t", source: meta.source || "external" }; _remoteDraftMap.set(key, rec); return rec; },
+  get(key) { return _remoteDraftMap.get(key) || null; },
+  delete(key) { return _remoteDraftMap.delete(key); },
+  list() { return Object.fromEntries(_remoteDraftMap); },
+  forBranch(project, repo, branch) { return [..._remoteDraftMap.values()].filter((d) => d.project === project && d.repo === repo && d.branch === branch); },
+};
+
 // Stub reply/resolve helpers that match the doReply/doResolve contract.
 const postedReplies = [];
 const resolvedThreads = [];
@@ -59,6 +71,10 @@ async function fakeResolve(threadId) {
 }
 const viewedCalls = [];
 const stageResolveCalls = [];
+const stagedBranches = [];
+const stagedFiles = [];
+const stagedPrs = [];
+let aggregatePushCalls = 0;
 async function fakeSetViewed(threadId, commentId) {
   viewedCalls.push({ threadId, commentId });
   return { ok: true, status: 200, body: { ok: true, viewedCommentId: commentId == null ? null : String(commentId) } };
@@ -78,6 +94,29 @@ registerControlApi(app, {
   setViewed: fakeSetViewed,
   specDrafts,
   listPrs: async (q) => ({ prs: [{ id: 7, title: "Demo PR", author: "Kay" }], mine: q.creator !== "any", status: 1 }),
+  // Clickstop 2: open_local_file forwards here.
+  mcpOpenFile: async ({ path: p } = {}) =>
+    p === "/ok/a.md"
+      ? { ok: true, opened: "/open-file-view?path=" + p, realpath: p }
+      : { ok: false, reason: "outside-root", error: "outside every approved folder" },
+  // Clickstop 2 step 13: remote-authoring write deps (in-memory fakes).
+  mcpCreateBranch: async ({ org, project, repo, branch, base }) =>
+    (branch && project && repo) ? { ok: true, org: org || "https://dev.azure.com/powerbi", project, repo, branch, branchRef: `refs/heads/${branch}`, base: base || "main", created: true, objectId: "tip1" } : { ok: false, error: "project, repo, branch are required" },
+  remoteSpecDrafts: remoteDraftStore,
+  remoteSpecLocks: createKeyedLockStore({ ttlMs: 60_000 }),
+  pushRemoteSpec: async ({ project, repo, branch }) => ({ ok: true, status: 200, body: { ok: true, commitId: "c1", pushedFiles: remoteDraftStore.forBranch(project, repo, branch).map((d) => d.path) } }),
+  openPr: async (args) => ({ ok: true, pullRequestId: 77, url: "http://pr/77", isDraft: !!args.isDraft, workItemId: args.workItemTitle ? 88 : null, workItemCreated: !!args.workItemTitle, linked: !!args.workItemTitle }),
+  stageBranch: (args) => { stagedBranches.push(args); return { ok: true, branches: stagedBranches }; },
+  stageFile: (args) => { stagedFiles.push({ ...args, content: "" }); return { ok: true, files: stagedFiles }; },
+  updateStagedFileContent: ({ repo, branch, path: filePath, content }) => {
+    const file = stagedFiles.find((item) => item.repo === repo && item.branch === branch && item.path === filePath);
+    if (!file) return { ok: false, error: "staged file not found" };
+    file.content = content;
+    return { ok: true };
+  },
+  saveExistingEdit: (args) => { stagedFiles.push({ ...args, existing: true }); return { ok: true, files: stagedFiles }; },
+  stageSpecPr: (args) => { stagedPrs.push(args); return { ok: true, prs: stagedPrs }; },
+  pushStagedBranches: async () => { aggregatePushCalls++; return { ok: true, count: 0, results: [{ ok: true, pushedFiles: stagedFiles.length, pullRequestId: 77 }] }; },
 });
 
 const server = await new Promise((res) => {
@@ -107,20 +146,23 @@ try {
     "open_pr",
     "list_threads", "triage_summary", "show_feedback",
     "open_thread", "open_file", "get_thread", "focus_thread",
-    "stage_draft", "clear_draft", "post_reply",
-    "resolve_thread", "stage_resolve_thread", "mark_viewed", "get_spec",
-    "stage_spec_edit", "get_spec_draft", "clear_spec_edit", "commit_spec",
+    "stage_draft", "clear_draft", "stage_resolve_thread", "get_spec",
+    "get_spec_draft", "clear_spec_edit",
     "edit_spec", "set_view", "set_feedback_filter",
     "list_prs", "search_work_items", "search_specs", "get_file_commits",
-    "read_personal_comments", "add_personal_comment", "edit_personal_comment",
-    "delete_personal_comment", "resolve_personal_comment", "reply_personal_comment", "delete_resolved_personal_comments",
-    "delete_all_personal_comments", "navigate_personal_comments", "jump_to_personal_comment",
-    "show_resolved_personal_comments", "open_branch", "open_branch_file", "refresh_spec",
+      "read_annotations", "add_annotation", "edit_annotation",
+      "delete_annotation", "resolve_annotation", "reply_annotation", "delete_resolved_annotations",
+      "delete_all_annotations", "navigate_annotations", "jump_to_annotation",
+      "show_resolved_annotations", "open_branch", "open_branch_file", "open_local_file", "refresh_spec",
+    "stage_branch", "stage_spec", "stage_spec_pr", "push_staged_changes",
   ];
   check("tools: exactly 40 registered", tools.length === 40);
   for (const n of expected) {
     check(`tools: includes ${n}`, !!byName[n]);
     check(`tools: ${n} has description`, typeof byName[n].description === "string" && byName[n].description.length > 20);
+  }
+  for (const n of ["post_reply", "resolve_thread", "mark_viewed", "stage_spec_edit", "commit_spec", "create_branch", "push_spec", "create_spec_pr"]) {
+    check(`tools: excludes direct/redundant ${n}`, !byName[n]);
   }
 
   // --- open_pr ---
@@ -148,6 +190,47 @@ try {
     check("open_file: single-tab does NOT open a new browser tab", !openUrlCalls.includes("/file/2"));
     const r2 = await byName.open_file.handler({ fileIndex: 0, line: 47 });
     check("open_file: appends ?line when given", r2.opened === "/file/0?line=47" && focus.get().navUrl === "/file/0?line=47");
+  }
+
+  // --- open_local_file (clickstop 2: one-off .md by path, gated to approved roots) ---
+  {
+    const before = browsePortalCalls.length;
+    const r = await byName.open_local_file.handler({ path: "/ok/a.md" });
+    check("open_local_file: valid path -> ok + realpath", r.ok === true && r.realpath === "/ok/a.md");
+    check("open_local_file: ensured a browse portal", browsePortalCalls.length === before + 1);
+    let rejected = false, rejStatus = 0;
+    try { await byName.open_local_file.handler({ path: "/etc/passwd.md" }); }
+    catch (e) { rejected = true; rejStatus = e.status; }
+    check("open_local_file: outside-root rejected (400, not read)", rejected && rejStatus === 400);
+  }
+
+  // --- Staged-only authoring tools ---
+  const WPROJ = "Big Data", WREPO = "MyRepo";
+  {
+    const r = await byName.stage_branch.handler({ org: "https://dev.azure.com/o", project: WPROJ, repo: WREPO, branch: "spec/x" });
+    check("stage_branch: stages + echoes repo/branch", r.ok === true && r.context.repo === WREPO && r.context.branch === "spec/x");
+    check("stage_branch: does not cross ADO boundary", aggregatePushCalls === 0);
+  }
+  {
+    const r = await byName.stage_spec.handler({ org: "https://dev.azure.com/o", project: WPROJ, repo: WREPO, branch: "spec/x", path: "docs/spec.md", body: "# Spec\n\nhi" });
+    check("stage_spec: stages + echoes full context", r.ok === true && r.context.repo === "MyRepo" && r.context.branch === "spec/x" && r.context.path === "docs/spec.md");
+    check("stage_spec: body reaches aggregate store", stagedFiles[0].content === "# Spec\n\nhi");
+    check("stage_spec: does not cross ADO boundary", aggregatePushCalls === 0);
+  }
+  {
+    const r = await byName.stage_spec_pr.handler({ org: "https://dev.azure.com/o", project: WPROJ, repo: WREPO, title: "Add spec", sourceBranch: "spec/x", targetBranch: "main" });
+    check("stage_spec_pr: stages intent", r.ok === true && stagedPrs.length === 1);
+    check("stage_spec_pr: does not cross ADO boundary", aggregatePushCalls === 0);
+  }
+  {
+    const r = await byName.push_staged_changes.handler({});
+    check("push_staged_changes: crosses aggregate boundary once", r.ok === true && aggregatePushCalls === 1);
+    check("push_staged_changes: returns per-target result", r.results[0].pushedFiles === 1 && r.results[0].pullRequestId === 77);
+  }
+  {
+    for (const n of ["stage_branch", "stage_spec", "stage_spec_pr", "push_staged_changes"]) {
+      check(`${n}: description embeds the never-raw rule`, /never edit files|never .* raw git|Azure DevOps MCP/i.test(byName[n].description));
+    }
   }
 
   // --- stage_resolve_thread ---
@@ -202,39 +285,6 @@ try {
     check("clear_draft: removed=true on hit", r.removed === true);
     const r2 = await byName.clear_draft.handler({ threadId: 201 });
     check("clear_draft: idempotent (removed=false on miss)", r2.removed === false);
-  }
-
-  // --- post_reply ---
-  {
-    const r = await byName.post_reply.handler({ threadId: 202, content: "Agreed." });
-    check("post_reply: ok+synced", r.ok === true && r.synced === true);
-    check("post_reply: backend received reply", postedReplies.length === 1 && postedReplies[0].threadId === 202);
-  }
-  {
-    // empty content -> 400 from server
-    let bad = false;
-    try { await byName.post_reply.handler({ threadId: 202, content: "  " }); }
-    catch (e) { bad = e.status === 400; }
-    check("post_reply: 400 on empty content", bad);
-  }
-
-  // --- resolve_thread ---
-  {
-    const r = await byName.resolve_thread.handler({ threadId: 202 });
-    check("resolve_thread: ok+synced", r.ok === true && r.synced === true);
-    check("resolve_thread: backend received resolve", resolvedThreads.includes(202));
-  }
-
-  // --- mark_viewed ---
-  {
-    const r = await byName.mark_viewed.handler({ threadId: 202 });
-    check("mark_viewed: ok", r.ok === true);
-    // thread 202's last comment id is 12 → viewed at 12
-    check("mark_viewed: backend viewed at last comment id",
-      viewedCalls.some((c) => c.threadId === 202 && c.commentId === 12));
-    const r2 = await byName.mark_viewed.handler({ threadId: 202, clear: true });
-    check("mark_viewed: clear un-views (commentId null)",
-      r2.ok === true && viewedCalls.some((c) => c.threadId === 202 && c.commentId === null));
   }
 
   // --- open_thread (single-tab default) ---
