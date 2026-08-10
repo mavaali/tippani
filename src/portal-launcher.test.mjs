@@ -33,7 +33,7 @@ const fetchImpl = async (url) => {
 
 function fakeSpawn(bin, args, opts) {
   const port = Number(args.find((a) => a.startsWith("--port=")).split("=")[1]);
-  const githubTarget = parseGitHubTarget([String(args[1] || "")]);
+  const githubTarget = parseGitHubTarget(args.slice(1));
   const github = githubTarget.isGitHub && !githubTarget.error
     ? githubTarget
     : null;
@@ -188,6 +188,25 @@ try {
     s.stop();
   }
 
+  // --- an unhealthy GitHub browse portal reconnects as GitHub, not ADO ---
+  {
+    reset();
+    const s = newSession({ githubToken: "gh-test-token" });
+    await s.ensureBrowsePortal({
+      provider: "github",
+      owner: "mavaali",
+      repo: "tippani",
+    });
+    registry = [];
+    const r = await s.ensureActivePortal();
+    check("github browse reconnect: launches replacement", r.reused === false);
+    check("github browse reconnect: keeps provider coordinates",
+      spawnCalls.length === 2 &&
+      spawnCalls[1].args.includes("--browse") &&
+      spawnCalls[1].args.includes("--github=mavaali/tippani"));
+    s.stop();
+  }
+
   // --- ADO discovery never reuses an active GitHub portal ---
   {
     reset();
@@ -204,6 +223,76 @@ try {
       spawnCalls.length === 2 &&
       spawnCalls[1].args.includes("--browse") &&
       spawnCalls[1].args.includes("--port=3848"));
+    s.stop();
+  }
+
+  // --- ADO discovery reuses the active PR-bound portal ---
+  {
+    reset();
+    const s = newSession();
+    await s.ensurePortal({ prId: 992661 });
+    const r = await s.ensureBrowsePortal();
+    check("ADO PR browse: reuses active portal", r.reused === true);
+    check("ADO PR browse: keeps review binding",
+      spawnCalls.length === 1 &&
+      s.getBaseUrl() === "http://localhost:3847");
+    s.stop();
+  }
+
+  // --- GitHub discovery reuses the active matching PR-bound portal ---
+  {
+    reset();
+    const s = newSession({ githubToken: "gh-test-token" });
+    await s.ensurePortal({
+      prId: 77,
+      provider: "github",
+      owner: "mavaali",
+      repo: "tippani",
+    });
+    const r = await s.ensureBrowsePortal({
+      provider: "github",
+      owner: "mavaali",
+      repo: "tippani",
+    });
+    check("GitHub PR browse: reuses active portal", r.reused === true);
+    check("GitHub PR browse: keeps review binding",
+      spawnCalls.length === 1 &&
+      s.getBaseUrl() === "http://localhost:3847");
+    s.stop();
+  }
+
+  // --- GitHub discovery launches and reuses a repository-anchored browse portal ---
+  {
+    reset();
+    const s = newSession({ githubToken: "gh-test-token" });
+    const first = await s.ensureBrowsePortal({
+      provider: "github",
+      owner: "MAVAALI",
+      repo: "Tippani.git",
+    });
+    check("github browse: launches", first.reused === false);
+    check("github browse: passes canonical coordinates",
+      spawnCalls[0].args.includes("--browse") &&
+      spawnCalls[0].args.includes("--github=mavaali/tippani"));
+    const second = await s.ensureBrowsePortal({
+      provider: "github",
+      owner: "mavaali",
+      repo: "tippani",
+    });
+    check("github browse: reuses matching portal", second.reused === true);
+    s.stop();
+  }
+
+  {
+    reset();
+    const s = newSession({ githubToken: "gh-test-token" });
+    let threw = false;
+    try {
+      await s.ensureBrowsePortal({ provider: "github" });
+    } catch {
+      threw = true;
+    }
+    check("github browse: rejects missing coordinates", threw);
     s.stop();
   }
 

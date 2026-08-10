@@ -148,11 +148,27 @@ check("isUnder unrelated -> false", isUnder("x/y", "a/b") === false);
   const r1 = inv.stagePrPublish({ org: "o", project: "p", repo: "r", pullRequestId: 42 });
   check("stagePrPublish: ok", r1.ok === true);
   check("stagePrPublish: duplicate PR id rejected", inv.stagePrPublish({ org: "o", project: "p", repo: "r", pullRequestId: 42 }).ok === false);
+  check("stagePrPublish: same number in another repo allowed",
+    inv.stagePrPublish({ org: "o", project: "p", repo: "other", pullRequestId: 42 }).ok === true);
   check("stagePrPublish: missing fields rejected", inv.stagePrPublish({ pullRequestId: 1 }).ok === false);
   check("stagePrPublish: non-numeric id rejected", inv.stagePrPublish({ org: "o", project: "p", repo: "r", pullRequestId: "abc" }).ok === false);
 
-  const un = inv.unstagePrPublish({ pullRequestId: 42 });
+  const un = inv.unstagePrPublish({ project: "p", repo: "r", pullRequestId: 42 });
   check("unstagePrPublish: removes it", un.removed === 1);
+  check("unstagePrPublish: preserves same-number PR in another repo",
+    un.prPublishes.length === 1 && un.prPublishes[0].repo === "other");
+
+  inv.stagePrPublish({ org: "o", project: "p", repo: "third", pullRequestId: 42 });
+  const ambiguous = inv.unstagePrPublish({ pullRequestId: 42 });
+  check("unstagePrPublish: ambiguous legacy request fails loudly",
+    ambiguous.ok === false && ambiguous.prPublishes.length === 2);
+  check("unstagePrPublish: partial coordinates fail loudly",
+    inv.unstagePrPublish({ project: "p", pullRequestId: 42 }).ok === false);
+
+  const legacy = createStagedInventory({});
+  legacy.stagePrPublish({ org: "o", project: "p", repo: "r", pullRequestId: 7 });
+  check("unstagePrPublish: legacy id-only request removes unique match",
+    legacy.unstagePrPublish({ pullRequestId: 7 }).removed === 1);
 }
 
 // --- folders --------------------------------------------------------------

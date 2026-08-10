@@ -32,8 +32,12 @@ Point Tippani at your repositories once (this is the one place the connection
 details matter), then open the Discovery portal:
 
 ```bash
+# Azure DevOps
 tippani --org=https://dev.azure.com/YOUR_ORG --project="Your Project" --save-config
 tippani --browse
+
+# GitHub
+tippani --browse --github=OWNER/REPO
 ```
 
 The portal serves from `http://localhost:3847` by default (override with
@@ -48,9 +52,13 @@ annotate · edit`, `· feedback`) on the right.
 
 ## Discovery — the home screen
 
-Discovery answers "what should I work on?" It has five tabs:
+Discovery answers "what should I work on?" Azure DevOps has five tabs:
 
 **Specs** · **Review queue** · **Work items** · **Branches** · **Reading list**
+
+GitHub has the same home without **Work items**. GitHub Issues do not implement
+Azure DevOps WIQL or typed work-item fields, so Tippani omits that capability
+instead of showing a control that cannot work.
 
 ### Specs tab
 
@@ -62,8 +70,8 @@ press **Search**; results are specs from each repository's default branch.
 - The left rail narrows results by **Included** file name (e.g. `Readme.md`),
   **Repo**, **Author**, and **Folder**.
 - Each result shows the repo, "Last modified by", the file name, and its path.
-- Opening a result shows it **read-only at `main`**; the ↗ affordance opens it
-  read-only inside Tippani (see [Reading a finished spec](#reading-a-finished-spec)).
+- Opening a result shows it **read-only at the repository's default branch**
+  inside Tippani (see [Reading a finished spec](#reading-a-finished-spec)).
 
 > Newly pushed specs appear here once search has indexed them, which can lag a
 > few minutes behind a commit.
@@ -90,7 +98,8 @@ Every pull request you can act on, as cards.
 
 ### Work items tab
 
-Look up the work items your specs relate to. Results open in your work tracker.
+Azure DevOps only. Look up the work items your specs relate to. Results open in
+your work tracker.
 
 ![Work items](img/discovery-work-items.png)
 

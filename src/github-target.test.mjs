@@ -39,6 +39,11 @@ ok("bad coordinate errors", !!parseGitHubTarget([
 ok("missing PR errors", !!parseGitHubTarget([
   "--github=mavaali/tippani",
 ]).error);
+eq("browse target needs coordinates but no PR", parseGitHubTarget([
+  "--browse", "--github=mavaali/tippani",
+]), {
+  isGitHub: true, owner: "mavaali", repo: "tippani", prId: null,
+});
 eq("repo from env", parseGitHubTarget(["82"], {
   TIPPANI_GH_REPO: "mavaali/tippani",
 }), {

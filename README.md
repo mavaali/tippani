@@ -41,7 +41,14 @@ tippani 123 --github=OWNER/REPO
 
 GitHub auth uses `--gh-token`, `TIPPANI_GH_TOKEN` / `GITHUB_TOKEN`, then
 `gh auth token`. Direct PR read/comment/edit/review and staged branch/spec/PR
-authoring work. GitHub browse/discovery and search are not wired yet.
+authoring work. To open GitHub Discovery instead of a specific PR:
+
+```bash
+tippani --browse --github=OWNER/REPO
+```
+
+The repository anchors authoring; Discovery searches reviews and Markdown
+across the owner's accessible repositories.
 
 Or run without installing:
 
@@ -49,7 +56,8 @@ Or run without installing:
 npx tippani 12345 --org=https://dev.azure.com/YOUR_ORG --project="Your Project" --save-config
 ```
 
-Once your org and project are saved, open the **Discovery** portal (the home screen with all five tabs) with `--browse`:
+Once your org and project are saved, open the Azure DevOps **Discovery** portal
+(the home screen with all five tabs) with `--browse`:
 
 ```bash
 tippani --browse
@@ -65,7 +73,10 @@ Or download a standalone binary from the [latest release](https://github.com/mav
 
 ## The portal at a glance
 
-**Discovery** is the home screen — five tabs to find what to work on: read a finished **Spec**, pick up a **Review**, open a **Work item**, browse **Branches**, or open something from your **Reading list**.
+**Discovery** is the home screen — read a finished **Spec**, pick up a
+**Review**, browse **Branches**, or reopen something from your **Reading list**.
+Azure DevOps sessions also include **Work items**; GitHub sessions omit that tab
+because GitHub Issues are not a WIQL-compatible work-item system.
 
 ![Discovery — Review queue](docs/img/discovery-review-queue.png)
 
@@ -113,6 +124,9 @@ npx tippani <PR_ID>
 # Open a GitHub PR directly
 npx tippani github:OWNER/REPO#123
 
+# Open GitHub Discovery
+npx tippani --browse --github=OWNER/REPO
+
 # Open a specific file directly
 npx tippani <PR_ID> --file="/path/to/spec.md"
 
@@ -141,7 +155,7 @@ npx tippani --local-repo=/path/to/clone
 | `--port=<n>` | Serve on a specific port (default `3847`). | `TIPPANI_PORT` |
 | `--headless` | Don't open a browser — for assistant-only sessions. | `TIPPANI_HEADLESS` |
 | `--ado-token=<t>` | Sign in with an access token instead of an interactive login. | `TIPPANI_ADO_TOKEN` |
-| `--github=<owner/repo>` | Review a GitHub PR; pair with the positional PR number. | `TIPPANI_GITHUB_REPO` / `TIPPANI_GH_REPO` |
+| `--github=<owner/repo>` | Select GitHub; pair with a PR number or `--browse`. | `TIPPANI_GITHUB_REPO` / `TIPPANI_GH_REPO` |
 | `--gh-token=<t>` | GitHub token (otherwise uses env, then `gh auth token`). | `TIPPANI_GH_TOKEN` / `GITHUB_TOKEN` |
 | `--local-repo=<path>` | Work from a local clone on disk, with no server round-trip. | `TIPPANI_LOCAL_REPO` |
 
@@ -251,7 +265,8 @@ validation.
 - **Portal & navigation** — `open_pr` (ADO by default; for GitHub pass `provider: "github"`, `owner`, and `repo`), `open_file`, `open_thread`, `show_feedback` (cross-PR triage page), `set_view`, `set_feedback_filter`, `refresh_spec`.
 - **Reading** — `list_threads`, `get_thread`, `get_spec`, `get_spec_draft`, `triage_summary`; focus with `focus_thread`.
 - **Stage-then-push** — stage review work with `stage_draft`, `edit_spec`, and `stage_resolve_thread`; stage authoring work with `stage_branch`, `stage_spec`, and `stage_spec_pr`. Nothing staged by MCP reaches your repository host until one explicit `push_staged_changes` call. Also `clear_draft` and `clear_spec_edit`.
-- **Discovery** — `list_prs`, `search_specs`, `search_work_items`, `get_file_commits`.
+- **Discovery** — `list_prs` and `search_specs` support ADO or GitHub;
+  `search_work_items` is ADO-only; `get_file_commits` reads either host.
 - **Local review (no PR, no host account)** — `open_branch`, `open_branch_file`, `open_local_file`.
 - **Annotations** — `read_annotations`, `add_annotation`, `edit_annotation`, `delete_annotation`, `reply_annotation`, `resolve_annotation`, plus navigation (`navigate_annotations`, `jump_to_annotation`, `show_resolved_annotations`) and bulk cleanup.
 

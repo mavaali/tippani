@@ -37,8 +37,9 @@ export function parseGitHubTarget(args = [], env = {}) {
     return { isGitHub: false };
   }
   ({ owner, repo } = normalizeGitHubCoordinates({ owner, repo }));
+  const browse = args.includes("--browse");
   const id = Number(prId);
-  if (!owner || !repo || !Number.isFinite(id) || id <= 0) {
+  if (!owner || !repo || (!browse && (!Number.isFinite(id) || id <= 0))) {
     return {
       isGitHub: true,
       error: "GitHub target needs owner/repo and a pull-request number",
@@ -48,7 +49,7 @@ export function parseGitHubTarget(args = [], env = {}) {
     isGitHub: true,
     owner,
     repo,
-    prId: id,
+    prId: browse && !prId ? null : id,
   };
 }
 
