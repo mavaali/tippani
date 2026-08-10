@@ -5,20 +5,24 @@
 // getFileReviewHistory is intentionally NOT here: it couples to the markdown
 // renderer and is only covered by the live smokes, so it stays in index.js.
 
+import { createAdoRepoContentProvider } from "./ado-repo-content-provider.js";
+
+const providers = new WeakMap();
+function repoContent(conn) {
+  let provider = providers.get(conn);
+  if (!provider) {
+    provider = createAdoRepoContentProvider(conn);
+    providers.set(conn, provider);
+  }
+  return provider;
+}
+
 // Read a spec's markdown from an ARBITRARY Git repo at a fixed branch (Discovery
 // spec search opens results read-only off main). Unlike getFileContent, the repo
 // is passed explicitly (a repo GUID from the Code Search hit), not the configured
 // ADO_REPO — a repo GUID is globally unique so the project arg is left undefined.
 export async function getSpecContentAt(conn, repoId, filePath, branch = "main") {
-  const gitApi = await conn.getGitApi();
-  const item = await gitApi.getItemContent(
-    repoId, filePath, undefined,
-    undefined, undefined, undefined, undefined, undefined,
-    { version: branch, versionType: 0 }
-  );
-  const chunks = [];
-  for await (const chunk of item) chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-  return Buffer.concat(chunks).toString("utf-8");
+  return repoContent(conn).getText(repoId, filePath, branch);
 }
 
 // Fetch an embedded image from an arbitrary Git repo at a fixed branch (the
@@ -51,16 +55,5 @@ export function buildSpecWebUrl(org, project, repoName, filePath) {
 // with one top-1 commit lookup. Best-effort — returns "" on any failure so a
 // single unreachable repo never fails the whole result set.
 export async function getLastCommitAuthor(conn, repoId, filePath, branch = "main") {
-  try {
-    const gitApi = await conn.getGitApi();
-    const commits = await gitApi.getCommits(
-      repoId,
-      { itemPath: filePath, itemVersion: { version: branch, versionType: 0 } },
-      undefined, 0, 1
-    );
-    const c = commits && commits[0];
-    return (c && ((c.author && c.author.name) || (c.committer && c.committer.name))) || "";
-  } catch {
-    return "";
-  }
+  return repoContent(conn).getLastCommitAuthor(repoId, filePath, branch);
 }

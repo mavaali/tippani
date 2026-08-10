@@ -54,11 +54,18 @@ interface ReviewProvider {
 // New. Backs clickstop-2's remote authoring (stage_branch -> stage_spec ->
 // stage_spec_pr -> push_staged_changes) and Discovery's Branches tab.
 interface RepoContentProvider {
+  resolveRepository(repo, project) -> Repository
+  listRepositories(project) -> [Repository]
   listBranches(repo) -> [{name, isDefault}]
   createBranch(repo, {name, fromRef}) -> ref
   getBranchTip(repo, branch) -> sha           // shared shape with ReviewProvider;
                                                // same op, no PR context required
-  listFolders(repo, branch, path) -> [string]
+  getText(repo, path, branch) -> string
+  listItems(repo, branch, path) -> [Item]      // folder projection/merging with
+                                               // local staged folders stays above
+                                               // the provider line
+  getFileCommits(repo, path, branch, top) -> [Commit]
+  diffBranches(repo, base, target) -> [Change]
   pushFiles(repo, branch, {files:[{path,content}], message, expectedOldObjectId}) -> commitId
                                                // multi-file, all-or-nothing —
                                                // ADO's createPush already takes
@@ -120,7 +127,10 @@ interface BlobProvider {
 | `getFileReviewHistory` | ReviewProvider | `getFileReviewHistory` — raw PR/thread history; markdown rendering stays above the provider line |
 | `getBranchTip` / `pushFileToBranch` | ReviewProvider (PR-bound single file) **and** RepoContentProvider (branch-bound, no PR) | Two call shapes for the same ADO operation, split by whether a PR is in scope — matches clickstop-1's "a branch is a first-class review surface without a PR" design |
 | `resolveTarget`, `pushRemoteSpec`, `stageBranch` → `mcpCreateBranch` | RepoContentProvider | `createBranch`, `pushFiles` |
-| `listBranchFolders` | RepoContentProvider | `listFolders` |
+| `listBranchFolders` | RepoContentProvider | `listItems` — merging with local staged folders and UI shaping stays above the provider line |
+| Discovery branch/repository listing | RepoContentProvider | `listRepositories`, `listBranches` |
+| `getFileCommits` / `getLastCommitAuthor` | RepoContentProvider | `getFileCommits` |
+| `listBranchFiles` | RepoContentProvider | `resolveRepository`, `diffBranches` |
 | `openPr`, `publishStagedPrs` | AuthoringProvider | `createPullRequest`, `linkWorkItem` |
 | work-item search/create/link (index.js ~7982-7998, ~6594-6598) | WorkItemProvider | `queryWorkItems`, `createWorkItem`, `updateWorkItem` |
 | code search (index.js ~8015-8023) | SearchProvider | `searchSpecs` |
