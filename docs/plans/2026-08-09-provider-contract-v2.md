@@ -201,6 +201,33 @@ This implementation is not wired into CLI/provider selection yet; that happens
 after Review + RepoContent + Blob are all available, so the first user-facing
 GitHub mode is end-to-end rather than a partial portal.
 
+### Phase 1 implementation notes (GitHub RepoContent + Blob)
+
+`src/github-repo-content-provider.js` implements the second Phase 1 capability:
+
+- ADO "projects" map to GitHub owner namespaces (the signed-in user plus their
+  organizations); repository listing uses the authenticated `/user/repos`
+  affiliation view and filters by owner.
+- Branch listing returns all branches (GitHub has no `includeMyBranches`
+  equivalent without per-branch commit-author inspection). This is an explicit
+  capability difference: the GitHub Branches tab is broader than ADO's
+  signed-in-user branch list.
+- Text/item/commit/diff reads project GitHub responses to the neutral shapes
+  already consumed by Tippani's application layer.
+- Multi-file push uses the Git Data API: create every blob, build one tree on
+  the expected base tree, create one commit with the expected parent, then
+  update the ref with `force:false`. A concurrent branch move produces a
+  non-fast-forward 422, translated to Tippani's 409 conflict contract. This
+  preserves clickstop-2's one-publication-boundary guarantee; multiple Contents
+  API PUTs would not.
+
+`src/github-blob-provider.js` performs authenticated raw-media reads through the
+Contents endpoint. Path containment, MIME/security headers, and defensive LFS
+pointer rejection remain above the provider seam, matching ADO BlobProvider.
+
+Review + RepoContent + Blob transports are now available but still not wired to
+CLI/provider selection; integration follows as one user-visible slice.
+
 ## Capability gaps are a first-class, visible design element
 
 The July doc's model was "one stable interface, dialect-specific calls hidden below the line" — appropriate when every method has a GitHub equivalent. `WorkItemProvider` does not. Rather than stretch the contract to cover it badly, a provider capability check is part of the contract itself:
