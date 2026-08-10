@@ -52,6 +52,13 @@ function mapPullRequest(pr, { owner, repo } = {}) {
     },
     _links: { web: { href: pr.html_url || null } },
     _githubNodeId: pr.node_id || null,
+    _githubHeadRepository: {
+      id: pr.head?.repo?.full_name || null,
+      owner: pr.head?.repo?.owner?.login || null,
+      name: pr.head?.repo?.name || null,
+      ref: pr.head?.ref || null,
+      sha: pr.head?.sha || null,
+    },
   };
 }
 
@@ -126,6 +133,9 @@ export function createGitHubReviewProvider(client, {
   const threadNodeByHandle = new Map();
   const rootCommentByHandle = new Map();
   const localViewed = new Map();
+  let activeHeadOwner = owner;
+  let activeHeadRepo = repo;
+  const repoByCommit = new Map();
   const viewed = viewedStore || {
     read: async (key) => localViewed.get(key) || {},
     write: async (key, map) => { localViewed.set(key, { ...map }); },
@@ -133,9 +143,26 @@ export function createGitHubReviewProvider(client, {
 
   const repoPath = (...segments) =>
     githubPath("repos", owner, repo, ...segments);
+  const contentRepoPath = (...segments) =>
+    githubPath("repos", activeHeadOwner, activeHeadRepo, ...segments);
+
+  function bindPullRequest(pr) {
+    const head = pr?._githubHeadRepository;
+    if (head?.owner && head?.name) {
+      activeHeadOwner = head.owner;
+      activeHeadRepo = head.name;
+      if (head.sha) {
+        repoByCommit.set(head.sha, {
+          owner: head.owner,
+          repo: head.name,
+        });
+      }
+    }
+    return pr;
+  }
 
   function rememberPr(raw) {
-    return mapPullRequest(raw, { owner, repo });
+    return bindPullRequest(mapPullRequest(raw, { owner, repo }));
   }
 
   async function getRawPullRequest(number) {
@@ -191,27 +218,48 @@ export function createGitHubReviewProvider(client, {
     let filtered = basic;
     if (criteria.reviewerId) {
       const reviewer = criteria.reviewerId;
-      const matches = await Promise.all(basic.map(async (pr) => {
-        if ((pr.requested_reviewers || []).some((item) =>
-          item.login === reviewer)) {
-          return true;
+      const matches = new Array(basic.length).fill(false);
+      let cursor = 0;
+      const worker = async () => {
+        for (;;) {
+          const index = cursor++;
+          if (index >= basic.length) return;
+          const pr = basic[index];
+          if ((pr.requested_reviewers || []).some((item) =>
+            item.login === reviewer)) {
+            matches[index] = true;
+            continue;
+          }
+          const reviews = await client.paginate(
+            repoPath("pulls", pr.number, "reviews"),
+            { maxPages: 10 },
+          );
+          matches[index] = reviews.some((review) =>
+            review.user?.login === reviewer);
         }
-        const reviews = await client.paginate(
-          repoPath("pulls", pr.number, "reviews"),
-          { maxPages: 10 },
-        );
-        return reviews.some((review) => review.user?.login === reviewer);
-      }));
+      };
+      await Promise.all(Array.from({
+        length: Math.min(8, basic.length),
+      }, worker));
       filtered = basic.filter((_pr, index) => matches[index]);
     }
-    return filtered.slice(0, top).map(rememberPr);
+    return filtered.slice(0, top).map((pr) =>
+      mapPullRequest(pr, { owner, repo }));
   }
 
   async function getFileContent(filePath, ref) {
-    return client.request("GET", repoPath(
+    const version = branchName(ref?.version || ref);
+    const target = repoByCommit.get(version) || {
+      owner: activeHeadOwner,
+      repo: activeHeadRepo,
+    };
+    // The PR body/comments live on the base repo; file bytes live on the
+    // contributor's head repo for fork PRs.
+    return client.request("GET", githubPath(
+      "repos", target.owner, target.repo,
       "contents", ...String(filePath).replace(/^\/+/, "").split("/"),
     ), {
-      query: { ref: branchName(ref?.version || ref) },
+      query: { ref: version },
       accept: "application/vnd.github.raw+json",
       responseType: "text",
     });
@@ -369,7 +417,7 @@ export function createGitHubReviewProvider(client, {
   }
 
   async function probePushPermission() {
-    const repository = await client.request("GET", repoPath());
+    const repository = await client.request("GET", contentRepoPath());
     return repository?.permissions?.push ?? null;
   }
 
@@ -456,7 +504,8 @@ export function createGitHubReviewProvider(client, {
   async function getBranchTip(branchRef) {
     const ref = await client.request(
       "GET",
-      repoPath("git", "ref", "heads", ...branchName(branchRef).split("/")),
+      contentRepoPath(
+        "git", "ref", "heads", ...branchName(branchRef).split("/")),
     );
     if (!ref?.object?.sha) {
       throw new Error(`Branch ref not found: ${branchRef}`);
@@ -476,13 +525,13 @@ export function createGitHubReviewProvider(client, {
       if (current !== expectedOldObjectId) {
         throw new GitHubApiError(
           "Branch has already been updated",
-          { status: 409, method: "PUT", url: repoPath("contents") },
+          { status: 409, method: "PUT", url: contentRepoPath("contents") },
         );
       }
     }
     const path = String(filePath).replace(/^\/+/, "");
     const metadata = await client.request(
-      "GET", repoPath("contents", ...path.split("/")),
+      "GET", contentRepoPath("contents", ...path.split("/")),
       { query: { ref: branch } },
     );
     if (!metadata?.sha || Array.isArray(metadata)) {
@@ -497,12 +546,13 @@ export function createGitHubReviewProvider(client, {
       if (afterMetadata !== expectedOldObjectId) {
         throw new GitHubApiError(
           "Branch has already been updated",
-          { status: 409, method: "PUT", url: repoPath("contents") },
+          { status: 409, method: "PUT", url: contentRepoPath("contents") },
         );
       }
     }
     const result = await client.request(
-      "PUT", repoPath("contents", ...path.split("/")),
+      // writes always target the PR head repository (fork or same-repo)
+      "PUT", contentRepoPath("contents", ...path.split("/")),
       {
         body: {
           message,
@@ -516,6 +566,7 @@ export function createGitHubReviewProvider(client, {
   }
 
   return {
+    bindPullRequest,
     getCurrentUser,
     getPullRequest,
     listPullRequests,

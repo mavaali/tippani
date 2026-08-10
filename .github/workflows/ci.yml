@@ -45,3 +45,9 @@ jobs:
       # fixture, so this one CAN run in CI (and should, every push/PR).
       - name: Built-artifact smoke (dist/cli.cjs --demo)
         run: npm run smoke:built-demo
+
+      # Full direct-GitHub portal flow against a local fake GitHub API:
+      # boot PR -> render markdown -> post inline comment -> private viewed
+      # state -> formal approval. No external network/repository writes.
+      - name: GitHub PR portal smoke
+        run: npm run smoke:github-pr

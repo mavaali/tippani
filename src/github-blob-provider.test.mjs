@@ -10,6 +10,7 @@ function eq(name, a, b) { ok(name + ` (got ${JSON.stringify(a)})`, JSON.stringif
 }
 {
   const calls = [];
+  let dynamicOwner = "o", dynamicRepo = "r";
   const client = {
     request: async (...args) => {
       calls.push(args);
@@ -17,7 +18,8 @@ function eq(name, a, b) { ok(name + ` (got ${JSON.stringify(a)})`, JSON.stringif
     },
   };
   const provider = createGitHubBlobProvider(client, {
-    owner: "o", repo: "r",
+    getOwner: () => dynamicOwner,
+    getRepo: () => dynamicRepo,
   });
   eq("bound blob bytes", [...await provider.getBlob(
     "/images/a.png", "refs/heads/spec/x",
@@ -34,6 +36,10 @@ function eq(name, a, b) { ok(name + ` (got ${JSON.stringify(a)})`, JSON.stringif
   await provider.getBlob("/b.png", "main", { repo: "x/other" });
   ok("explicit full repo override", calls[1][1] ===
     "/repos/x/other/contents/b.png");
+  dynamicOwner = "contributor";
+  await provider.getBlob("/c.png", "main");
+  ok("dynamic bound repo follows fork head", calls[2][1] ===
+    "/repos/contributor/r/contents/c.png");
 }
 
 console.log(`\ngithub-blob-provider.test: ${pass} passed, ${fail} failed`);

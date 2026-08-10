@@ -31,6 +31,18 @@ npm install -g tippani
 tippani 12345 --org=https://dev.azure.com/YOUR_ORG --project="Your Project" --save-config
 ```
 
+Or open a GitHub pull request directly:
+
+```bash
+tippani github:OWNER/REPO#123
+# equivalent:
+tippani 123 --github=OWNER/REPO
+```
+
+GitHub auth uses `--gh-token`, `TIPPANI_GH_TOKEN` / `GITHUB_TOKEN`, then
+`gh auth token`. GitHub browse/discovery and remote PR authoring are not wired
+yet; direct PR read/comment/edit/review works.
+
 Or run without installing:
 
 ```bash
@@ -98,6 +110,9 @@ tippani --browse
 # Open a PR for review (uses saved config)
 npx tippani <PR_ID>
 
+# Open a GitHub PR directly
+npx tippani github:OWNER/REPO#123
+
 # Open a specific file directly
 npx tippani <PR_ID> --file="/path/to/spec.md"
 
@@ -126,6 +141,8 @@ npx tippani --local-repo=/path/to/clone
 | `--port=<n>` | Serve on a specific port (default `3847`). | `TIPPANI_PORT` |
 | `--headless` | Don't open a browser — for assistant-only sessions. | `TIPPANI_HEADLESS` |
 | `--ado-token=<t>` | Sign in with an access token instead of an interactive login. | `TIPPANI_ADO_TOKEN` |
+| `--github=<owner/repo>` | Review a GitHub PR; pair with the positional PR number. | `TIPPANI_GITHUB_REPO` / `TIPPANI_GH_REPO` |
+| `--gh-token=<t>` | GitHub token (otherwise uses env, then `gh auth token`). | `TIPPANI_GH_TOKEN` / `GITHUB_TOKEN` |
 | `--local-repo=<path>` | Work from a local clone on disk, with no server round-trip. | `TIPPANI_LOCAL_REPO` |
 
 **When the same setting is provided in more than one place**, Tippani uses the first place it finds it, in this order: a command-line flag overrides an environment variable, which overrides a value saved in `~/.tippani/config.json`. In short, a flag always wins, and the config file is the fallback when you pass nothing.
@@ -153,9 +170,12 @@ Priority: CLI flags > env vars > config file.
 
 Tippani signs in with **your own** credentials and keeps them **on your machine** — it never ships a shared secret and never sends your credentials anywhere except to the service that hosts your repositories. That host is the one place connection details matter:
 
-1. **Already signed in on this machine?** If your host has a command-line tool and you've signed in with it, Tippani picks that up automatically and never prompts.
-2. **Prefer a token?** Provide an access token with **Code (read & write)** permission via `--ado-token` (or the `TIPPANI_ADO_TOKEN` environment variable). This is how the assistant integration connects.
-3. **Neither?** Tippani asks you for a token once and saves it locally in the conventional safe way (owner read/write only, under `~/.tippani/`, on this machine only), so you aren't asked again.
+1. **Already signed in on this machine?** Tippani uses `gh auth token` for
+   GitHub, or the existing Azure CLI/PAT flow for Azure DevOps.
+2. **Prefer a token?** GitHub: `--gh-token` / `TIPPANI_GH_TOKEN`.
+   Azure DevOps: `--ado-token` / `TIPPANI_ADO_TOKEN`.
+3. **Neither?** Azure DevOps can prompt once for a PAT. GitHub asks you to run
+   `gh auth login` or provide a token; Tippani never stores the GitHub token.
 
 You only do this the first time; after that, Tippani connects on its own.
 

@@ -182,6 +182,10 @@ fetch; no Octokit dependency).
   the stable numeric handle and keeps the thread node id private for resolve.
   A review comment id that cannot be represented as a safe JavaScript integer
   fails loudly rather than silently losing precision.
+- Fork PRs retain the head repository separately from the base PR repository.
+  Threads/reviews stay on the base PR; file reads, image reads, push-permission
+  checks, branch tips, and commits target the contributor's head repository.
+  Cached mapped PRs re-bind the same head context on restart.
 - Viewed state: private local storage keyed by `owner/repo#PR`, injected into
   the provider. A public issue-comment marker was rejected in review because an
   HTML-only comment is visually empty but still creates a timeline entry and
@@ -196,6 +200,8 @@ fetch; no Octokit dependency).
   surfaced rather than silently falling back to an unanchored issue comment.
 - Reviewer queues union pending `requested_reviewers` with authors of submitted
   reviews, so a PR does not disappear after the reviewer requests changes.
+  Submitted-review lookups run through a bounded eight-worker pool to avoid
+  GitHub's secondary concurrency rate limit.
 
 This implementation is not wired into CLI/provider selection yet; that happens
 after Review + RepoContent + Blob are all available, so the first user-facing
@@ -225,8 +231,14 @@ GitHub mode is end-to-end rather than a partial portal.
 Contents endpoint. Path containment, MIME/security headers, and defensive LFS
 pointer rejection remain above the provider seam, matching ADO BlobProvider.
 
-Review + RepoContent + Blob transports are now available but still not wired to
-CLI/provider selection; integration follows as one user-visible slice.
+Review + RepoContent + Blob are wired into direct PR CLI mode:
+`tippani github:owner/repo#123` (or `tippani 123 --github=owner/repo`).
+GitHub tokens resolve from CLI flag, environment, then `gh auth token`.
+Host-scoped cache files prevent PR-number collisions with ADO. A local fake-API
+smoke boots the portal, renders a spec, posts an inline comment, writes private
+viewed state, and submits formal approval; it runs in CI with no external
+network or repository writes. Browse/discovery, MCP provider selection, and
+remote PR authoring remain later integration slices.
 
 ## Capability gaps are a first-class, visible design element
 
