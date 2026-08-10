@@ -225,8 +225,14 @@ GitHub mode is end-to-end rather than a partial portal.
 Contents endpoint. Path containment, MIME/security headers, and defensive LFS
 pointer rejection remain above the provider seam, matching ADO BlobProvider.
 
-Review + RepoContent + Blob transports are now available but still not wired to
-CLI/provider selection; integration follows as one user-visible slice.
+Review + RepoContent + Blob are wired into direct PR CLI mode:
+`tippani github:owner/repo#123` (or `tippani 123 --github=owner/repo`).
+GitHub tokens resolve from CLI flag, environment, then `gh auth token`.
+Host-scoped cache files prevent PR-number collisions with ADO. A local fake-API
+smoke boots the portal, renders a spec, posts an inline comment, writes private
+viewed state, and submits formal approval; it runs in CI with no external
+network or repository writes. Browse/discovery, MCP provider selection, and
+remote PR authoring remain later integration slices.
 
 ## Capability gaps are a first-class, visible design element
 

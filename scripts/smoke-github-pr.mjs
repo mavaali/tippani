@@ -1,0 +1,245 @@
+// End-to-end direct GitHub PR portal smoke against a local fake GitHub API.
+// No network, no real repository writes.
+
+import http from "node:http";
+import os from "node:os";
+import fs from "node:fs";
+import path from "node:path";
+import { spawn } from "node:child_process";
+import { fileURLToPath } from "node:url";
+
+const ROOT = fileURLToPath(new URL("..", import.meta.url));
+const home = fs.mkdtempSync(path.join(os.tmpdir(), "tippani-gh-smoke-"));
+let pass = 0, fail = 0;
+function check(name, cond, detail) {
+  if (cond) pass++;
+  else { fail++; console.error(`  FAIL: ${name}${detail ? ` — ${detail}` : ""}`); }
+}
+const listen = (server) => new Promise((resolve) => {
+  server.listen(0, "127.0.0.1", () => resolve(server));
+});
+const close = (server) => new Promise((resolve) => server.close(resolve));
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+let commentCreated = false;
+const writes = [];
+const rawPr = {
+  number: 7,
+  node_id: "PR_7",
+  title: "GitHub spec",
+  body: "Description",
+  state: "open",
+  draft: false,
+  created_at: "2026-01-01T00:00:00Z",
+  user: { login: "author", node_id: "U" },
+  head: {
+    ref: "spec/x",
+    sha: "head-sha",
+    repo: {
+      name: "r", full_name: "o/r",
+      owner: { login: "o" },
+      html_url: "https://github.com/o/r",
+    },
+  },
+  base: {
+    ref: "main",
+    repo: {
+      name: "r", full_name: "o/r",
+      owner: { login: "o" },
+      html_url: "https://github.com/o/r",
+    },
+  },
+  html_url: "https://github.com/o/r/pull/7",
+};
+
+const api = await listen(http.createServer(async (req, res) => {
+  const url = new URL(req.url, "http://fake");
+  let body = "";
+  for await (const chunk of req) body += chunk;
+  const parsed = body ? JSON.parse(body) : null;
+  const sendJson = (value, status = 200) => {
+    res.writeHead(status, { "Content-Type": "application/json" });
+    res.end(JSON.stringify(value));
+  };
+
+  if (url.pathname === "/repos/o/r/pulls/7") return sendJson(rawPr);
+  if (url.pathname === "/repos/o/r/pulls/7/files") {
+    return sendJson([{ filename: "docs/spec.md", status: "modified" }]);
+  }
+  if (url.pathname === "/repos/o/r/contents/docs/spec.md") {
+    res.writeHead(200, { "Content-Type": "text/plain" });
+    return res.end("# GitHub Spec\n\nBody.");
+  }
+  if (url.pathname === "/repos/o/r") {
+    return sendJson({ permissions: { push: true } });
+  }
+  if (
+    req.method === "POST" &&
+    url.pathname === "/repos/o/r/pulls/7/comments"
+  ) {
+    writes.push(["comment", parsed]);
+    commentCreated = true;
+    return sendJson({ id: 101 });
+  }
+  if (
+    req.method === "POST" &&
+    url.pathname === "/repos/o/r/pulls/7/reviews"
+  ) {
+    writes.push(["review", parsed]);
+    return sendJson({ id: 1, state: parsed.event });
+  }
+  if (req.method === "POST" && url.pathname === "/graphql") {
+    const nodes = commentCreated ? [{
+      id: "THREAD_1",
+      isResolved: false,
+      path: "docs/spec.md",
+      line: 3,
+      originalLine: null,
+      startLine: null,
+      comments: {
+        nodes: [{
+          id: "COMMENT_101",
+          fullDatabaseId: "101",
+          author: { login: "reviewer" },
+          body: "Comment",
+          createdAt: "2026-01-02T00:00:00Z",
+        }],
+      },
+    }] : [];
+    return sendJson({
+      data: {
+        repository: {
+          pullRequest: {
+            reviewThreads: {
+              nodes,
+              pageInfo: { hasNextPage: false, endCursor: null },
+            },
+          },
+        },
+      },
+    });
+  }
+  return sendJson({ message: `Unhandled ${req.method} ${url.pathname}` }, 404);
+}));
+
+const apiBase = `http://127.0.0.1:${api.address().port}`;
+const portal = http.createServer();
+await listen(portal);
+const portalPort = portal.address().port;
+await close(portal);
+
+const child = spawn(process.execPath, [
+  path.join(ROOT, "src", "index.js"),
+  "github:o/r#7",
+  "--gh-token=test-token",
+  "--headless",
+  `--port=${portalPort}`,
+], {
+  cwd: ROOT,
+  env: {
+    ...process.env,
+    HOME: home,
+    TIPPANI_GITHUB_API_BASE: apiBase,
+  },
+  stdio: ["ignore", "pipe", "pipe"],
+});
+let stdout = "", stderr = "";
+child.stdout.on("data", (chunk) => { stdout += chunk; });
+child.stderr.on("data", (chunk) => { stderr += chunk; });
+
+const base = `http://127.0.0.1:${portalPort}`;
+async function waitReady() {
+  const started = Date.now();
+  while (Date.now() - started < 20000) {
+    try {
+      const response = await fetch(`${base}/file/0`);
+      if (response.ok) return true;
+    } catch {}
+    await sleep(250);
+  }
+  return false;
+}
+
+try {
+  const ready = await waitReady();
+  check("GitHub portal boots to rendered spec", ready, stderr || stdout);
+  if (ready) {
+    const page = await (await fetch(`${base}/file/0`)).text();
+    check("rendered page contains GitHub spec", page.includes("GitHub Spec"));
+
+    const comment = await fetch(`${base}/api/comment`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Origin: `http://localhost:${portalPort}`,
+      },
+      body: JSON.stringify({
+        filePath: "/docs/spec.md",
+        line: 3,
+        content: "Review",
+      }),
+    });
+    const commentResult = await comment.json();
+    check("inline comment syncs through GitHub provider",
+      commentResult.ok && commentResult.synced === true,
+      JSON.stringify(commentResult));
+    check("comment used live head/path/line",
+      writes.some(([kind, value]) =>
+        kind === "comment" &&
+        value.commit_id === "head-sha" &&
+        value.path === "docs/spec.md" &&
+        value.line === 3));
+
+    // Refresh the portal's cached thread list after the successful write, just
+    // as a normal sync/reload does, so the control API can resolve handle 101.
+    await fetch(`${base}/api/sync`, {
+      method: "POST",
+      headers: { Origin: `http://localhost:${portalPort}` },
+    });
+
+    const tokenPath = path.join(
+      home, ".tippani", `session-token-${portalPort}`,
+    );
+    const sessionToken = fs.readFileSync(tokenPath, "utf8").trim();
+    const viewed = await fetch(`${base}/api/v1/threads/101/viewed`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${sessionToken}`,
+        "X-Tippani-Client": "smoke-github-pr",
+      },
+    });
+    check("mark-viewed writes through private GitHub store",
+      viewed.status === 200, `status=${viewed.status}`);
+
+    const review = await fetch(`${base}/api/review`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Origin: `http://localhost:${portalPort}`,
+      },
+      body: JSON.stringify({ type: "approve" }),
+    });
+    const reviewResult = await review.json();
+    check("formal approval syncs through GitHub provider",
+      review.status === 200 && reviewResult.ok === true);
+    check("approval sent APPROVE event",
+      writes.some(([kind, value]) =>
+        kind === "review" && value.event === "APPROVE"));
+
+    const viewedPath = path.join(home, ".tippani", "github-viewed.json");
+    check("viewed state remains private (no GitHub issue comment writes)",
+      !writes.some(([kind]) => kind === "issue-comment"));
+    check("viewed state is durable local JSON", fs.existsSync(viewedPath));
+    if (fs.existsSync(viewedPath)) {
+      const viewedJson = JSON.parse(fs.readFileSync(viewedPath, "utf8"));
+      check("viewed store key/value", viewedJson["o/r#7"]?.["101"] === 101);
+    }
+  }
+} finally {
+  child.kill("SIGTERM");
+  await close(api);
+  fs.rmSync(home, { recursive: true, force: true });
+}
+
+console.log(`\nsmoke-github-pr: ${pass} passed, ${fail} failed`);
+process.exit(fail === 0 ? 0 : 1);

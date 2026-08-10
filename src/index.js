@@ -79,6 +79,12 @@ import { createAdoAuthoringProvider } from "./ado-authoring-provider.js";
 import { createAdoWorkItemProvider } from "./ado-work-item-provider.js";
 import { createAdoSearchProvider } from "./ado-search-provider.js";
 import { createAdoBlobProvider } from "./ado-blob-provider.js";
+import { createGitHubClient } from "./github-client.js";
+import { createGitHubReviewProvider } from "./github-review-provider.js";
+import { createGitHubRepoContentProvider } from "./github-repo-content-provider.js";
+import { createGitHubBlobProvider } from "./github-blob-provider.js";
+import { createGitHubViewedStore } from "./github-viewed-store.js";
+import { parseGitHubTarget, selectGitHubToken } from "./github-target.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -115,6 +121,9 @@ function getConfig() {
 
 // Resolved at startup
 let ADO_ORG, ADO_PROJECT, ADO_REPO;
+let _hostKind = "ado";
+let _githubOwner = null, _githubRepo = null;
+let _githubReview = null, _githubRepoContent = null, _githubBlobs = null;
 // Human-readable name for ADO_PROJECT (which applyRepoContextFromPR may re-point
 // to a project GUID). Resolved by listAdoProjects so the picker never shows a GUID.
 let _adoProjectDisplayName = null;
@@ -143,7 +152,10 @@ function savePat(pat) {
 const CACHE_DIR = path.join(CONFIG_DIR, "cache");
 
 function getCachePath(prId) {
-  return path.join(CACHE_DIR, `pr-${prId}.json`);
+  const stem = _hostKind === "github"
+    ? `github-${String(_githubOwner).replace(/[^a-z0-9.-]/gi, "_")}-${String(_githubRepo).replace(/[^a-z0-9.-]/gi, "_")}-pr-${prId}`
+    : `pr-${prId}`;
+  return path.join(CACHE_DIR, `${stem}.json`);
 }
 
 function loadCache(prId) {
@@ -169,7 +181,8 @@ function isCacheFresh(cache, maxAgeMs = 3600000) {
 }
 
 function getPendingPath(prId) {
-  return path.join(CACHE_DIR, `pr-${prId}-pending.json`);
+  const base = path.basename(getCachePath(prId), ".json");
+  return path.join(CACHE_DIR, `${base}-pending.json`);
 }
 
 function loadPending(prId) {
@@ -279,6 +292,14 @@ const { approveLocalRoot, isApprovedRoot, isContained, containingRoot } = create
 function friendlyAdoError(e, context) {
   const msg = e.message || String(e);
   const status = e.statusCode || e.status || (msg.match(/(\d{3})/) || [])[1];
+  if (_hostKind === "github") {
+    if (status == 401) return "GitHub authentication failed (401). Refresh TIPPANI_GH_TOKEN or run `gh auth login`.";
+    if (status == 403) return "GitHub access denied (403). The token may lack pull-request or contents write access.";
+    if (status == 404) return `GitHub repository or pull request not found: ${_githubOwner}/${_githubRepo}.`;
+    if (status == 422) return `GitHub rejected the request: ${msg}`;
+    if (status == 429) return "GitHub rate limited the request. Wait and retry.";
+    return `${context}: ${msg}`;
+  }
   if (msg.includes("ENOTFOUND") || msg.includes("ECONNREFUSED"))
     return `Could not connect to ADO org. Check the --org URL and your network.`;
   if (status == 401)
@@ -395,15 +416,41 @@ function adoBlobs(conn) {
   }
   return provider;
 }
+function reviewProvider(conn) {
+  return _hostKind === "github" ? _githubReview : adoReview(conn);
+}
+function repoContentProvider(conn) {
+  return _hostKind === "github" ? _githubRepoContent : adoRepoContent(conn);
+}
+function blobProvider(conn) {
+  return _hostKind === "github" ? _githubBlobs : adoBlobs(conn);
+}
+function initGitHubProviders(token, { owner, repo }) {
+  const client = createGitHubClient({
+    token,
+    apiBase: process.env.TIPPANI_GITHUB_API_BASE ||
+      "https://api.github.com",
+  });
+  const viewedStore = createGitHubViewedStore(
+    path.join(CONFIG_DIR, "github-viewed.json"),
+  );
+  _githubReview = createGitHubReviewProvider(client, {
+    owner, repo, viewedStore,
+  });
+  _githubRepoContent = createGitHubRepoContentProvider(client);
+  _githubBlobs = createGitHubBlobProvider(client, { owner, repo });
+  _conn = client; // truthy session handle; generic adapters ignore its ADO shape
+  return client;
+}
 
 async function getPullRequest(conn, prId) {
-  return adoReview(conn).getPullRequest(prId);
+  return reviewProvider(conn).getPullRequest(prId);
 }
 
 // List pull requests for the configured project (item 6). `criteria` is a
 // GitPullRequestSearchCriteria (see pr-criteria.buildPrCriteria).
 async function listPullRequests(conn, criteria, top = 50) {
-  return adoReview(conn).listPullRequests(criteria, top);
+  return reviewProvider(conn).listPullRequests(criteria, top);
 }
 
 // List pull requests across the WHOLE org (every project) matching the criteria
@@ -412,6 +459,10 @@ async function listPullRequests(conn, criteria, top = 50) {
 // method, so this calls the org-level REST endpoint directly (same auth handler
 // as every other call, via conn.rest). Best-effort: returns [] on failure.
 async function listOrgPullRequests(conn, criteria, top = 50) {
+  if (_hostKind === "github") {
+    // GitHub direct mode is currently repository-scoped, not org-wide.
+    return reviewProvider(conn).listPullRequests(criteria, top);
+  }
   try {
     return await adoSearch(conn).searchPullRequests(criteria, top);
   } catch (e) {
@@ -429,7 +480,7 @@ const _isGuid = (s) => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f
 
 async function listAdoProjects(conn) {
   try {
-    const projects = await adoRepoContent(conn).listProjects();
+    const projects = await repoContentProvider(conn).listProjects();
     const names = (projects || []).map((p) => p && p.name).filter(Boolean);
     // ADO_PROJECT may have been re-pointed to a project GUID by
     // applyRepoContextFromPR. Resolve it back to a human name so the picker
@@ -459,7 +510,7 @@ function applyRepoContextFromPR(pr) {
 }
 
 async function getFileContent(conn, filePath, ver) {
-  return adoReview(conn).getFileContent(filePath, ver);
+  return reviewProvider(conn).getFileContent(filePath, ver);
 }
 
 // Version descriptor for reading the bound PR's file content: prefer the PR's
@@ -475,7 +526,7 @@ function contentVersion() { return _pr ? prContentVersion(_pr) : _branch; }
 // in LFS); without it the call returns the ~130-byte LFS pointer text, which
 // would stream as a broken image.
 async function getImageBlob(conn, filePath, ver) {
-  return adoBlobs(conn).getBlob(filePath, ver);
+  return blobProvider(conn).getBlob(filePath, ver);
 }
 
 
@@ -486,7 +537,7 @@ async function getImageBlob(conn, filePath, ver) {
 // capped), and pull the file-anchored threads from each. Best-effort — returns
 // [] on any failure so the read-only view still renders.
 async function getFileReviewHistory(conn, repoId, filePath, branch = "main") {
-  const history = await adoReview(conn).getFileReviewHistory(
+  const history = await reviewProvider(conn).getFileReviewHistory(
     repoId, filePath, branch,
   );
   // The provider returns raw ADO comments. Rendering stays above the provider
@@ -511,7 +562,7 @@ async function getFileReviewHistory(conn, repoId, filePath, branch = "main") {
 }
 
 async function getPRChangedFiles(conn, prId) {
-  return adoReview(conn).listChangedFiles(prId);
+  return reviewProvider(conn).listChangedFiles(prId);
 }
 
 // Load a PR into module state: fetch it, re-point the repo context at its real
@@ -544,28 +595,28 @@ async function bindPr(prId) {
 }
 
 async function getCommentThreads(conn, prId) {
-  return adoReview(conn).listThreads(prId);
+  return reviewProvider(conn).listThreads(prId);
 }
 
 async function createCommentThread(conn, prId, filePath, line, content) {
-  return adoReview(conn).createComment(prId, {
+  return reviewProvider(conn).createComment(prId, {
     filePath, line, body: content,
   });
 }
 
 async function replyToThread(conn, prId, threadId, content) {
-  return adoReview(conn).replyToThread(prId, threadId, content);
+  return reviewProvider(conn).replyToThread(prId, threadId, content);
 }
 
 async function resolveThread(conn, prId, threadId) {
-  return adoReview(conn).resolveThread(prId, threadId);
+  return reviewProvider(conn).resolveThread(prId, threadId);
 }
 
 // Record the signed-in user's review vote on the PR (the Approve / Request
 // changes bar). ADO addresses a vote by reviewer identity, so this needs the
 // authenticated user's id — an anonymous vote is not expressible.
 async function submitReviewVote(conn, prId, vote) {
-  return adoReview(conn).submitReview(prId, vote);
+  return reviewProvider(conn).submitReview(prId, vote);
 }
 
 // Durable "viewed" state: ADO comment-thread properties are NOT updatable
@@ -578,16 +629,16 @@ async function submitReviewVote(conn, prId, vote) {
 // on a transient/corrupt read so a caller doing read-modify-write never wipes
 // existing markers by writing an empty map after a failed read.
 async function readViewedMap(conn, prId) {
-  return adoReview(conn).readViewed(prId);
+  return reviewProvider(conn).readViewed(prId);
 }
 // Lenient read for DISPLAY only: on any failure fall back to no-markers so the
 // page still renders (threads just show as unread). NEVER use this result to
 // write back — use readViewedMap for read-modify-write.
 async function getViewedMap(conn, prId) {
-  return adoReview(conn).getViewed(prId);
+  return reviewProvider(conn).getViewed(prId);
 }
 async function setViewedMap(conn, prId, map) {
-  return adoReview(conn).setViewed(prId, map);
+  return reviewProvider(conn).setViewed(prId, map);
 }
 
 // Load viewed markers for DISPLAY, distinguishing "genuinely none" from
@@ -598,7 +649,7 @@ async function setViewedMap(conn, prId, map) {
 // `error` to the user instead of silently showing all-unread.
 async function loadViewedState(conn, prId, isOffline) {
   if (!conn) return { map: {}, error: null };
-  return adoReview(conn).loadViewedState(prId, isOffline);
+  return reviewProvider(conn).loadViewedState(prId, isOffline);
 }
 
 // Amber banner shown when the viewed markers couldn't be read, so a failed read
@@ -619,14 +670,14 @@ function viewedWarning(err) {
 // explicit repo/project so the authoring write path can target any repo without
 // leaning on the module globals.
 async function getBranchTip(conn, branchRef, repoId = ADO_REPO, project = ADO_PROJECT) {
-  return adoRepoContent(conn).getBranchTip(repoId, project, branchRef);
+  return repoContentProvider(conn).getBranchTip(repoId, project, branchRef);
 }
 
 // Commit an edited file to a branch via the ADO push API. expectedOldObjectId, when
 // provided, is used as the push's oldObjectId (optimistic concurrency — the conflict
 // guard in #49 passes the load-time SHA); otherwise the live tip is used.
 async function pushFileToBranch(conn, branchRef, filePath, content, message, expectedOldObjectId) {
-  return adoReview(conn).commitFile(branchRef, {
+  return reviewProvider(conn).commitFile(branchRef, {
     filePath,
     content,
     message,
@@ -651,7 +702,7 @@ async function computeCanEdit(conn, pr, isOffline) {
   let probe = null; // indeterminate => fail open
   if (projectId && repoId) {
     try {
-      probe = await adoReview(conn).probePushPermission(projectId, repoId);
+      probe = await reviewProvider(conn).probePushPermission(projectId, repoId);
     } catch (e) {
       console.log("  ⚠ Could not verify push permission; Edit left enabled. (" + e.message + ")");
       probe = null;
@@ -6430,6 +6481,7 @@ const _remoteSpecDrafts = {
 // host-token invariant: in host-token mode it uses the live bearer or nothing —
 // it never falls back to a PAT/CLI identity (selectAdoAuthSource enforces this).
 function buildConnForOrg(org) {
+  if (_hostKind === "github") return null;
   if ((!org || org === ADO_ORG) && _conn) return _conn;
   // Only consult a saved PAT in standalone mode; in host-token mode a missing
   // live token must fail, not switch identity.
@@ -6508,6 +6560,12 @@ async function pushRemoteSpec({ org, project, repo, branch, message, oldObjectId
 // we inject the real ADO calls, each bounded by the adoCall timeout. Title/type
 // come from the caller — never inferred.
 async function openPr(args = {}) {
+  if (_hostKind === "github") {
+    return {
+      ok: false,
+      error: "Opening GitHub pull requests from Tippani is not wired yet.",
+    };
+  }
   let target;
   try { target = await resolveTarget({ org: args.org, project: args.project, repo: args.repo }); }
   catch (e) { return { ok: false, error: e.message }; }
@@ -6730,7 +6788,7 @@ async function listBranchFolders({ project, repo, branch, scope } = {}) {
   let repoContent = null;
   if (!_isOffline && _conn && repo) {
     try {
-      repoContent = adoRepoContent(_conn);
+      repoContent = repoContentProvider(_conn);
       const scopePath = scopeN ? "/" + scopeN : "/";
       const items = await repoContent.listItems(
         repo,
@@ -6800,10 +6858,26 @@ async function main() {
     return;
   }
 
-  _prId = parseInt(positional[0]);
+  const githubTarget = parseGitHubTarget(args, process.env);
+  if (githubTarget.error) {
+    console.error(`Error: ${githubTarget.error}`);
+    process.exit(1);
+  }
+  if (githubTarget.isGitHub) {
+    _hostKind = "github";
+    _githubOwner = githubTarget.owner;
+    _githubRepo = githubTarget.repo;
+    _prId = githubTarget.prId;
+  } else {
+    _prId = parseInt(positional[0]);
+  }
   const explicitFile = args.find((a) => a.startsWith("--file="))?.split("=").slice(1).join("=") || positional[1] || null;
 
   const browseMode = args.includes("--browse");
+  if (_hostKind === "github" && browseMode) {
+    console.error("GitHub browse/discovery mode is not available yet. Open a specific PR.");
+    process.exit(1);
+  }
   // A local repo can be reviewed with no ADO PR: --local-repo populates the
   // Local tab and (alone) boots the portal in browse mode.
   const localRepoArg = (args.find(a => a.startsWith("--local-repo="))?.split("=").slice(1).join("=")) || process.env.TIPPANI_LOCAL_REPO || null;
@@ -6829,36 +6903,51 @@ async function main() {
     console.log("  --port=<n>        Serve on a specific port (default 3847)");
     console.log("  --headless        Don't open a browser (agent-only session)");
     console.log("  --ado-token=<t>   Use a bearer token for ADO (skip PAT / az CLI)");
+    console.log("  --github=o/r      Review GitHub PR <PR_ID> in owner/repo");
+    console.log("  --gh-token=<t>    GitHub token (else TIPPANI_GH_TOKEN / gh auth token)");
     console.log("");
     console.log("Examples:");
     console.log("  tippani --demo");
     console.log("  tippani 992661");
     console.log("  tippani 992661 --org=https://dev.azure.com/myorg --project='My Project'");
     console.log("  tippani 992661 --offline");
+    console.log("  tippani github:owner/repo#123");
+    console.log("  tippani 123 --github=owner/repo");
     console.log("");
     console.log("Config: ~/.tippani/config.json (set defaults to avoid repeated flags)");
     process.exit(1);
   }
 
-  // Resolve ADO config
+  // Resolve host configuration. Existing templates still use these context
+  // variables for labels/links; in GitHub mode they carry owner/full repo.
   const adoConfig = getConfig();
-  if ((!adoConfig.org || !adoConfig.project) && !_localRepoPath) {
-    console.error("Error: --org and --project are required (or set in ~/.tippani/config.json).");
-    console.error("Run: tippani <PR_ID> --org=https://dev.azure.com/YOURORG --project='YOUR PROJECT' --save-config");
-    process.exit(1);
+  if (_hostKind === "github") {
+    ADO_ORG = "https://github.com";
+    ADO_PROJECT = _githubOwner;
+    ADO_REPO = `${_githubOwner}/${_githubRepo}`;
+  } else {
+    if ((!adoConfig.org || !adoConfig.project) && !_localRepoPath) {
+      console.error("Error: --org and --project are required (or set in ~/.tippani/config.json).");
+      console.error("Run: tippani <PR_ID> --org=https://dev.azure.com/YOURORG --project='YOUR PROJECT' --save-config");
+      process.exit(1);
+    }
+    ADO_ORG = (adoConfig.org || "").replace(/\/+$/, "");
+    if (ADO_ORG && !ADO_ORG.startsWith("https://")) ADO_ORG = "https://" + ADO_ORG;
+    ADO_PROJECT = adoConfig.project || "";
+    ADO_REPO = adoConfig.repo || adoConfig.project || "";
   }
-  ADO_ORG = (adoConfig.org || "").replace(/\/+$/, "");
-  if (ADO_ORG && !ADO_ORG.startsWith("https://")) ADO_ORG = "https://" + ADO_ORG;
-  ADO_PROJECT = adoConfig.project || "";
-  ADO_REPO = adoConfig.repo || adoConfig.project || "";
 
   // Save config if requested
-  if (args.includes("--save-config")) {
+  if (args.includes("--save-config") && _hostKind === "ado") {
     saveConfig({ org: ADO_ORG, project: ADO_PROJECT, repo: ADO_REPO });
     console.log("Config saved to ~/.tippani/config.json");
   }
 
-  console.log(`  Org: ${ADO_ORG} | Project: ${ADO_PROJECT} | Repo: ${ADO_REPO}`);
+  if (_hostKind === "github") {
+    console.log(`  GitHub: ${_githubOwner}/${_githubRepo}`);
+  } else {
+    console.log(`  Org: ${ADO_ORG} | Project: ${ADO_PROJECT} | Repo: ${ADO_REPO}`);
+  }
 
   const forceRefresh = args.includes("--refresh");
   _isOffline = args.includes("--offline");
@@ -6872,13 +6961,33 @@ async function main() {
   if (Number.isFinite(portVal) && portVal > 0) PORT = portVal;
   const headless = args.includes("--headless") || process.env.TIPPANI_HEADLESS === "1";
   const adoToken = (args.find(a => a.startsWith("--ado-token="))?.split("=").slice(1).join("=")) || process.env.TIPPANI_ADO_TOKEN || null;
+  let githubToken = null;
+  if (_hostKind === "github" && !_isOffline) {
+    const { execSync } = await import("node:child_process");
+    const selected = selectGitHubToken({
+      args,
+      env: process.env,
+      execGh: () => execSync("gh auth token", {
+        encoding: "utf8",
+        timeout: 15000,
+        stdio: ["ignore", "pipe", "ignore"],
+      }),
+    });
+    githubToken = selected.token;
+    if (!githubToken) {
+      console.error("GitHub authentication required. Set TIPPANI_GH_TOKEN, pass --gh-token, or run `gh auth login`.");
+      process.exit(1);
+    }
+    initGitHubProviders(githubToken, githubTarget);
+    console.log(`Authenticated to GitHub via ${selected.source}.`);
+  }
 
   // Host-token mode: the embedding host injected a token. Latch it so the auth
   // path never switches to a PAT/CLI identity later (a stale token gets refreshed
   // via POST /api/v1/ado-token, not swapped). Seed _adoToken from it so a write
   // to a NON-default org can build a connection off the provided token — startup
   // otherwise only binds the default-org _conn.
-  HOST_TOKEN_MODE = !!(adoToken && adoToken.trim());
+  HOST_TOKEN_MODE = _hostKind === "ado" && !!(adoToken && adoToken.trim());
   if (HOST_TOKEN_MODE) _adoToken = adoToken;
 
   // Browse mode (item 6): a PR-less portal that only lists pull requests
@@ -6924,17 +7033,19 @@ async function main() {
     _otherChangedFiles = _cache.otherChangedFiles || [];
 
     // Establish connection for live actions (comment sync etc.)
-    let pat = loadPat();
-    if (adoToken) {
-      _conn = getAdoConnectionBearer(adoToken);
-    } else if (pat) {
-      _conn = getAdoConnection(pat);
-    } else {
-      const token = await getTokenFromAzCli();
-      if (token) {
-        _conn = getAdoConnectionBearer(token);
+    if (_hostKind === "ado") {
+      let pat = loadPat();
+      if (adoToken) {
+        _conn = getAdoConnectionBearer(adoToken);
+      } else if (pat) {
+        _conn = getAdoConnection(pat);
+      } else {
+        const token = await getTokenFromAzCli();
+        if (token) {
+          _conn = getAdoConnectionBearer(token);
+        }
+        // If no auth available, operate with cached data only
       }
-      // If no auth available, operate with cached data only
     }
   } else if (_isOffline) {
     // Pure offline — skip auth entirely
@@ -6946,45 +7057,47 @@ async function main() {
     _otherChangedFiles = _cache.otherChangedFiles || [];
     _conn = null;
   } else {
-    // Need to fetch from ADO
-    let pat = loadPat();
-
-    if (adoToken) {
-      console.log("Authenticated via provided ADO token.");
-      _conn = getAdoConnectionBearer(adoToken);
-    } else if (pat) {
-      console.log("Using saved PAT...");
-      _conn = getAdoConnection(pat);
-    } else {
-      console.log("Trying az CLI for authentication...");
-      const token = await getTokenFromAzCli();
-      if (token) {
-        console.log("Authenticated via az CLI.");
-        _conn = getAdoConnectionBearer(token);
-      } else {
-        const readline = await import("readline");
-        const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
-        pat = await new Promise((resolve) => {
-          console.log("\nNo credentials found. Recommended: run 'az login' in another terminal, then re-run tippani (no PAT needed).");
-          console.log("Otherwise, generate a PAT at:");
-          console.log(`  ${ADO_ORG}/_usersSettings/tokens`);
-          console.log("  Scope: Code (Read & Write). Note: PAT creation may be blocked by your tenant policy.\n");
-          rl.question("Paste your PAT: ", (answer) => {
-            rl.close();
-            resolve(answer.trim());
-          });
-        });
-        if (!pat) {
-          console.error("No PAT provided. Exiting.");
-          process.exit(1);
-        }
-        savePat(pat);
-        console.log("PAT saved to ~/.tippani/pat\n");
+    // Need to fetch from the host. GitHub providers were initialized above;
+    // ADO retains its existing PAT/az CLI authentication flow.
+    if (_hostKind === "ado") {
+      let pat = loadPat();
+      if (adoToken) {
+        console.log("Authenticated via provided ADO token.");
+        _conn = getAdoConnectionBearer(adoToken);
+      } else if (pat) {
+        console.log("Using saved PAT...");
         _conn = getAdoConnection(pat);
+      } else {
+        console.log("Trying az CLI for authentication...");
+        const token = await getTokenFromAzCli();
+        if (token) {
+          console.log("Authenticated via az CLI.");
+          _conn = getAdoConnectionBearer(token);
+        } else {
+          const readline = await import("readline");
+          const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+          pat = await new Promise((resolve) => {
+            console.log("\nNo credentials found. Recommended: run 'az login' in another terminal, then re-run tippani (no PAT needed).");
+            console.log("Otherwise, generate a PAT at:");
+            console.log(`  ${ADO_ORG}/_usersSettings/tokens`);
+            console.log("  Scope: Code (Read & Write). Note: PAT creation may be blocked by your tenant policy.\n");
+            rl.question("Paste your PAT: ", (answer) => {
+              rl.close();
+              resolve(answer.trim());
+            });
+          });
+          if (!pat) {
+            console.error("No PAT provided. Exiting.");
+            process.exit(1);
+          }
+          savePat(pat);
+          console.log("PAT saved to ~/.tippani/pat\n");
+          _conn = getAdoConnection(pat);
+        }
       }
     }
 
-    console.log(`Loading PR #${_prId}...`);
+    console.log(`Loading ${_hostKind === "github" ? "GitHub " : ""}PR #${_prId}...`);
     try {
       _pr = await getPullRequest(_conn, _prId);
     } catch (e) {
@@ -7000,8 +7113,8 @@ async function main() {
     }
 
     // Warn if PR is abandoned or completed
-    if (_pr.status === 3) console.log("  ⚠ This PR is abandoned. Comments may not be actionable.");
-    if (_pr.status === 2) console.log("  ⚠ This PR is completed. Comments may not be actionable.");
+    if (_pr.status === 2) console.log("  ⚠ This PR is abandoned. Comments may not be actionable.");
+    if (_pr.status === 3) console.log("  ⚠ This PR is completed. Comments may not be actionable.");
 
     _branch = _pr.sourceRefName;
 
@@ -7030,7 +7143,7 @@ async function main() {
     const threads = await getCommentThreads(_conn, _prId);
     _cache = { pr: _pr, branch: _branch, changedFiles: _changedFiles, otherChangedFiles: _otherChangedFiles, fileContents, threads, cachedAt: new Date().toISOString() };
     saveCache(_prId, _cache);
-    console.log("  Cached to ~/.tippani/cache/pr-" + _prId + ".json");
+    console.log("  Cached to " + getCachePath(_prId));
   }
 
   if (_changedFiles.length === 0) {
@@ -7775,7 +7888,7 @@ async function main() {
     if (_isOffline || !_conn) return { prs: [], error: "offline" };
     let currentUserId = null;
     let identityError = null;
-    try { currentUserId = (await adoReview(_conn).getCurrentUser())?.id || null; }
+    try { currentUserId = (await reviewProvider(_conn).getCurrentUser())?.id || null; }
     catch (e) { identityError = friendlyAdoError(e, "Review queue"); }
     const top = Number.isFinite(query.top) ? query.top : 50;
 
@@ -7808,6 +7921,12 @@ async function main() {
   // picks the project; the MCP client passes the freeform WIQL. Read-only: the
   // query is gated to a SELECT before it reaches ADO.
   async function searchWorkItems({ project, wiql } = {}) {
+    if (_hostKind === "github") {
+      return {
+        workItems: [],
+        error: "Work-item search is not available for GitHub repositories.",
+      };
+    }
     if (_isOffline || !_conn) return { workItems: [], error: "offline" };
     if (!isReadOnlyWiql(wiql)) return { workItems: [], error: "WIQL must be a read-only SELECT query." };
     const proj = (project && String(project).trim()) || ADO_PROJECT;
@@ -7840,6 +7959,12 @@ async function main() {
   // markdown and results are post-filtered to Git repos (TFVC hits can't be
   // opened via the Git item API).
   async function searchSpecs({ project, query, enrich = false, top } = {}) {
+    if (_hostKind === "github") {
+      return {
+        specs: [],
+        error: "Spec search is not wired for GitHub yet. Open a specific pull request.",
+      };
+    }
     if (_isOffline || !_conn) return { specs: [], error: "offline" };
     const q = (query == null ? "" : String(query)).trim();
     const proj = (project && String(project).trim()) || ADO_PROJECT;
@@ -7898,7 +8023,7 @@ async function main() {
     const list = Array.isArray(files) ? files.slice(0, 25) : [];
     if (!list.length) return { files: [], count: 0 };
     const perFile = Number.isFinite(top) && top > 0 ? Math.min(Math.floor(top), 50) : 10;
-    const repoContent = adoRepoContent(_conn);
+    const repoContent = repoContentProvider(_conn);
     const out = new Array(list.length);
     const one = async (f) => {
       const repoId = String((f && (f.repo || f.repoId)) || "").trim();
@@ -7948,7 +8073,7 @@ async function main() {
   async function listMyBranches({ project } = {}) {
     if (_isOffline || !_conn) return { branches: [], error: "offline" };
     const proj = (project && String(project).trim()) || ADO_PROJECT;
-    const repoContent = adoRepoContent(_conn);
+    const repoContent = repoContentProvider(_conn);
     let repos;
     try {
       repos = await repoContent.listRepositories(proj);
@@ -8012,7 +8137,7 @@ async function main() {
     if (_me) return _me;
     if (_isOffline || !_conn) return { displayName: "You", id: null };
     try {
-      const user = await adoReview(_conn).getCurrentUser();
+      const user = await reviewProvider(_conn).getCurrentUser();
       _me = {
         displayName: user?.displayName || "You",
         uniqueName: user?.uniqueName || null,
@@ -8294,7 +8419,7 @@ async function main() {
     const repoRef = String(repo || repoName || "").trim();
     if (!repoRef || !b || !filePath) return { ok: false, error: "repo, branch and path required." };
     let info;
-    try { info = await adoRepoContent(_conn).resolveRepository(repoRef, proj); }
+    try { info = await repoContentProvider(_conn).resolveRepository(repoRef, proj); }
     catch (e) { return { ok: false, error: "Could not find that repository." }; }
     if (!info || !info.id) return { ok: false, error: "Could not find that repository." };
     const back = `/branch?project=${encodeURIComponent(proj)}&repo=${encodeURIComponent(info.id)}&repoName=${encodeURIComponent(info.name)}&ref=${encodeURIComponent(b)}`;
@@ -8336,7 +8461,7 @@ async function main() {
     const version = String(ref || "").replace(/^refs\/heads\//, "").trim();
     if (!version) return { ok: false, error: "Missing branch." };
     try {
-      const repoContent = adoRepoContent(_conn);
+      const repoContent = repoContentProvider(_conn);
       // Resolve the repo (accepts id or name) to its canonical id/name + default.
       let repoInfo;
       try {
@@ -8783,11 +8908,11 @@ if ($path) { [Console]::Out.Write($path) }
     if (!ids.size) return threads || [];
     return (threads || []).map((t) => ids.has(Number(t.id)) ? { ...t, status: 2, pendingResolve: true } : t);
   }
-  // Requires a live connection — this is deliberately NOT queued offline since
-  // the whole point is durable, shared state.
+  // Requires a live provider. ADO persists shared PR properties; GitHub uses
+  // private durable local state (no public timeline comment/notification).
   async function doSetViewed(threadId, commentId) {
     if (_isOffline || !_conn) {
-      return { ok: false, status: 503, body: { error: "offline: viewed state needs a live Azure DevOps connection" } };
+      return { ok: false, status: 503, body: { error: "offline: viewed state needs a live provider" } };
     }
     try {
       // Strict read: if the read fails, updateViewed propagates and NO write
