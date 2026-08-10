@@ -76,6 +76,7 @@ import { createStagedInventory, normFolder, parentFolder } from "./staged-invent
 import { createAdoReviewProvider } from "./ado-review-provider.js";
 import { createAdoRepoContentProvider } from "./ado-repo-content-provider.js";
 import { createAdoAuthoringProvider } from "./ado-authoring-provider.js";
+import { createAdoWorkItemProvider } from "./ado-work-item-provider.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -329,6 +330,7 @@ function getAdoConnection(pat) {
 const _adoReviewProviders = new WeakMap();
 const _adoRepoContentProviders = new WeakMap();
 const _adoAuthoringProviders = new WeakMap();
+const _adoWorkItemProviders = new WeakMap();
 function adoReview(conn) {
   if (!conn) throw new Error("ADO review provider requires a connection");
   let provider = _adoReviewProviders.get(conn);
@@ -356,6 +358,15 @@ function adoAuthoring(conn) {
   if (!provider) {
     provider = createAdoAuthoringProvider(conn);
     _adoAuthoringProviders.set(conn, provider);
+  }
+  return provider;
+}
+function adoWorkItems(conn) {
+  if (!conn) throw new Error("ADO work-item provider requires a connection");
+  let provider = _adoWorkItemProviders.get(conn);
+  if (!provider) {
+    provider = createAdoWorkItemProvider(conn);
+    _adoWorkItemProviders.set(conn, provider);
   }
   return provider;
 }
@@ -6520,7 +6531,7 @@ async function openPr(args = {}) {
   try { target = await resolveTarget({ org: args.org, project: args.project, repo: args.repo }); }
   catch (e) { return { ok: false, error: e.message }; }
   const authoring = adoAuthoring(target.conn);
-  const witApi = await target.conn.getWorkItemTrackingApi();
+  const workItems = adoWorkItems(target.conn);
   try {
     return await openSpecReviewPr({
       call: (fn) => adoCall(fn, { label: "pr-open" }),
@@ -6528,11 +6539,13 @@ async function openPr(args = {}) {
         target.repoId, target.project, req,
       ),
       findWorkItems: async (wiql) => {
-        const q = await witApi.queryByWiql({ query: wiql }, { project: target.project });
-        return (q.workItems || []).map((w) => ({ id: w.id }));
+        const refs = await workItems.queryWorkItemRefs(target.project, wiql);
+        return refs.map((w) => ({ id: w.id }));
       },
-      createWorkItem: async (patch, type) => witApi.createWorkItem(null, patch, target.project, type),
-      linkWorkItem: async (id, patch) => witApi.updateWorkItem(null, patch, id),
+      createWorkItem: async (patch, type) =>
+        workItems.createWorkItem(target.project, type, patch),
+      linkWorkItem: async (id, patch) =>
+        workItems.linkToPullRequest(id, patch),
     }, { ...args, projectId: target.projectId, repositoryId: target.repoId });
   } catch (e) {
     return { ok: false, error: "open PR failed: " + (e?.message || e) };
@@ -7819,15 +7832,15 @@ async function main() {
     if (!isReadOnlyWiql(wiql)) return { workItems: [], error: "WIQL must be a read-only SELECT query." };
     const proj = (project && String(project).trim()) || ADO_PROJECT;
     try {
-      const witApi = await _conn.getWorkItemTrackingApi();
-      const queryResult = await witApi.queryByWiql({ query: wiql }, { project: proj });
-      const ids = (queryResult.workItems || []).map((w) => w.id).filter((n) => Number.isFinite(n)).slice(0, 100);
+      const provider = adoWorkItems(_conn);
+      const refs = await provider.queryWorkItemRefs(proj, wiql);
+      const ids = refs.map((w) => w.id).filter((n) => Number.isFinite(n)).slice(0, 100);
       if (ids.length === 0) return { workItems: [], project: proj, count: 0 };
       const rows = [];
       // ADO getWorkItems caps at 200 ids per call.
       for (let i = 0; i < ids.length; i += 200) {
         const chunk = ids.slice(i, i + 200);
-        const items = await witApi.getWorkItems(chunk, WORK_ITEM_FIELDS, undefined, undefined, undefined, proj);
+        const items = await provider.getWorkItems(proj, chunk, WORK_ITEM_FIELDS);
         for (const it of items || []) {
           rows.push(summarizeWorkItem(it, buildWorkItemUrl(ADO_ORG, proj, it.id)));
         }
