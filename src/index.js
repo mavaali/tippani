@@ -55,7 +55,7 @@ import { makeRepoSession, createSessionTokens } from "./repo-session.js";
 import { saveSpecDraft, loadSpecDraft, deleteSpecDraft } from "./spec-draft-store.js";
 import { openSpecReviewPr } from "./pr-open.js";
 import { specSearchUnavailableMessage } from "./spec-search-error.js";
-import { prContentVersion, toVersionDescriptor } from "./pr-version.js";
+import { prContentVersion } from "./pr-version.js";
 import { renderCrumbBar, renderBrand } from "./breadcrumb.js";
 import {
   decodeConfigValue,
@@ -78,6 +78,7 @@ import { createAdoRepoContentProvider } from "./ado-repo-content-provider.js";
 import { createAdoAuthoringProvider } from "./ado-authoring-provider.js";
 import { createAdoWorkItemProvider } from "./ado-work-item-provider.js";
 import { createAdoSearchProvider } from "./ado-search-provider.js";
+import { createAdoBlobProvider } from "./ado-blob-provider.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -333,6 +334,7 @@ const _adoRepoContentProviders = new WeakMap();
 const _adoAuthoringProviders = new WeakMap();
 const _adoWorkItemProviders = new WeakMap();
 const _adoSearchProviders = new WeakMap();
+const _adoBlobProviders = new WeakMap();
 function adoReview(conn) {
   if (!conn) throw new Error("ADO review provider requires a connection");
   let provider = _adoReviewProviders.get(conn);
@@ -381,6 +383,18 @@ function adoSearch(conn) {
   }
   return provider;
 }
+function adoBlobs(conn) {
+  if (!conn) throw new Error("ADO blob provider requires a connection");
+  let provider = _adoBlobProviders.get(conn);
+  if (!provider) {
+    provider = createAdoBlobProvider(conn, {
+      getRepo: () => ADO_REPO,
+      getProject: () => ADO_PROJECT,
+    });
+    _adoBlobProviders.set(conn, provider);
+  }
+  return provider;
+}
 
 async function getPullRequest(conn, prId) {
   return adoReview(conn).getPullRequest(prId);
@@ -415,8 +429,7 @@ const _isGuid = (s) => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f
 
 async function listAdoProjects(conn) {
   try {
-    const coreApi = await conn.getCoreApi();
-    const projects = await coreApi.getProjects();
+    const projects = await adoRepoContent(conn).listProjects();
     const names = (projects || []).map((p) => p && p.name).filter(Boolean);
     // ADO_PROJECT may have been re-pointed to a project GUID by
     // applyRepoContextFromPR. Resolve it back to a human name so the picker
@@ -462,26 +475,7 @@ function contentVersion() { return _pr ? prContentVersion(_pr) : _branch; }
 // in LFS); without it the call returns the ~130-byte LFS pointer text, which
 // would stream as a broken image.
 async function getImageBlob(conn, filePath, ver) {
-  const gitApi = await conn.getGitApi();
-  const versionDesc = toVersionDescriptor(ver);
-  const item = await gitApi.getItemContent(
-    ADO_REPO,
-    filePath,
-    ADO_PROJECT,
-    undefined,        // scopePath
-    undefined,        // recursionLevel
-    undefined,        // includeContentMetadata
-    undefined,        // latestProcessedChange
-    true,             // download — raw bytes
-    versionDesc,
-    undefined,        // includeContent
-    true              // resolveLfs — return the real blob, not the LFS pointer
-  );
-  const chunks = [];
-  for await (const chunk of item) {
-    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-  }
-  return Buffer.concat(chunks);
+  return adoBlobs(conn).getBlob(filePath, ver);
 }
 
 
@@ -640,10 +634,6 @@ async function pushFileToBranch(conn, branchRef, filePath, content, message, exp
   });
 }
 
-// ADO security namespace + permission bit for Git "Contribute" (push) access.
-const GIT_SECURITY_NAMESPACE = "2e9eb7ed-3c0a-47d4-87c1-0ffdd275fd87";
-const GIT_PERMISSION_GENERIC_CONTRIBUTE = 4;
-
 // Whether the Edit affordance should be offered, gating push access. Decided without a
 // network call when it can be: a non-active PR is never editable; offline is allowed
 // (edits queue and sync on reconnect, per #48); online-but-unauthenticated can't push.
@@ -661,16 +651,7 @@ async function computeCanEdit(conn, pr, isOffline) {
   let probe = null; // indeterminate => fail open
   if (projectId && repoId) {
     try {
-      if (typeof conn.getSecurityApi !== "function") {
-        return decideCanEdit({ isOffline, hasConn: true, prStatus: pr.status, probe: null });
-      }
-      const securityApi = await conn.getSecurityApi();
-      const results = await securityApi.hasPermissions(
-        GIT_SECURITY_NAMESPACE,
-        GIT_PERMISSION_GENERIC_CONTRIBUTE,
-        `repoV2/${projectId}/${repoId}`
-      );
-      probe = Array.isArray(results) ? results[0] === true : results === true;
+      probe = await adoReview(conn).probePushPermission(projectId, repoId);
     } catch (e) {
       console.log("  ⚠ Could not verify push permission; Edit left enabled. (" + e.message + ")");
       probe = null;
@@ -6621,12 +6602,11 @@ const {
   listStagedBranches, stagedTotal,
 } = _inventory;
 
-// The three functions below stay in index.js because they call ADO
-// (mcpCreateBranch, resolveTarget, getBranchTip, createPush, openPr,
-// updatePullRequest, gitApi.getItems) — everything ELSE about staged state
-// now lives behind _inventory, reached here only via snapshot() (read) and
-// removeXMatching() / setPrPublishes() (write-after-success), never via a
-// raw array.
+// The three functions below stay in index.js because they orchestrate several
+// provider capabilities (repo content + authoring) with the local staged
+// inventory. Backend calls themselves now live behind those providers;
+// inventory access is only via snapshot() (read) and removeXMatching() /
+// setPrPublishes() (write-after-success), never via a raw array.
 async function pushStagedBranches() {
   const results = [];
   const { branches, files, folders, prs } = _inventory.snapshot();
@@ -7795,7 +7775,7 @@ async function main() {
     if (_isOffline || !_conn) return { prs: [], error: "offline" };
     let currentUserId = null;
     let identityError = null;
-    try { const cd = await _conn.connect(); currentUserId = cd && cd.authenticatedUser && cd.authenticatedUser.id; }
+    try { currentUserId = (await adoReview(_conn).getCurrentUser())?.id || null; }
     catch (e) { identityError = friendlyAdoError(e, "Review queue"); }
     const top = Number.isFinite(query.top) ? query.top : 50;
 
@@ -8032,11 +8012,11 @@ async function main() {
     if (_me) return _me;
     if (_isOffline || !_conn) return { displayName: "You", id: null };
     try {
-      const cd = await _conn.connect();
+      const user = await adoReview(_conn).getCurrentUser();
       _me = {
-        displayName: (cd && cd.authenticatedUser && cd.authenticatedUser.displayName) || "You",
-        uniqueName: (cd && cd.authenticatedUser && cd.authenticatedUser.uniqueName) || null,
-        id: (cd && cd.authenticatedUser && cd.authenticatedUser.id) || null,
+        displayName: user?.displayName || "You",
+        uniqueName: user?.uniqueName || null,
+        id: user?.id || null,
       };
     } catch { _me = { displayName: "You", uniqueName: null, id: null }; }
     return _me;

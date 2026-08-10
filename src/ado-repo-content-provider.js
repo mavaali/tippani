@@ -27,6 +27,7 @@ export function createAdoRepoContentProvider(conn) {
   if (!conn) throw new Error("ADO repo-content provider requires a connection");
 
   let cachedGitApi = null;
+  let cachedCoreApi = null;
   async function getGitApi() {
     if (cachedGitApi) return cachedGitApi;
     // Cache only a successful acquisition. A transient getGitApi rejection
@@ -35,6 +36,17 @@ export function createAdoRepoContentProvider(conn) {
     const api = await conn.getGitApi();
     cachedGitApi = api;
     return api;
+  }
+  async function getCoreApi() {
+    if (cachedCoreApi) return cachedCoreApi;
+    const api = await conn.getCoreApi();
+    cachedCoreApi = api;
+    return api;
+  }
+
+  async function listProjects() {
+    const coreApi = await getCoreApi();
+    return (await coreApi.getProjects()) || [];
   }
 
   async function resolveRepository(repoRef, project) {
@@ -242,6 +254,7 @@ export function createAdoRepoContentProvider(conn) {
   }
 
   return {
+    listProjects,
     resolveRepository,
     listRepositories,
     listBranches,
