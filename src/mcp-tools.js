@@ -70,14 +70,14 @@ export function buildTools(http, session) {
       try { await http.post("/api/v1/nav", { path }); } catch {}
     }
   }
-  // POST that first makes sure a browse portal is live, self-healing a dropped
-  // session. Used by the reviewing / personal-comment tools which operate on an
-  // already-open portal but — unlike open_branch* — have no natural launch step,
-  // so without this they hard-fail "No tippani session yet" once a portal is
-  // reaped. (Context-defaulting tools still need a file open to resolve which
-  // comment/file they target; this only guarantees the portal itself is up.)
+  // POST that first keeps the current provider portal live, self-healing a
+  // dropped GitHub review instead of silently switching mutations to ADO.
   async function ensuredPost(path, body) {
-    if (session && typeof session.ensureBrowsePortal === "function") await session.ensureBrowsePortal();
+    if (session && typeof session.ensureActivePortal === "function") {
+      await session.ensureActivePortal();
+    } else if (session && typeof session.ensureBrowsePortal === "function") {
+      await session.ensureBrowsePortal();
+    }
     return http.post(path, body || {});
   }
   async function ensuredPut(path, body) {
@@ -698,15 +698,15 @@ export function buildTools(http, session) {
     {
       name: "stage_branch",
       description:
-        "Stage a branch creation in Tippani without creating anything in ADO. " +
+        "Stage a branch creation in Tippani without creating anything remotely. " +
         "push_staged_changes creates it later. " + NEVER_RAW_RULE,
       inputSchema: {
-        project: z.string().describe("ADO project name (required — the write target)"),
-        repo: z.string().describe("ADO repository id or name (required — the write target)"),
+        project: z.string().describe("ADO project or GitHub owner (required — the write target)"),
+        repo: z.string().describe("Repository id/name or owner/name (required — the write target)"),
         repoName: z.string().optional().describe("Repository display name"),
         branch: z.string().describe("Branch name to stage, e.g. spec/my-feature"),
         base: z.string().optional().describe("Base branch to fork from (defaults to main/master/develop/trunk)"),
-        org: z.string().describe("ADO org URL (required — the write target; config defaults are for PR review only, never a write)"),
+        org: z.string().describe("Host org URL; use https://github.com for GitHub (required — never inferred for writes)"),
       },
       handler: async (args) => {
         const r = await ensuredPost("/api/v1/branches/stage", args);
@@ -718,17 +718,17 @@ export function buildTools(http, session) {
       description:
         "Stage a whole-file spec in the same aggregate store used by the portal. " +
         "Set existing=true and pass the load-time branch tip when updating an " +
-        "existing file. Nothing is written to ADO until push_staged_changes. " + NEVER_RAW_RULE,
+        "existing file. Nothing is written remotely until push_staged_changes. " + NEVER_RAW_RULE,
       inputSchema: {
-        project: z.string().describe("ADO project name (required — the write target)"),
-        repo: z.string().describe("ADO repository id or name (required — the write target)"),
+        project: z.string().describe("ADO project or GitHub owner (required — the write target)"),
+        repo: z.string().describe("Repository id/name or owner/name (required — the write target)"),
         repoName: z.string().optional().describe("Repository display name"),
         branch: z.string().describe("Branch to author on"),
         path: z.string().describe("Spec file path within the repo, e.g. docs/spec.md"),
         body: z.string().describe("Full markdown body of the spec"),
         existing: z.boolean().optional().describe("True when updating an existing remote file"),
         baseObjectId: z.string().optional().describe("Load-time branch tip; required for an existing file"),
-        org: z.string().describe("ADO org URL (required — the write target; config defaults are for PR review only, never a write)"),
+        org: z.string().describe("Host org URL; use https://github.com for GitHub (required — never inferred for writes)"),
       },
       handler: async ({ org, project, repo, repoName, branch, path, body, existing, baseObjectId }) => {
         if (existing && !baseObjectId) throw new Error("baseObjectId is required when existing=true");
@@ -743,19 +743,19 @@ export function buildTools(http, session) {
     {
       name: "stage_spec_pr",
       description:
-        "Stage a pull-request intent without creating a PR or work item in ADO. " +
+        "Stage a pull-request intent without creating a remote PR or work item. " +
         "push_staged_changes publishes it after its staged branch and files. " + NEVER_RAW_RULE,
       inputSchema: {
-        project: z.string().describe("ADO project name (required — the write target)"),
-        repo: z.string().describe("ADO repository name (required — the write target)"),
+        project: z.string().describe("ADO project or GitHub owner (required — the write target)"),
+        repo: z.string().describe("Repository name or owner/name (required — the write target)"),
         title: z.string().describe("PR title (never inferred)"),
         sourceBranch: z.string().describe("Branch to merge from"),
         targetBranch: z.string().describe("Branch to merge into, e.g. main"),
         description: z.string().optional().describe("PR description"),
         isDraft: z.boolean().optional().describe("Open as a draft PR (default true)"),
-        workItemTitle: z.string().optional().describe("Spec review work item title to find or create"),
-        workItemType: z.string().optional().describe("Required when workItemTitle is set"),
-        org: z.string().describe("ADO org URL (required — the write target; config defaults are for PR review only, never a write)"),
+        workItemTitle: z.string().optional().describe("ADO-only: Spec review work item title to find or create"),
+        workItemType: z.string().optional().describe("ADO-only: required when workItemTitle is set"),
+        org: z.string().describe("Host org URL; use https://github.com for GitHub (required — never inferred for writes)"),
       },
       handler: async (args) => {
         const r = await ensuredPost("/api/v1/pr/stage", args);
@@ -767,7 +767,7 @@ export function buildTools(http, session) {
       description:
         "Publish every currently staged branch, folder, file update, PR intent, " +
         "reply, and resolution. This is the sole MCP authoring operation that " +
-        "writes staged changes to ADO; failures remain staged. " + NEVER_RAW_RULE,
+        "writes staged changes remotely; failures remain staged. " + NEVER_RAW_RULE,
       inputSchema: {},
       handler: async () => {
         const r = await ensuredPost("/api/v1/branches/push", {});

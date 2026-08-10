@@ -51,8 +51,8 @@ export function openInBrowser(url, { openFn = openDefault } = {}) {
 
 /**
  * Create a portal session the MCP shim uses to discover, adopt, or launch a
- * tippani portal per PR. Returns { ensurePortal, getToken, getBaseUrl, stop,
- * clientName }.
+ * tippani portal per PR. Returns { ensurePortal, ensureActivePortal,
+ * ensureBrowsePortal, getToken, getBaseUrl, stop, clientName }.
  */
 export function createPortalSession({
   basePort = Number(process.env.TIPPANI_PORT) || 3847,
@@ -240,6 +240,28 @@ export function createPortalSession({
     return { reused: false, url: active.url };
   }
 
+  // Mutation tools must stay on the currently selected provider. In particular,
+  // authoring after GitHub open_pr must not switch to an ADO browse portal.
+  async function ensureActivePortal({ headless = true } = {}) {
+    if (active && (await healthyAt(active.url, active.token))) {
+      if (!headless) await maybeOpenBrowser();
+      return { reused: true, url: active.url };
+    }
+    if (
+      active?.provider === "github" &&
+      active.prId && active.owner && active.repo
+    ) {
+      return ensurePortal({
+        prId: active.prId,
+        provider: "github",
+        owner: active.owner,
+        repo: active.repo,
+        headless,
+      });
+    }
+    return ensureBrowsePortal({ headless });
+  }
+
   async function launchNew({
     prId, org, project, repo, refresh, browse,
     provider = "ado", owner,
@@ -371,6 +393,7 @@ export function createPortalSession({
 
   return {
     ensurePortal,
+    ensureActivePortal,
     ensureBrowsePortal,
     getToken,
     getBaseUrl,
