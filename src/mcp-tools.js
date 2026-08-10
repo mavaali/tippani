@@ -375,19 +375,31 @@ export function buildTools(http, session) {
         "List pull requests to review and open the Discovery page in the user's " +
         "browser (tiles, each links to open the PR). Defaults to YOUR open " +
         "(active) PRs; widen with creator:'any' to find anyone's open PRs, or " +
-        "filter by status / reviewer / target branch. Use this to pick a PR " +
-        "before open_pr.",
+        "filter by status / reviewer / target branch. Supports Azure DevOps by " +
+        "default; for GitHub pass provider:'github', owner, and repo.",
       inputSchema: {
+        provider: z.enum(["ado", "github"]).optional()
+          .describe("Repository host. Defaults to ado."),
+        owner: z.string().optional()
+          .describe("GitHub owner (required when provider=github)"),
+        repo: z.string().optional()
+          .describe("GitHub repository anchor (required when provider=github)"),
         status: z.enum(["active", "completed", "abandoned", "all"]).optional()
           .describe("PR status (default active)"),
-        creator: z.string().optional().describe("'me' (default), 'any'/'all', or an ADO identity id"),
-        reviewer: z.string().optional().describe("ADO identity id to filter by reviewer"),
+        creator: z.string().optional().describe("'me' (default), 'any'/'all', or a host identity id/login"),
+        reviewer: z.string().optional().describe("Host identity id/login to filter by reviewer"),
         target: z.string().optional().describe("Target branch (e.g. main)"),
         top: z.number().optional().describe("Max results (default 50)"),
       },
-      handler: async ({ status, creator, reviewer, target, top }) => {
+      handler: async ({
+        provider, owner, repo, status, creator, reviewer, target, top,
+      }) => {
         if (session && typeof session.ensureBrowsePortal === "function") {
-          await session.ensureBrowsePortal();
+          await session.ensureBrowsePortal({
+            provider: provider || "ado",
+            owner,
+            repo,
+          });
         }
         const qs = new URLSearchParams();
         if (status) qs.set("status", status);
@@ -416,7 +428,7 @@ export function buildTools(http, session) {
       },
       handler: async ({ wiql, project }) => {
         if (session && typeof session.ensureBrowsePortal === "function") {
-          await session.ensureBrowsePortal();
+          await session.ensureBrowsePortal({ provider: "ado" });
         }
         const data = await http.post("/api/v1/workitems/search", { wiql, project });
         // Carry the query in the URL so the Work items tab prefills it and
@@ -431,18 +443,27 @@ export function buildTools(http, session) {
     {
       name: "search_specs",
       description:
-        "Full-text search specs (Markdown) across Azure DevOps and open the Specs " +
-        "tab of the Discovery home in the user's browser. Pass freeform search " +
-        "text; optionally a project (defaults to the configured project). Results " +
-        "are .md specs that open read-only at main; use to find an existing spec " +
-        "by its content.",
+        "Full-text search Markdown specs and open the Specs tab of Discovery. " +
+        "Supports Azure DevOps by default; for GitHub pass provider:'github', " +
+        "owner, and repo. The project field scopes ADO to a project or GitHub to " +
+        "an owner namespace.",
       inputSchema: {
+        provider: z.enum(["ado", "github"]).optional()
+          .describe("Repository host. Defaults to ado."),
+        owner: z.string().optional()
+          .describe("GitHub owner (required when provider=github)"),
+        repo: z.string().optional()
+          .describe("GitHub repository anchor (required when provider=github)"),
         query: z.string().describe("Freeform full-text search over spec content"),
-        project: z.string().optional().describe("ADO project to search (defaults to the configured project)"),
+        project: z.string().optional().describe("ADO project or GitHub owner namespace"),
       },
-      handler: async ({ query, project }) => {
+      handler: async ({ provider, owner, repo, query, project }) => {
         if (session && typeof session.ensureBrowsePortal === "function") {
-          await session.ensureBrowsePortal();
+          await session.ensureBrowsePortal({
+            provider: provider || "ado",
+            owner,
+            repo,
+          });
         }
         const data = await http.post("/api/v1/specs/search", { query, project });
         // Carry the query in the URL so the Specs tab prefills it and auto-runs,

@@ -30,8 +30,8 @@ required.
 
 | Tool | Purpose | Parameters |
 |---|---|---|
-| `open_pr` | Open a spec PR in the review portal and load its threads and changed files. The entry point for reviewing a PR; the PR reading/comment tools act on the PR it opens (you can also start from `list_prs` / `search_specs` or a branch). Pass only `prId` — the account supplies org/project. Returns a `portalUrl`. | `prId*`, `org`, `project`, `repo`, `refresh`, `headless` |
-| `list_prs` | List PRs to review and open the Discovery page. Defaults to your open PRs; widen with `creator:'any'` or filter by status/reviewer/target. | `status`, `creator`, `reviewer`, `target`, `top` |
+| `open_pr` | Open a spec PR in the review portal and load its threads and changed files. ADO is the default; for GitHub pass `provider:"github"`, `owner`, and `repo`. Returns a `portalUrl`. | `prId*`, `provider`, `owner`, `org`, `project`, `repo`, `refresh`, `headless` |
+| `list_prs` | List PRs to review and open Discovery. Defaults to ADO; for GitHub pass `provider:"github"`, `owner`, and a repository anchor. | `provider`, `owner`, `repo`, `status`, `creator`, `reviewer`, `target`, `top` |
 | `list_threads` | List every comment thread on the open PR with status, file, line, and comment count. | — |
 | `get_thread` | Get the full content of one thread — every comment plus any staged draft. | `threadId` |
 | `triage_summary` | Categorized triage of every thread: counts of needs-your-reply / awaiting-reviewer / viewed / FYI / resolved, plus a per-thread list. | — |
@@ -87,7 +87,7 @@ survive edits, and never post to ADO.
 
 | Tool | Purpose | Parameters |
 |---|---|---|
-| `search_specs` | Full-text search specs across ADO and open the Specs tab; results open read-only at `main`. | `query*`, `project` |
+| `search_specs` | Full-text search Markdown across ADO or GitHub and open the Specs tab. For GitHub pass `provider:"github"`, `owner`, and a repository anchor; `project` then selects an owner namespace. | `provider`, `owner`, `repo`, `query*`, `project` |
 | `search_work_items` | Run a read-only WIQL query and open the Work items tab; results link out to ADO. | `wiql*`, `project` |
 
 ### Authoring (staged)
@@ -188,7 +188,7 @@ All routes are prefixed `/api/v1`. Mutating routes (marked ✎) require the bear
 | `POST /files/stage` ✎ · `POST /files/content` · `POST /files/edit` ✎ | Stage a file; read staged content; stage an edit. |
 | `POST /pr/stage` ✎ · `POST /pr/unstage` ✎ | Stage / discard a PR intent. |
 | `POST /pr/open` ✎ | Open a PR into the review session. |
-| `POST /pr/publish/stage` ✎ · `POST /pr/publish/unstage` ✎ | Stage / discard a draft→published promotion. |
+| `POST /pr/publish/stage` ✎ · `POST /pr/publish/unstage` ✎ | Stage / discard a draft→published promotion. Unstage accepts `project` + `repo` to disambiguate repository-local PR numbers; an id-only legacy request works when it has one unique match. |
 
 `POST /api/v1/branches/push` is the single publication boundary used by both the
 portal's **Push to remote** button and the MCP `push_staged_changes` tool. ADO

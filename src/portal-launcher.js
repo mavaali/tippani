@@ -207,18 +207,39 @@ export function createPortalSession({
     }
   }
 
-  // Ensure a portal exists for cross-PR browsing (list_prs). Reuses the active
-  // ADO portal (PR-bound OR browse — both serve /prs + /api/v1/prs), or an
-  // existing ADO browse portal (prId 0) in the registry, else launches a PR-less
-  // browse portal (reads org/project from ~/.tippani/config.json).
-  async function ensureBrowsePortal({ headless = true } = {}) {
-    if (active && (active.provider || "ado") === "ado" &&
+  // Ensure a provider-scoped Discovery portal exists. GitHub browse is anchored
+  // by owner/repo; ADO browse reads org/project from local configuration.
+  async function ensureBrowsePortal({
+    headless = true,
+    provider = "ado",
+    owner,
+    repo,
+  } = {}) {
+    const github = normalizeGitHubCoordinates({ owner, repo });
+    if (provider === "github" && (!github.owner || !github.repo)) {
+      throw new Error("GitHub browse requires owner and repo.");
+    }
+    const target = {
+      prId: 0,
+      provider,
+      owner: provider === "github" ? github.owner : null,
+      repo: provider === "github" ? github.repo : null,
+    };
+    const activeProvider = active?.provider || "ado";
+    const activeGitHub = normalizeGitHubCoordinates(active || {});
+    const activeMatchesProvider = activeProvider === provider &&
+      (provider !== "github" ||
+        (activeGitHub.owner === github.owner &&
+          activeGitHub.repo === github.repo));
+    // A PR-bound portal serves Discovery too. Keep it active instead of
+    // replacing the review session with a second PR-less portal.
+    if (active && activeMatchesProvider &&
         (await healthyAt(active.url, active.token))) {
       if (!headless) await maybeOpenBrowser();
       return { reused: true, url: active.url };
     }
     for (const inst of listInstancesFn()) {
-      if (Number(inst.prId) !== 0 || (inst.provider || "ado") !== "ado") continue;
+      if (!sameTarget(inst, target)) continue;
       const url = inst.url || `http://localhost:${inst.port}`;
       if (await healthyAt(url, inst.token)) {
         active = {
@@ -226,16 +247,21 @@ export function createPortalSession({
           url,
           token: inst.token,
           prId: 0,
-          provider: "ado",
-          owner: null,
-          repo: null,
+          provider,
+          owner: target.owner,
+          repo: target.repo,
           owned: false,
         };
         if (!headless) await maybeOpenBrowser();
         return { reused: true, adopted: true, url };
       }
     }
-    active = await launchNew({ browse: true });
+    active = await launchNew({
+      browse: true,
+      provider,
+      owner: target.owner,
+      repo: target.repo,
+    });
     if (!headless) await maybeOpenBrowser();
     return { reused: false, url: active.url };
   }
@@ -247,16 +273,21 @@ export function createPortalSession({
       if (!headless) await maybeOpenBrowser();
       return { reused: true, url: active.url };
     }
-    if (
-      active?.provider === "github" &&
-      active.prId && active.owner && active.repo
-    ) {
-      return ensurePortal({
-        prId: active.prId,
+    if (active?.provider === "github" && active.owner && active.repo) {
+      if (active.prId) {
+        return ensurePortal({
+          prId: active.prId,
+          provider: "github",
+          owner: active.owner,
+          repo: active.repo,
+          headless,
+        });
+      }
+      return ensureBrowsePortal({
+        headless,
         provider: "github",
         owner: active.owner,
         repo: active.repo,
-        headless,
       });
     }
     return ensureBrowsePortal({ headless });
@@ -306,7 +337,15 @@ export function createPortalSession({
   }) {
     // The portal launches headless — the shim owns browser-opening (see
     // maybeOpenBrowser) so both launch and adopt bring the portal up uniformly.
-    const args = browse
+    const args = browse && provider === "github"
+      ? [
+          portalEntry,
+          "--browse",
+          `--github=${owner}/${repo}`,
+          `--port=${port}`,
+          "--headless",
+        ]
+      : browse
       ? [portalEntry, "--browse", `--port=${port}`, "--headless"]
       : provider === "github"
         ? [
@@ -353,7 +392,9 @@ export function createPortalSession({
         const inst = listInstancesFn().find((i) =>
           Number(i.port) === port &&
           sameTarget(i, browse ? {
-            prId: 0, provider: "ado", owner: null, repo: null,
+            prId: 0, provider,
+            owner: provider === "github" ? owner : null,
+            repo: provider === "github" ? repo : null,
           } : {
             prId, provider, owner: provider === "github" ? owner : null,
             repo: provider === "github" ? repo : null,

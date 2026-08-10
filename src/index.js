@@ -64,7 +64,7 @@ import {
 } from "./config-util.js";
 import { resolveImagePath, imageContentType, isLfsPointer, secureImageHeaders, isValidRepoId } from "./image-src.js";
 import { cssVariables, changeTypeBadge, escHtml, stripMarkdown, jsonForScript } from "./html-util.js";
-import { getSpecContentAt, getSpecBlobAt, buildSpecWebUrl, getLastCommitAuthor } from "./ado-read.js";
+import { getSpecContentAt, getSpecBlobAt, buildSpecWebUrl } from "./ado-read.js";
 import { branchesForRepo, repoOptions, branchNamePlaceholder, sortBranches, shortBranchName, summarizeBranchRef } from "./branch-list.js";
 import { branchFileRows, visibleFileCount, mdPathsFromChanges, buildSpecHref, stagedFileComparison } from "./branch-files.js";
 import { validateLocalRepo, resolveGitDir, parseGitHead, parsePackedRefs, mergeLocalBranches, parseOriginHeadDefault, userCreatedBranches } from "./local-repo.js";
@@ -83,9 +83,10 @@ import { createGitHubClient } from "./github-client.js";
 import { createGitHubReviewProvider } from "./github-review-provider.js";
 import { createGitHubRepoContentProvider } from "./github-repo-content-provider.js";
 import { createGitHubAuthoringProvider } from "./github-authoring-provider.js";
+import { createGitHubSearchProvider } from "./github-search-provider.js";
 import { createGitHubBlobProvider } from "./github-blob-provider.js";
 import { createGitHubViewedStore } from "./github-viewed-store.js";
-import { parseGitHubTarget, selectGitHubToken } from "./github-target.js";
+import { normalizeGitHubCoordinates, parseGitHubTarget, selectGitHubToken } from "./github-target.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -126,7 +127,7 @@ let _hostKind = "ado";
 let _githubOwner = null, _githubRepo = null;
 let _githubHeadOwner = null, _githubHeadRepo = null;
 let _githubReview = null, _githubRepoContent = null;
-let _githubAuthoring = null, _githubBlobs = null;
+let _githubAuthoring = null, _githubSearch = null, _githubBlobs = null;
 // Human-readable name for ADO_PROJECT (which applyRepoContextFromPR may re-point
 // to a project GUID). Resolved by listAdoProjects so the picker never shows a GUID.
 let _adoProjectDisplayName = null;
@@ -428,6 +429,9 @@ function repoContentProvider(conn) {
 function authoringProvider(conn) {
   return _hostKind === "github" ? _githubAuthoring : adoAuthoring(conn);
 }
+function searchProvider(conn) {
+  return _hostKind === "github" ? _githubSearch : adoSearch(conn);
+}
 function blobProvider(conn) {
   return _hostKind === "github" ? _githubBlobs : adoBlobs(conn);
 }
@@ -445,6 +449,7 @@ function initGitHubProviders(token, { owner, repo }) {
   });
   _githubRepoContent = createGitHubRepoContentProvider(client);
   _githubAuthoring = createGitHubAuthoringProvider(client);
+  _githubSearch = createGitHubSearchProvider(client, { owner });
   _githubHeadOwner = owner;
   _githubHeadRepo = repo;
   _githubBlobs = createGitHubBlobProvider(client, {
@@ -471,12 +476,8 @@ async function listPullRequests(conn, criteria, top = 50) {
 // method, so this calls the org-level REST endpoint directly (same auth handler
 // as every other call, via conn.rest). Best-effort: returns [] on failure.
 async function listOrgPullRequests(conn, criteria, top = 50) {
-  if (_hostKind === "github") {
-    // GitHub direct mode is currently repository-scoped, not org-wide.
-    return reviewProvider(conn).listPullRequests(criteria, top);
-  }
   try {
-    return await adoSearch(conn).searchPullRequests(criteria, top);
+    return await searchProvider(conn).searchPullRequests(criteria, top);
   } catch (e) {
     console.error("listOrgPullRequests failed:", e.message);
     return [];
@@ -1354,7 +1355,15 @@ ${NAV_WATCHER}
 // tagged, whose cards open the PR INSIDE Tippani (/open/:id re-drive) rather
 // than linking out to ADO. Built on buildPrListPage's styling; later Discovery
 // slices add the work-item and spec-tree panes to this page.
-function buildHomePage(prs, project, projects, branchPlaceholder = "mybranch", discoveryError = "") {
+function buildHomePage(
+  prs,
+  project,
+  projects,
+  branchPlaceholder = "mybranch",
+  discoveryError = "",
+  hostKind = "ado",
+) {
+  const isGitHub = hostKind === "github";
   const list = prs || [];
   const projectNames = (projects && projects.length ? projects : [project].filter(Boolean));
   const projectOptions = projectNames.map((p) =>
@@ -1365,7 +1374,10 @@ function buildHomePage(prs, project, projects, branchPlaceholder = "mybranch", d
   const rows = list.map((pr) => {
     const activity = (pr.roles || []).map((r) => r === "author" ? "authoring" : "reviewing").join(" ");
     const status = pr.isDraft ? "draft" : "published";
-    return `<a class="pr-card" href="/open/${pr.id}" data-author="${escHtml(pr.author || "")}" data-project="${escHtml(pr.project || "(none)")}" data-activity="${activity}" data-status="${status}" data-search="${escHtml(((pr.title || "") + " " + (pr.author || "")).toLowerCase())}">
+    const openHref = isGitHub
+      ? `/open/${pr.id}?owner=${encodeURIComponent(pr.project || project || "")}&repo=${encodeURIComponent(pr.repo || "")}`
+      : `/open/${pr.id}`;
+    return `<a class="pr-card" href="${escHtml(openHref)}" data-author="${escHtml(pr.author || "")}" data-project="${escHtml(pr.project || "(none)")}" data-activity="${activity}" data-status="${status}" data-search="${escHtml(((pr.title || "") + " " + (pr.author || "")).toLowerCase())}">
       <div class="pr-top"><span class="pr-id">#${pr.id}</span><span class="pr-status">${statusLabel(pr.status)}</span>${pr.isDraft ? '<span class="pr-draft">Draft</span>' : ""}${roleBadge(pr.roles)}${pr.isDraft ? `<button type="button" class="pr-publish-btn" data-pr-id="${pr.id}" data-project="${escHtml(pr.project || "")}" data-repo="${escHtml(pr.repo || "")}" data-title="${escHtml(pr.title || "")}">Publish</button>` : ""}</div>
       <div class="pr-title">${escHtml(pr.title || "")}</div>
       <div class="pr-meta">${escHtml(pr.author || "")} \u00b7 ${escHtml(pr.source || "")} \u2192 ${escHtml(pr.target || "")}${pr.repo ? " \u00b7 " + escHtml(pr.repo) : ""}${pr.project ? " \u00b7 " + escHtml(pr.project) : ""}</div>
@@ -1493,6 +1505,7 @@ table.wi-results { width: 100%; table-layout: fixed; border-collapse: collapse; 
 <\/style>
 <script>
   if (window.matchMedia('(prefers-color-scheme: dark)').matches) document.documentElement.dataset.theme = 'dark';
+  var HAS_WORK_ITEMS = ${isGitHub ? "false" : "true"};
   // Reusable client-side faceted filter. Wraps a .pr-list in a slicer panel and
   // cross-filters: each facet's available values reflect the cards passing the
   // OTHER facets. Persists selections in localStorage. defs: [{ title, key,
@@ -1920,16 +1933,19 @@ table.wi-results { width: 100%; table-layout: fixed; border-collapse: collapse; 
     markStagedPublishes();
     if (window.__tpStagedRefresh) window.__tpStagedRefresh();
   }
-  async function unstagePrPublishFromCard(prId) {
-    try { await fetch('/api/v1/pr/publish/unstage', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ pullRequestId: Number(prId) }) }); } catch (e) {}
+  function prPublishKey(project, repo, prId) {
+    return String(project || '') + '\\n' + String(repo || '') + '\\n' + String(prId);
+  }
+  async function unstagePrPublishFromCard(prId, project, repo) {
+    try { await fetch('/api/v1/pr/publish/unstage', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ project: project, repo: repo, pullRequestId: Number(prId) }) }); } catch (e) {}
     markStagedPublishes();
     if (window.__tpStagedRefresh) window.__tpStagedRefresh();
   }
   async function markStagedPublishes() {
     var ids = {};
-    try { var d = await (await fetch('/api/v1/staged')).json(); (d.prPublishes || []).forEach(function (p) { ids[String(p.pullRequestId)] = true; }); } catch (e) {}
+    try { var d = await (await fetch('/api/v1/staged')).json(); (d.prPublishes || []).forEach(function (p) { ids[prPublishKey(p.project, p.repo, p.pullRequestId)] = true; }); } catch (e) {}
     document.querySelectorAll('.pr-publish-btn').forEach(function (b) {
-      var staged = ids[String(b.getAttribute('data-pr-id'))];
+      var staged = ids[prPublishKey(b.getAttribute('data-project'), b.getAttribute('data-repo'), b.getAttribute('data-pr-id'))];
       b.textContent = staged ? 'Publish staged \u2713' : 'Publish';
       b.classList.toggle('pr-publish-staged', !!staged);
     });
@@ -1943,14 +1959,16 @@ table.wi-results { width: 100%; table-layout: fixed; border-collapse: collapse; 
       if (!b) return;
       ev.preventDefault(); ev.stopPropagation();
       var id = b.getAttribute('data-pr-id');
-      if (b.classList.contains('pr-publish-staged')) unstagePrPublishFromCard(id);
+      if (b.classList.contains('pr-publish-staged')) unstagePrPublishFromCard(id, b.getAttribute('data-project'), b.getAttribute('data-repo'));
       else stagePrPublishFromCard(id, b.getAttribute('data-project'), b.getAttribute('data-repo'), b.getAttribute('data-title'));
     });
   }
   async function stagePr() {
     var repoSel = document.getElementById('prCreateRepo');
     var repoOpt = repoSel && repoSel.options[repoSel.selectedIndex];
-    var workItemTitle = (document.getElementById('prCreateWorkItemTitle').value || '').trim();
+    var workItemTitleEl = document.getElementById('prCreateWorkItemTitle');
+    var workItemTypeEl = document.getElementById('prCreateWorkItemType');
+    var workItemTitle = workItemTitleEl ? (workItemTitleEl.value || '').trim() : '';
     var body = {
       org: BR_ORG,
       project: document.getElementById('prCreateProject').value,
@@ -1961,7 +1979,7 @@ table.wi-results { width: 100%; table-layout: fixed; border-collapse: collapse; 
       targetBranch: document.getElementById('prCreateTarget').value,
       isDraft: document.getElementById('prCreateDraft').checked,
       workItemTitle: workItemTitle || undefined,
-      workItemType: workItemTitle ? (document.getElementById('prCreateWorkItemType').value || '').trim() : undefined,
+      workItemType: workItemTitle && workItemTypeEl ? (workItemTypeEl.value || '').trim() : undefined,
       repoName: repoOpt ? (repoOpt.getAttribute('data-name') || '') : ''
     };
     var status = document.getElementById('prCreateStatus');
@@ -2298,7 +2316,7 @@ table.wi-results { width: 100%; table-layout: fixed; border-collapse: collapse; 
     var params = new URLSearchParams(location.search);
     var t = params.get('tab');
     if (!t) { try { t = localStorage.getItem('tippani.discoveryTab'); } catch (e) {} }
-    activateTab(t === 'workitems' || t === 'specs' || t === 'branches' || t === 'openfile' ? t : 'queue');
+    activateTab((HAS_WORK_ITEMS && t === 'workitems') || t === 'specs' || t === 'branches' || t === 'openfile' ? t : 'queue');
     // Review queue slicers (client-side faceted filter, same engine as Specs).
     mountFacets(
       document.querySelector('.pane[data-pane="queue"] .pr-list'),
@@ -2393,17 +2411,19 @@ table.wi-results { width: 100%; table-layout: fixed; border-collapse: collapse; 
       });
     }
     // Deep-link a query (e.g. from the search_work_items tool): prefill + run.
-    var qWiql = params.get('wiql');
-    if (qWiql) {
-      var qp = params.get('project');
-      var box = document.getElementById('wiQuery'); if (box) box.value = qWiql;
-      var sel = document.getElementById('wiProject');
-      if (sel && qp) { for (var i = 0; i < sel.options.length; i++) { if (sel.options[i].value === qp) sel.selectedIndex = i; } }
-      runWiql();
-    } else {
-      // No deep-link: run the default query (Features, last 30 days, assigned to
-      // me) so the Work items tab shows results on load.
-      runWiql();
+    if (HAS_WORK_ITEMS) {
+      var qWiql = params.get('wiql');
+      if (qWiql) {
+        var qp = params.get('project');
+        var box = document.getElementById('wiQuery'); if (box) box.value = qWiql;
+        var sel = document.getElementById('wiProject');
+        if (sel && qp) { for (var i = 0; i < sel.options.length; i++) { if (sel.options[i].value === qp) sel.selectedIndex = i; } }
+        runWiql();
+      } else {
+        // No deep-link: run the default query (Features, last 30 days, assigned
+        // to me) so the ADO Work items tab shows results on load.
+        runWiql();
+      }
     }
     // Deep-link a spec search (e.g. from the search_specs tool): prefill + run.
     var qSpec = params.get('q');
@@ -2419,11 +2439,13 @@ table.wi-results { width: 100%; table-layout: fixed; border-collapse: collapse; 
   ${renderCrumbBar([{ label: "Home" }], { padTop: 40, padX: 24, right: renderBrand("discovery") })}
   <div class="container">
     <h1>Discovery</h1>
-    <div class="sub">Find what to work on \u2014 a finished spec to read, a review to pick up, or a work item to open in ADO.</div>
+    <div class="sub">${isGitHub
+      ? "Find a spec, review, or branch across your GitHub repositories."
+      : "Find what to work on \u2014 a finished spec to read, a review to pick up, or a work item to open in ADO."}</div>
     <div class="tabs">
       <button class="tab" data-tab="specs" type="button">Specs</button>
       <button class="tab" data-tab="queue" type="button">Review queue</button>
-      <button class="tab" data-tab="workitems" type="button">Work items</button>
+      ${isGitHub ? "" : '<button class="tab" data-tab="workitems" type="button">Work items</button>'}
       <button class="tab" data-tab="branches" type="button">Branches</button>
       <button class="tab" data-tab="openfile" type="button">Reading list</button>
     </div>
@@ -2434,7 +2456,7 @@ table.wi-results { width: 100%; table-layout: fixed; border-collapse: collapse; 
       <div class="br-new-row"><button id="prNewBtn" class="br-new-btn" type="button">\u002b New pull request</button></div>
       <div class="pr-create-panel" id="prCreatePanel" hidden>
         <div class="wi-row br-create-row">
-          <div class="br-field"><label>Project</label><select id="prCreateProject" class="wi-project">${projectOptions || `<option value="${escHtml(project || "")}">${escHtml(project || "(configured project)")}</option>`}</select></div>
+          <div class="br-field"><label>${isGitHub ? "Owner" : "Project"}</label><select id="prCreateProject" class="wi-project">${projectOptions || `<option value="${escHtml(project || "")}">${escHtml(project || "(configured project)")}</option>`}</select></div>
           <div class="br-field"><label>Repository</label><select id="prCreateRepo" class="wi-project"><option value="">Loading\u2026</option></select></div>
         </div>
         <div class="wi-row br-create-row">
@@ -2447,10 +2469,10 @@ table.wi-results { width: 100%; table-layout: fixed; border-collapse: collapse; 
         <div class="wi-row br-create-row">
           <div class="br-field"><label>Description</label><textarea id="prCreateDescription" class="br-create-input"></textarea></div>
         </div>
-        <div class="wi-row br-create-row">
+        ${isGitHub ? "" : `<div class="wi-row br-create-row">
           <div class="br-field"><label>Work item title (optional)</label><input id="prCreateWorkItemTitle" class="br-create-input" type="text"></div>
           <div class="br-field"><label>Work item type</label><input id="prCreateWorkItemType" class="br-create-input" type="text" placeholder="Required when title is set"></div>
-        </div>
+        </div>`}
         <div class="pr-create-actions">
           <label class="pr-draft-toggle"><input id="prCreateDraft" type="checkbox" checked> Draft</label>
           <span id="prCreateStatus" class="wi-status"></span>
@@ -2460,7 +2482,7 @@ table.wi-results { width: 100%; table-layout: fixed; border-collapse: collapse; 
       <div class="pr-list" id="qPrList">${rows || '<div class="empty">Nothing in your review queue.</div>'}</div>
     </div>
 
-    <div class="pane" data-pane="workitems">
+    ${isGitHub ? "" : `<div class="pane" data-pane="workitems">
       <div class="wi-row">
         <span class="wi-label">Project</span>
         <select id="wiProject" class="wi-project">${projectOptions || `<option value="${escHtml(project || "")}">${escHtml(project || "(configured project)")}</option>`}</select>
@@ -2470,20 +2492,20 @@ table.wi-results { width: 100%; table-layout: fixed; border-collapse: collapse; 
       <div class="wi-note" style="margin-top:8px">Enter a WIQL <code>SELECT</code> against <code>workitems</code>. Results open the item in Azure DevOps (\u2197).</div>
       <div class="wi-actions"><span id="wiStatus" class="wi-status">${escHtml(discoveryError)}</span><button id="wiSearchBtn" class="wi-search" type="button">Search</button></div>
       <div id="wiResults"></div>
-    </div>
+    </div>`}
 
     <div class="pane" data-pane="specs">
       <div class="wi-row">
-        <span class="wi-label">Project</span>
+        <span class="wi-label">${isGitHub ? "Owner" : "Project"}</span>
         <select id="spProject" class="wi-project">${projectOptions || `<option value="${escHtml(project || "")}">${escHtml(project || "(configured project)")}</option>`}</select>
-        <span class="wi-note">Full-text search over specs in the selected project.</span>
+        <span class="wi-note">Full-text search over specs in the selected ${isGitHub ? "owner namespace" : "project"}.</span>
       </div>
       <div class="sp-searchrow">
         <input id="spQuery" class="sp-query" type="search" spellcheck="false" placeholder="Keyword search on file name and content">
       </div>
       <div class="wi-actions"><span id="spStatus" class="wi-status">${escHtml(discoveryError)}</span><button id="spSearchBtn" class="wi-search" type="button">Search</button></div>
       <div id="spResults"></div>
-      <div class="wi-note" style="margin-top:12px">Results are <code>.md</code> specs from Azure DevOps Code Search. Opening a result shows it read-only at <code>main</code> (\u2197 opens it read-only in Tippani).</div>
+      <div class="wi-note" style="margin-top:12px">Results are <code>.md</code> specs from ${isGitHub ? "GitHub Code Search" : "Azure DevOps Code Search"}. Opening a result shows it read-only at its default branch.</div>
     </div>
 
     <div class="pane" data-pane="branches">
@@ -2493,9 +2515,9 @@ table.wi-results { width: 100%; table-layout: fixed; border-collapse: collapse; 
       </div>
       <div class="br-source" data-source="remote">
         <div class="wi-row">
-          <span class="wi-label">Project</span>
+          <span class="wi-label">${isGitHub ? "Owner" : "Project"}</span>
           <select id="brProject" class="wi-project">${projectOptions || `<option value="${escHtml(project || "")}">${escHtml(project || "(configured project)")}</option>`}</select>
-          <span class="wi-note">Your branches across the repos in the selected project.</span>
+          <span class="wi-note">Your branches across the repos in the selected ${isGitHub ? "owner namespace" : "project"}.</span>
         </div>
       </div>
       <div class="br-source" data-source="local" hidden>
@@ -6951,10 +6973,6 @@ async function main() {
   const explicitFile = args.find((a) => a.startsWith("--file="))?.split("=").slice(1).join("=") || positional[1] || null;
 
   const browseMode = args.includes("--browse");
-  if (_hostKind === "github" && browseMode) {
-    console.error("GitHub browse/discovery mode is not available yet. Open a specific PR.");
-    process.exit(1);
-  }
   // A local repo can be reviewed with no ADO PR: --local-repo populates the
   // Local tab and (alone) boots the portal in browse mode.
   const localRepoArg = (args.find(a => a.startsWith("--local-repo="))?.split("=").slice(1).join("=")) || process.env.TIPPANI_LOCAL_REPO || null;
@@ -7067,18 +7085,25 @@ async function main() {
   HOST_TOKEN_MODE = _hostKind === "ado" && !!(adoToken && adoToken.trim());
   if (HOST_TOKEN_MODE) _adoToken = adoToken;
 
-  // Browse mode (item 6): a PR-less portal that only lists pull requests
-  // (/prs + /api/v1/prs), so list_prs works before any PR is opened. Reads
-  // org/project from config; needs an ADO token.
+  // Browse mode: a PR-less portal that lists/searches work before a PR is open.
+  // ADO reads org/project from config; GitHub is anchored by --github=owner/repo
+  // so repository-relative authoring still has an explicit default.
   // Discovery: the browse portal is the SAME server as a PR-bound portal, just
   // with no PR loaded yet. It authenticates, serves the Discovery home ("/"),
   // and re-drives into PR-bound mode at runtime via GET /open/:prId (bindPr).
   // So browse mode only sets up the connection + empty PR state here, then falls
   // through to the shared app below.
   if (browseModeEffective) {
-    if (adoToken) _conn = getAdoConnectionBearer(adoToken);
-    else { const pat = loadPat(); if (pat) _conn = getAdoConnection(pat); }
-    if (!_conn && !_localRepoPath) { console.error("Browse mode requires an ADO token (--ado-token / TIPPANI_ADO_TOKEN)."); process.exit(1); }
+    if (_hostKind === "ado") {
+      if (adoToken) _conn = getAdoConnectionBearer(adoToken);
+      else { const pat = loadPat(); if (pat) _conn = getAdoConnection(pat); }
+    }
+    if (!_conn && !_localRepoPath) {
+      console.error(_hostKind === "github"
+        ? "GitHub browse mode requires authentication."
+        : "Browse mode requires an ADO token (--ado-token / TIPPANI_ADO_TOKEN).");
+      process.exit(1);
+    }
     _prId = 0;
     _pr = null;
     _branch = null;
@@ -7353,7 +7378,14 @@ async function main() {
         const d = await doListPrs({ role: "queue" });
         const projects = _conn ? await listAdoProjects(_conn) : [ADO_PROJECT];
         const placeholder = branchNamePlaceholder(identityFromAdoToken(_adoToken));
-        return res.type("html").send(buildHomePage(d.prs || [], _adoProjectDisplayName || ADO_PROJECT, projects, placeholder));
+        return res.type("html").send(buildHomePage(
+          d.prs || [],
+          _adoProjectDisplayName || ADO_PROJECT,
+          projects,
+          placeholder,
+          "",
+          _hostKind,
+        ));
       } catch (e) {
         console.error("Home (review queue) error:", e.message);
         return res.status(500).send("Error loading the Discovery home.");
@@ -7371,6 +7403,22 @@ async function main() {
     if (!Number.isFinite(prId) || prId <= 0) return res.redirect("/");
     if (_isOffline || !_conn) return res.status(503).send("Cannot open a PR while offline.");
     try {
+      if (_hostKind === "github") {
+        const target = normalizeGitHubCoordinates({
+          owner: req.query.owner || _githubOwner,
+          repo: req.query.repo || _githubRepo,
+        });
+        if (!target.owner || !target.repo) {
+          return res.status(400).send("GitHub owner and repository are required.");
+        }
+        if (target.owner !== _githubOwner || target.repo !== _githubRepo) {
+          _githubOwner = target.owner;
+          _githubRepo = target.repo;
+          ADO_PROJECT = target.owner;
+          ADO_REPO = `${target.owner}/${target.repo}`;
+          initGitHubProviders(githubToken, target);
+        }
+      }
       await bindPr(prId);
       _browseMode = false;
       _canEdit = await computeCanEdit(_conn, _pr, _isOffline);
@@ -7451,7 +7499,14 @@ async function main() {
       const d = await doListPrs({ role: "queue" });
       const projects = _conn ? await listAdoProjects(_conn) : [ADO_PROJECT];
       const placeholder = branchNamePlaceholder(identityFromAdoToken(_adoToken));
-      res.type("html").send(buildHomePage(d.prs || [], _adoProjectDisplayName || ADO_PROJECT, projects, placeholder, d.error || ""));
+      res.type("html").send(buildHomePage(
+        d.prs || [],
+        _adoProjectDisplayName || ADO_PROJECT,
+        projects,
+        placeholder,
+        d.error || "",
+        _hostKind,
+      ));
     }
     catch (e) { res.status(500).send("Error loading Discovery. Check the server console."); console.error("Discovery page error:", e.message); }
   });
@@ -7502,10 +7557,15 @@ async function main() {
         return res.status(502).send("Could not open the local spec. Check the server console.");
       }
     }
-    if (!isValidRepoId(repoId) || !specPath || !specPath.toLowerCase().endsWith(".md")) return res.redirect("/discovery?tab=specs");
+    const validRepo = _hostKind === "github"
+      ? /^[^/\s]+\/[^/\s]+$/.test(repoId)
+      : isValidRepoId(repoId);
+    if (!validRepo || !specPath || !specPath.toLowerCase().endsWith(".md")) return res.redirect("/discovery?tab=specs");
     if (_isOffline || !_conn) return res.status(503).send("Cannot open a spec while offline.");
     try {
-      const raw = await getSpecContentAt(_conn, repoId, specPath, branch);
+      const raw = await repoContentProvider(_conn).getText(
+        repoId, specPath, branch, project,
+      );
       const { metadata, body } = stripFrontmatter(raw);
       const { toc } = buildSourceMap(body);
       const { html, ranges } = await renderSpecBody(body, specSanitizeSchema, { includeHeadings: true });
@@ -7514,7 +7574,9 @@ async function main() {
         return pre + `/spec/media?repo=${encodeURIComponent(repoId)}&spec=${encodeURIComponent(specPath)}&branch=${encodeURIComponent(branch)}&src=${encodeURIComponent(src)}` + post;
       });
       const title = metadata.title || specPath.split("/").pop();
-      const adoUrl = repoName ? buildSpecWebUrl(ADO_ORG, project, repoName, specPath) : "";
+      const adoUrl = _hostKind === "github"
+        ? `https://github.com/${repoId}/blob/${encodeURIComponent(branch)}/${String(specPath).replace(/^\/+/, "").split("/").map(encodeURIComponent).join("/")}`
+        : repoName ? buildSpecWebUrl(ADO_ORG, project, repoName, specPath) : "";
       // Back to the specs tab with the originating search re-run, unless a caller
       // (e.g. the branch page) passes an explicit relative `back` to return to.
       const backParam = String(req.query.back || "");
@@ -7541,7 +7603,9 @@ async function main() {
       const pcDataSeq = _focus.get().pcDataSeq;
       // History is fetched asynchronously by the page (see /spec/history) so the
       // spec paints without waiting on the ADO commit->PR->threads round-trips.
-      const historyUrl = "/spec/history?repo=" + encodeURIComponent(repoId) + "&path=" + encodeURIComponent(specPath) + "&branch=" + encodeURIComponent(branch);
+      const historyUrl = _hostKind === "github"
+        ? ""
+        : "/spec/history?repo=" + encodeURIComponent(repoId) + "&path=" + encodeURIComponent(specPath) + "&branch=" + encodeURIComponent(branch);
       res.type("html").send(buildReadonlySpecPage({ title, bodyHtml, toc, specPath, repo: repoName, adoUrl, backHref, backLabel, historyUrl, sourceMap: ranges, reviewing, editMode, commentCount, reviewRepo: repoId, reviewBranch: branch, reviewPath: specPath, currentUser: me?.displayName || "You", personalComments, pcDataSeq }));
     } catch (e) {
       console.error(`/spec read-only failed for ${specPath}:`, e.message);
@@ -7719,7 +7783,10 @@ async function main() {
       const repoId = String(req.query.repo || "").trim();
       const specPath = String(req.query.path || "").trim();
       const branch = String(req.query.branch || "main").trim().replace(/^refs\/heads\//, "") || "main";
-      if (!isValidRepoId(repoId) || !specPath) return res.json({ html: "" });
+      const validRepo = _hostKind === "github"
+        ? /^[^/\s]+\/[^/\s]+$/.test(repoId)
+        : isValidRepoId(repoId);
+      if (!validRepo || !specPath) return res.json({ html: "" });
       if (_isOffline || !_conn) return res.json({ html: '<div class="ro-empty">Review history is unavailable offline.</div>' });
       const history = await getFileReviewHistory(_conn, repoId, specPath, branch);
       res.json({ html: buildHistoryCardsHtml(history, specPath) });
@@ -7756,14 +7823,21 @@ async function main() {
       }
       const repoId = String(req.query.repo || "").trim();
       const specPath = String(req.query.spec || "").trim();
-      if (!isValidRepoId(repoId) || !specPath) return res.status(404).end();
+      const validRepo = _hostKind === "github"
+        ? /^[^/\s]+\/[^/\s]+$/.test(repoId)
+        : isValidRepoId(repoId);
+      if (!validRepo || !specPath) return res.status(404).end();
       const resolved = resolveImagePath(specPath, req.query.src);
       if (!resolved) return res.status(404).end();
       const type = imageContentType(resolved);
       if (!type) return res.status(404).end();
       if (_isOffline || !_conn) return res.status(503).end();
       const branch = String(req.query.branch || "main").trim().replace(/^refs\/heads\//, "") || "main";
-      const buf = await getSpecBlobAt(_conn, repoId, resolved, branch);
+      const buf = _hostKind === "github"
+        ? await blobProvider(_conn).getBlob(
+            resolved, { version: branch }, { repo: repoId },
+          )
+        : await getSpecBlobAt(_conn, repoId, resolved, branch);
       if (!buf || buf.length === 0) return res.status(404).end();
       if (isLfsPointer(buf)) {
         console.error(`Spec image proxy: LFS pointer not resolved for ${resolved}`);
@@ -7962,12 +8036,6 @@ async function main() {
   // PRs; widen via query.creator = 'any'. Returns summarized PRs for the /prs
   // page + list_prs tool.
   async function doListPrs(query = {}) {
-    if (_hostKind === "github") {
-      return {
-        prs: [],
-        error: "Pull-request discovery is not available for GitHub repositories. Open a specific pull request.",
-      };
-    }
     if (_isOffline || !_conn) return { prs: [], error: "offline" };
     let currentUserId = null;
     let identityError = null;
@@ -7995,8 +8063,11 @@ async function main() {
     }
 
     const crit = buildPrCriteria(query, { currentUserId });
-    const raw = await listPullRequests(_conn, crit, top);
-    return { prs: raw.map(summarizePr), mine: !!crit.creatorId, status: crit.status, project: ADO_PROJECT };
+    const raw = _hostKind === "github"
+      ? await listOrgPullRequests(_conn, crit, top)
+      : await listPullRequests(_conn, crit, top);
+    const prs = _hostKind === "github" ? raw : raw.map(summarizePr);
+    return { prs, mine: !!crit.creatorId, status: crit.status, project: ADO_PROJECT };
   }
 
   // Discovery work-item search: run a read-only WIQL query against ADO and
@@ -8042,12 +8113,6 @@ async function main() {
   // markdown and results are post-filtered to Git repos (TFVC hits can't be
   // opened via the Git item API).
   async function searchSpecs({ project, query, enrich = false, top } = {}) {
-    if (_hostKind === "github") {
-      return {
-        specs: [],
-        error: "Spec search is not wired for GitHub yet. Open a specific pull request.",
-      };
-    }
     if (_isOffline || !_conn) return { specs: [], error: "offline" };
     const q = (query == null ? "" : String(query)).trim();
     const proj = (project && String(project).trim()) || ADO_PROJECT;
@@ -8057,7 +8122,7 @@ async function main() {
     const pageTop = Number.isFinite(top) && top > 0 ? Math.min(top, 1000) : (enrich ? 100 : 1000);
     let result;
     try {
-      result = await adoSearch(_conn).searchSpecs(proj, q, pageTop);
+      result = await searchProvider(_conn).searchSpecs(proj, q, pageTop);
     } catch (e) {
       // search_specs relies on ADO Code Search (almsearch.dev.azure.com), a
       // per-org extension. A brand-new org without it provisioned fails here
@@ -8066,19 +8131,24 @@ async function main() {
       // "check the server console" so the caller (and the model) can act.
       const detail = friendlyAdoError(e, "Spec search");
       console.error("Spec search failed:", detail);
+      const message = _hostKind === "github"
+        ? detail
+        : specSearchUnavailableMessage(detail, ADO_ORG);
       return {
         specs: [],
         project: proj,
-        error: specSearchUnavailableMessage(detail, ADO_ORG),
+        error: message,
       };
     }
     const specs = (result || []).map((hit) => ({
       ...hit,
       name: hit.path.split("/").pop(),
       repo: hit.repoName,
-      url: buildSpecWebUrl(
-        ADO_ORG, hit.project, hit.repoName, hit.path,
-      ),
+      url: hit.url || (_hostKind === "github"
+        ? `https://github.com/${hit.repoId}/blob/${hit.branch || "main"}/${String(hit.path).replace(/^\/+/, "")}`
+        : buildSpecWebUrl(
+            ADO_ORG, hit.project, hit.repoName, hit.path,
+          )),
     }));
     // The MCP path takes the results raw — no cap and no implicit per-file commit
     // lookups. The agent limits result size itself and asks for authorship only if
@@ -8087,9 +8157,12 @@ async function main() {
     // concurrency so a large result set doesn't fan out unboundedly against ADO.
     if (enrich) {
       const CONCURRENCY = 8;
+      const repoContent = repoContentProvider(_conn);
       for (let i = 0; i < specs.length; i += CONCURRENCY) {
         await Promise.all(specs.slice(i, i + CONCURRENCY).map(async (s) => {
-          s.lastModifiedBy = await getLastCommitAuthor(_conn, s.repoId, s.path, s.branch);
+          s.lastModifiedBy = await repoContent.getLastCommitAuthor(
+            s.repoId, s.path, s.branch, s.project,
+          );
         }));
       }
     }

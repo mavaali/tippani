@@ -181,17 +181,51 @@ export function createStagedInventory({ deletePersonalComments } = {}) {
   }
 
   // --- PR publish (draft -> published) intents ------------------------------
+  const samePrPublish = (item, { project, repo, pullRequestId }) =>
+    item.project === project &&
+    item.repo === repo &&
+    item.pullRequestId === Number(pullRequestId);
+
   function stagePrPublish({ org, project, repo, repoName, pullRequestId, title } = {}) {
     const id = Number(pullRequestId);
     if (!org || !project || !repo || !Number.isFinite(id)) return { ok: false, error: "org, project, repo and pullRequestId are required" };
-    if (_stagedPrPublishes.some((p) => p.pullRequestId === id)) return { ok: false, error: "that PR is already staged to publish" };
+    if (_stagedPrPublishes.some((p) =>
+      samePrPublish(p, { project, repo, pullRequestId: id }))) {
+      return { ok: false, error: "that PR is already staged to publish" };
+    }
     _stagedPrPublishes.push({ org, project, repo, repoName: repoName || "", pullRequestId: id, title: title || "" });
     return { ok: true, count: stagedTotal(), prPublishes: _stagedPrPublishes.slice() };
   }
-  function unstagePrPublish({ pullRequestId } = {}) {
+  function unstagePrPublish({ project, repo, pullRequestId } = {}) {
     const id = Number(pullRequestId);
+    const idMatches = _stagedPrPublishes.filter((p) =>
+      p.pullRequestId === id);
+    const hasProject = project != null && project !== "";
+    const hasRepo = repo != null && repo !== "";
+    if (hasProject !== hasRepo) {
+      return {
+        ok: false,
+        error: "project and repo must be provided together",
+        count: stagedTotal(),
+        prPublishes: _stagedPrPublishes.slice(),
+      };
+    }
+    if (!hasProject && idMatches.length > 1) {
+      return {
+        ok: false,
+        error: "project and repo are required when PR numbers collide",
+        count: stagedTotal(),
+        prPublishes: _stagedPrPublishes.slice(),
+      };
+    }
+    const target = hasProject
+      ? { project, repo, pullRequestId: id }
+      : idMatches[0];
     const before = _stagedPrPublishes.length;
-    _stagedPrPublishes = _stagedPrPublishes.filter((p) => p.pullRequestId !== id);
+    if (target) {
+      _stagedPrPublishes = _stagedPrPublishes.filter((p) =>
+        !samePrPublish(p, target));
+    }
     return { ok: true, removed: before - _stagedPrPublishes.length, count: stagedTotal(), prPublishes: _stagedPrPublishes.slice() };
   }
 

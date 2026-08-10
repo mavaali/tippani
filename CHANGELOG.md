@@ -1,5 +1,26 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- **GitHub repository support** now spans direct PR review, inline comments,
+  thread resolution, formal reviews, WYSIWYG commits, authenticated images,
+  atomic multi-file publication, and staged branch/spec/PR authoring.
+- **GitHub Discovery** launches with
+  `tippani --browse --github=OWNER/REPO`, searches authored/reviewed pull
+  requests across the owner namespace, and searches Markdown through GitHub
+  Code Search. Repository-qualified result links prevent same-numbered PRs in
+  different repositories from colliding.
+- `list_prs` and `search_specs` accept an explicit GitHub provider, owner, and
+  repository anchor through MCP.
+
+### Changed
+
+- Azure DevOps access is isolated behind six capability providers. GitHub
+  Discovery omits ADO-only work-item search and linking rather than presenting
+  controls that cannot work.
+
 ## 1.7.0 (2026-08-09)
 
 The release that makes Tippani a place you can *start* — and now *write* — not

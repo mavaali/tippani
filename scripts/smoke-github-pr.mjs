@@ -63,6 +63,38 @@ const api = await listen(http.createServer(async (req, res) => {
     res.end(JSON.stringify(value));
   };
 
+  if (url.pathname === "/user") {
+    return sendJson({ login: "reviewer", name: "Reviewer" });
+  }
+  if (url.pathname === "/user/orgs") return sendJson([]);
+  if (url.pathname === "/user/repos") {
+    return sendJson([{
+      full_name: "o/r",
+      name: "r",
+      owner: { login: "o" },
+      default_branch: "main",
+      html_url: "https://github.com/o/r",
+      permissions: { push: true },
+    }]);
+  }
+  if (url.pathname === "/users/o") {
+    return sendJson({ login: "o", type: "Organization" });
+  }
+  if (url.pathname === "/search/code") {
+    return sendJson({
+      total_count: 1,
+      items: [{
+        path: "docs/spec.md",
+        html_url: "https://github.com/o/r/blob/main/docs/spec.md",
+        repository: {
+          full_name: "o/r",
+          name: "r",
+          default_branch: "main",
+          owner: { login: "o" },
+        },
+      }],
+    });
+  }
   if (url.pathname === "/repos/o/r/pulls/7") return sendJson(rawPr);
   if (url.pathname === "/repos/o/r/pulls/8") {
     return sendJson({
@@ -126,6 +158,28 @@ const api = await listen(http.createServer(async (req, res) => {
     return sendJson({ id: 1, state: parsed.event });
   }
   if (req.method === "POST" && url.pathname === "/graphql") {
+    if (parsed.query.includes("TippaniPullRequestSearch")) {
+      return sendJson({
+        data: {
+          search: {
+            nodes: [{
+              number: 7,
+              title: "GitHub spec",
+              url: "https://github.com/o/r/pull/7",
+              state: "OPEN",
+              isDraft: false,
+              mergedAt: null,
+              createdAt: "2026-01-01T00:00:00Z",
+              headRefName: "spec/x",
+              baseRefName: "main",
+              author: { login: "author" },
+              repository: { name: "r", owner: { login: "o" } },
+            }],
+            pageInfo: { hasNextPage: false, endCursor: null },
+          },
+        },
+      });
+    }
     if (parsed.query.includes("PublishTippaniPullRequest")) {
       draftPublished = true;
       writes.push(["publish-pr", parsed.variables]);
@@ -201,11 +255,11 @@ child.stdout.on("data", (chunk) => { stdout += chunk; });
 child.stderr.on("data", (chunk) => { stderr += chunk; });
 
 const base = `http://127.0.0.1:${portalPort}`;
-async function waitReady() {
+async function waitReady(url = `${base}/file/0`) {
   const started = Date.now();
   while (Date.now() - started < 20000) {
     try {
-      const response = await fetch(`${base}/file/0`);
+      const response = await fetch(url);
       if (response.ok) return true;
     } catch {}
     await sleep(250);
@@ -213,6 +267,7 @@ async function waitReady() {
   return false;
 }
 
+let browseChild = null;
 try {
   const ready = await waitReady();
   check("GitHub portal boots to rendered spec", ready, stderr || stdout);
@@ -261,12 +316,41 @@ try {
       },
     });
     const discoveryResult = await discovery.json();
-    check("GitHub portal refuses ADO-shaped PR discovery",
+    check("GitHub PR discovery returns neutral results",
       discovery.status === 200 &&
       Array.isArray(discoveryResult.prs) &&
-      discoveryResult.prs.length === 0 &&
-      discoveryResult.error?.includes("not available"),
+      discoveryResult.prs.length === 1 &&
+      discoveryResult.prs[0].repo === "r",
       JSON.stringify(discoveryResult));
+
+    const specs = await fetch(`${base}/api/v1/specs/search`, {
+      method: "POST",
+      headers: {
+        Origin: `http://localhost:${portalPort}`,
+        "X-Tippani-Client": "smoke-github-pr",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ query: "GitHub", project: "o" }),
+    });
+    const specsResult = await specs.json();
+    check("GitHub spec search returns repository-qualified Markdown",
+      specs.status === 200 &&
+      specsResult.specs?.[0]?.repoId === "o/r" &&
+      specsResult.specs?.[0]?.path === "/docs/spec.md",
+      JSON.stringify(specsResult));
+
+    const discoveryPage = await (await fetch(`${base}/discovery`)).text();
+    check("GitHub Discovery hides unsupported work items",
+      discoveryPage.includes("GitHub repositories") &&
+      !discoveryPage.includes('data-tab="workitems"'));
+
+    const searchedSpec = await fetch(
+      `${base}/spec?repo=o%2Fr&path=%2Fdocs%2Fspec.md&repoName=r&project=o&branch=main`,
+    );
+    const searchedSpecPage = await searchedSpec.text();
+    check("GitHub search result opens read-only in Tippani",
+      searchedSpec.ok && searchedSpecPage.includes("GitHub Spec"),
+      `status=${searchedSpec.status}`);
 
     const mutationHeaders = {
       Authorization: "Bearer " + sessionToken,
@@ -377,8 +461,42 @@ try {
       const viewedJson = JSON.parse(fs.readFileSync(viewedPath, "utf8"));
       check("viewed store key/value", viewedJson["o/r#7"]?.["101"] === 101);
     }
+
+    const browseProbe = http.createServer();
+    await listen(browseProbe);
+    const browsePort = browseProbe.address().port;
+    await close(browseProbe);
+    browseChild = spawn(process.execPath, [
+      path.join(ROOT, "src", "index.js"),
+      "--browse",
+      "--github=o/r",
+      "--gh-token=test-token",
+      "--headless",
+      `--port=${browsePort}`,
+    ], {
+      cwd: ROOT,
+      env: {
+        ...process.env,
+        HOME: home,
+        TIPPANI_GITHUB_API_BASE: apiBase,
+      },
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let browseErr = "";
+    browseChild.stderr.on("data", (chunk) => { browseErr += chunk; });
+    const browseBase = `http://127.0.0.1:${browsePort}`;
+    const browseReady = await waitReady(`${browseBase}/discovery`);
+    check("GitHub --browse portal boots end to end",
+      browseReady, browseErr);
+    if (browseReady) {
+      const browsePage = await (await fetch(`${browseBase}/discovery`)).text();
+      check("GitHub browse home includes review results",
+        browsePage.includes("GitHub spec") &&
+        browsePage.includes("/open/7?owner=o&amp;repo=r"));
+    }
   }
 } finally {
+  if (browseChild) browseChild.kill("SIGTERM");
   child.kill("SIGTERM");
   await close(api);
   fs.rmSync(home, { recursive: true, force: true });

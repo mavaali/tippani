@@ -63,15 +63,15 @@ export function prStatusLabel(s) {
 export function mergeRolePrs(authored = [], reviewing = []) {
   const byId = new Map();
   const add = (pr, role) => {
-    const existing = byId.get(pr.id);
+    const key = `${pr.project || ""}/${pr.repo || ""}#${pr.id}`;
+    const existing = byId.get(key);
     if (existing) {
       if (!existing.roles.includes(role)) existing.roles.push(role);
     } else {
-      byId.set(pr.id, { ...pr, roles: [role] });
+      byId.set(key, { ...pr, roles: [role] });
     }
   };
   for (const pr of authored) add(pr, "author");
   for (const pr of reviewing) add(pr, "reviewer");
   return [...byId.values()];
 }
-

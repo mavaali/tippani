@@ -237,8 +237,7 @@ GitHub tokens resolve from CLI flag, environment, then `gh auth token`.
 Host-scoped cache files prevent PR-number collisions with ADO. A local fake-API
 smoke boots the portal, renders a spec, posts an inline comment, writes private
 viewed state, and submits formal approval; it runs in CI with no external
-network or repository writes. Browse/discovery and remote PR authoring remain
-later integration slices.
+network or repository writes.
 
 MCP `open_pr` now accepts `provider:"github"` plus `owner`/`repo`. The portal
 launcher includes provider/repository in registry identity (so GitHub PR #N
@@ -256,6 +255,21 @@ atomic staged-file publication, PR creation, and draft publication use the same
 reviewable local staging flow on GitHub and Azure DevOps. GitHub work-item
 linking remains explicitly unsupported rather than being silently translated to
 Issues.
+
+`src/github-search-provider.js` completes the Search capability:
+
+- Pull-request discovery uses GraphQL search so repository, branch, draft, and
+  merge fields arrive in the neutral queue shape. Reviewer discovery unions
+  pending review requests with submitted reviews.
+- Code search uses GitHub's REST search endpoint, scopes `.md` results to the
+  selected owner namespace, and carries `owner/repo` identity through the
+  read-only spec route.
+- `tippani --browse --github=owner/repo` opens GitHub Discovery. PR cards carry
+  repository-qualified links because PR numbers are only repository-unique.
+- GitHub Discovery omits the Work items tab and work-item-linking fields. The
+  host-independent MCP server still exposes the explicitly ADO-only
+  `search_work_items` tool; GitHub `list_prs` and `search_specs` require an
+  explicit provider and repository anchor.
 
 ## Capability gaps are a first-class, visible design element
 
@@ -278,8 +292,8 @@ The portal/MCP layer checks `provider.workItems` before exposing work-item searc
 
 - **Phase 0 — provider interface, six capabilities.** Extract all 49 call sites (not 55 factory-adjusted, not the smaller review-only set) into six ADO capability providers. Zero behavior change; existing tests hold, plus route and built-artifact integration tests. This is larger than the July Phase 0 but is the actual current surface — deferring any of the six defers the correctness of the interface itself, per Thor's review.
 - **Phase 1 — GitHub `ReviewProvider` + `RepoContentProvider` + `BlobProvider`.** The three fully-supported capabilities: render, comment, WYSIWYG edit + commit, single-file and multi-file push, image/LFS. Usable end-to-end for read/comment/edit/author-without-PR-metadata.
-- **Phase 2 — GitHub `AuthoringProvider` + `SearchProvider`.** Authoring is implemented: PR creation/publish now uses the provider-neutral staged workflow. Code search and PR search remain.
-- **Phase 3 — `WorkItemProvider` explicitly absent.** Portal/MCP hide work-item UI and tools when `provider.workItems === null`. Not "Phase 3 implements it differently" — Phase 3 is making the absence a clean, visible product decision instead of a silent gap.
+- **Phase 2 — GitHub `AuthoringProvider` + `SearchProvider`.** Implemented: staged PR creation/publish, cross-repository PR discovery, and Markdown code search all use provider-neutral workflows.
+- **Phase 3 — `WorkItemProvider` explicitly absent.** Portal surfaces are complete: GitHub Discovery hides work-item search and linking. The generic MCP server still advertises the explicitly ADO-only tool because one process can launch either host; dynamic per-portal tool advertisement remains.
 
 Phase 0 still ships first and still "proves the interface against the known backend before GitHub stresses it" (unchanged reasoning from the July doc) — it is just no longer scoped to a contract already known to be a third smaller than what the codebase needs.
 
