@@ -182,6 +182,10 @@ fetch; no Octokit dependency).
   the stable numeric handle and keeps the thread node id private for resolve.
   A review comment id that cannot be represented as a safe JavaScript integer
   fails loudly rather than silently losing precision.
+- Fork PRs retain the head repository separately from the base PR repository.
+  Threads/reviews stay on the base PR; file reads, image reads, push-permission
+  checks, branch tips, and commits target the contributor's head repository.
+  Cached mapped PRs re-bind the same head context on restart.
 - Viewed state: private local storage keyed by `owner/repo#PR`, injected into
   the provider. A public issue-comment marker was rejected in review because an
   HTML-only comment is visually empty but still creates a timeline entry and
@@ -196,6 +200,8 @@ fetch; no Octokit dependency).
   surfaced rather than silently falling back to an unanchored issue comment.
 - Reviewer queues union pending `requested_reviewers` with authors of submitted
   reviews, so a PR does not disappear after the reviewer requests changes.
+  Submitted-review lookups run through a bounded eight-worker pool to avoid
+  GitHub's secondary concurrency rate limit.
 
 This implementation is not wired into CLI/provider selection yet; that happens
 after Review + RepoContent + Blob are all available, so the first user-facing

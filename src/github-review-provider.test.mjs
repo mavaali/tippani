@@ -210,6 +210,27 @@ const lastCall = (client, name) =>
     callsOf(client, "paginate").some((call) =>
       call.args[0].endsWith("/pulls/7/reviews")));
 }
+{
+  const rows = Array.from({ length: 30 }, (_, index) => rawPr({
+    number: index + 1,
+    requested_reviewers: [],
+  }));
+  let inFlight = 0, peak = 0;
+  const client = fakeClient({
+    paginate: async (path) => {
+      if (path.endsWith("/pulls")) return rows;
+      inFlight++;
+      peak = Math.max(peak, inFlight);
+      await new Promise((resolve) => setTimeout(resolve, 2));
+      inFlight--;
+      return [];
+    },
+  });
+  await createGitHubReviewProvider(client, {
+    owner: "o", repo: "r",
+  }).listPullRequests({ status: 1, reviewerId: "reviewer" }, 50);
+  ok("submitted-review fan-out bounded to 8 workers", peak <= 8);
+}
 
 // --- content + changed files -----------------------------------------------
 {
@@ -572,6 +593,72 @@ const lastCall = (client, name) =>
     }),
     /already been updated/,
   );
+}
+{
+  const fork = rawPr({
+    head: {
+      ref: "main",
+      sha: "fork-tip",
+      repo: {
+        name: "r",
+        full_name: "contributor/r",
+        html_url: "https://github.com/contributor/r",
+        owner: { login: "contributor" },
+      },
+    },
+  });
+  const paths = [];
+  const client = fakeClient({
+    request: async (method, path, options) => {
+      paths.push([method, path]);
+      if (path === "/repos/o/r/pulls/7") return fork;
+      if (path === "/repos/contributor/r") {
+        return { permissions: { push: true } };
+      }
+      if (path.includes("/git/ref/")) {
+        return { object: { sha: "fork-tip" } };
+      }
+      if (method === "GET" && path.includes("/contents/")) {
+        return options?.responseType === "text"
+          ? "# fork"
+          : { sha: "fork-blob" };
+      }
+      if (method === "PUT") return { commit: { sha: "fork-commit" } };
+      return {};
+    },
+  });
+  const provider = createGitHubReviewProvider(client, {
+    owner: "o", repo: "r",
+  });
+  const mapped = await provider.getPullRequest(7);
+  eq("mapped PR retains head repository", mapped._githubHeadRepository, {
+    id: "contributor/r",
+    owner: "contributor",
+    name: "r",
+    ref: "main",
+    sha: "fork-tip",
+  });
+  eq("fork content read targets contributor repo",
+    await provider.getFileContent("/docs/spec.md", "fork-tip"),
+    "# fork");
+  ok("fork push permission probes contributor repo",
+    await provider.probePushPermission() === true);
+  eq("fork commit succeeds against head repo",
+    await provider.commitFile("main", {
+      filePath: "/docs/spec.md",
+      content: "x",
+      message: "m",
+      expectedOldObjectId: "fork-tip",
+    }),
+    "fork-commit");
+  ok("no content/ref/permission write path targeted upstream base repo",
+    paths.filter(([method, path]) =>
+      path !== "/repos/o/r/pulls/7" &&
+      (method === "PUT" ||
+       path.includes("/contents/") ||
+       path.includes("/git/ref/") ||
+       path === "/repos/contributor/r"))
+      .every(([, path]) => path.startsWith("/repos/contributor/r")));
 }
 {
   let tipReads = 0;

@@ -19,11 +19,17 @@ function coordinate(repoRef, defaultOwner, defaultRepo) {
 export function createGitHubBlobProvider(client, {
   owner,
   repo,
+  getOwner,
+  getRepo,
 } = {}) {
   if (!client) throw new Error("GitHub blob provider requires a client");
 
   async function getBlob(filePath, ref, options = {}) {
-    const target = coordinate(options.repo, owner, repo);
+    const target = coordinate(
+      options.repo,
+      typeof getOwner === "function" ? getOwner() : owner,
+      typeof getRepo === "function" ? getRepo() : repo,
+    );
     if (!target.owner || !target.repo) {
       throw new Error("GitHub blob provider requires owner and repo");
     }

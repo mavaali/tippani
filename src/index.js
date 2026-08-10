@@ -123,6 +123,7 @@ function getConfig() {
 let ADO_ORG, ADO_PROJECT, ADO_REPO;
 let _hostKind = "ado";
 let _githubOwner = null, _githubRepo = null;
+let _githubHeadOwner = null, _githubHeadRepo = null;
 let _githubReview = null, _githubRepoContent = null, _githubBlobs = null;
 // Human-readable name for ADO_PROJECT (which applyRepoContextFromPR may re-point
 // to a project GUID). Resolved by listAdoProjects so the picker never shows a GUID.
@@ -438,7 +439,12 @@ function initGitHubProviders(token, { owner, repo }) {
     owner, repo, viewedStore,
   });
   _githubRepoContent = createGitHubRepoContentProvider(client);
-  _githubBlobs = createGitHubBlobProvider(client, { owner, repo });
+  _githubHeadOwner = owner;
+  _githubHeadRepo = repo;
+  _githubBlobs = createGitHubBlobProvider(client, {
+    getOwner: () => _githubHeadOwner,
+    getRepo: () => _githubHeadRepo,
+  });
   _conn = client; // truthy session handle; generic adapters ignore its ADO shape
   return client;
 }
@@ -505,6 +511,14 @@ function applyRepoContextFromPR(pr) {
   if (ctx.source === "pr") {
     ADO_REPO = ctx.repo;
     ADO_PROJECT = ctx.project;
+  }
+  if (_hostKind === "github") {
+    _githubReview?.bindPullRequest(pr);
+    const head = pr?._githubHeadRepository;
+    if (head?.owner && head?.name) {
+      _githubHeadOwner = head.owner;
+      _githubHeadRepo = head.name;
+    }
   }
   return ctx;
 }
