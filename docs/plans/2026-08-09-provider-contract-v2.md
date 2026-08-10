@@ -26,7 +26,7 @@ Counted directly with a broad baseline scan: `grep -oE '(gitApi|coreApi|witApi|s
 
 ## Architecture — six capability interfaces, not one
 
-Thor's review of this codebase's provider design (2026-08-09) argued a single `ReviewProvider` covering all 31 methods becomes exactly the kind of leaky, over-wide interface the original doc warned against — a `GitHubProvider` would have to either fake support for capabilities GitHub can't cleanly provide (there is no GitHub concept matching ADO's WIQL work-item query, for instance) or the interface silently grows unrelated methods onto an object nominally about "reviewing a PR." Splitting by capability lets each interface stay small, lets a provider legitimately decline a capability it can't support (rather than throwing inside a method that claims to be universal), and keeps the original `ReviewProvider`'s already-researched GitHub mapping (threads via GraphQL `reviewThreads`, viewed-state via a marker comment, `commitFile` via the Contents API `sha` token) untouched.
+Thor's review of this codebase's provider design (2026-08-09) argued a single `ReviewProvider` covering all 32 methods becomes exactly the kind of leaky, over-wide interface the original doc warned against — a `GitHubProvider` would have to either fake support for capabilities GitHub can't cleanly provide (there is no GitHub concept matching ADO's WIQL work-item query, for instance) or the interface silently grows unrelated methods onto an object nominally about "reviewing a PR." Splitting by capability lets each interface stay small, lets a provider legitimately decline a capability it can't support (rather than throwing inside a method that claims to be universal), and keeps the original `ReviewProvider`'s already-researched GitHub mapping (threads via GraphQL `reviewThreads`, viewed-state via a marker comment, `commitFile` via the Contents API `sha` token) untouched.
 
 ```
 // Unchanged from the July design — this is the whole GitHub-mapping research
@@ -112,11 +112,14 @@ interface WorkItemProvider {
 // transport) is backend-specific, and because it is the one capability a
 // provider can be "read-only + resolve" for without touching write paths at all.
 interface BlobProvider {
-  getBlob(repo, path, ref) -> bytes                 // MUST request LFS-resolved
-                                                     // bytes server-side; MIME,
-                                                     // pointer defense, path guard,
-                                                     // and response headers stay
-                                                     // above the provider line
+  getBlob(path, ref, {repo?, project?}) -> bytes    // provider may be bound to a
+                                                     // session repo/project; explicit
+                                                     // coordinates override it for
+                                                     // arbitrary-repo reads. MUST
+                                                     // request LFS-resolved bytes;
+                                                     // MIME, pointer defense, path
+                                                     // guard, and response headers
+                                                     // stay above the provider line
 }
 ```
 
@@ -141,7 +144,7 @@ interface BlobProvider {
 | `listBranchFolders` | RepoContentProvider | `listItems` — merging with local staged folders and UI shaping stays above the provider line |
 | Discovery branch/repository listing | RepoContentProvider | `listRepositories`, `listBranches` |
 | `listAdoProjects` | RepoContentProvider | `listProjects` |
-| `getFileCommits` / `getLastCommitAuthor` | RepoContentProvider | `getFileCommits` |
+| `getFileCommits` / `getLastCommitAuthor` | RepoContentProvider | `getFileCommits` / `getLastCommitAuthor` |
 | `listBranchFiles` | RepoContentProvider | `resolveRepository`, `diffBranches` |
 | `openPr`, `publishStagedPrs` | AuthoringProvider | `createPullRequest`, `publishPullRequest` |
 | work-item search/create/link (index.js ~7982-7998, ~6594-6598) | WorkItemProvider | `queryWorkItemRefs`, `getWorkItems`, `createWorkItem`, `updateWorkItem`, `linkToPullRequest` |
