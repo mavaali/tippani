@@ -55,7 +55,7 @@ import { makeRepoSession, createSessionTokens } from "./repo-session.js";
 import { saveSpecDraft, loadSpecDraft, deleteSpecDraft } from "./spec-draft-store.js";
 import { openSpecReviewPr } from "./pr-open.js";
 import { specSearchUnavailableMessage } from "./spec-search-error.js";
-import { prContentVersion, toVersionDescriptor } from "./pr-version.js";
+import { prContentVersion } from "./pr-version.js";
 import { renderCrumbBar, renderBrand } from "./breadcrumb.js";
 import {
   decodeConfigValue,
@@ -78,6 +78,7 @@ import { createAdoRepoContentProvider } from "./ado-repo-content-provider.js";
 import { createAdoAuthoringProvider } from "./ado-authoring-provider.js";
 import { createAdoWorkItemProvider } from "./ado-work-item-provider.js";
 import { createAdoSearchProvider } from "./ado-search-provider.js";
+import { createAdoBlobProvider } from "./ado-blob-provider.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -333,6 +334,7 @@ const _adoRepoContentProviders = new WeakMap();
 const _adoAuthoringProviders = new WeakMap();
 const _adoWorkItemProviders = new WeakMap();
 const _adoSearchProviders = new WeakMap();
+const _adoBlobProviders = new WeakMap();
 function adoReview(conn) {
   if (!conn) throw new Error("ADO review provider requires a connection");
   let provider = _adoReviewProviders.get(conn);
@@ -378,6 +380,18 @@ function adoSearch(conn) {
   if (!provider) {
     provider = createAdoSearchProvider(conn, { org: ADO_ORG });
     _adoSearchProviders.set(conn, provider);
+  }
+  return provider;
+}
+function adoBlobs(conn) {
+  if (!conn) throw new Error("ADO blob provider requires a connection");
+  let provider = _adoBlobProviders.get(conn);
+  if (!provider) {
+    provider = createAdoBlobProvider(conn, {
+      getRepo: () => ADO_REPO,
+      getProject: () => ADO_PROJECT,
+    });
+    _adoBlobProviders.set(conn, provider);
   }
   return provider;
 }
@@ -462,26 +476,7 @@ function contentVersion() { return _pr ? prContentVersion(_pr) : _branch; }
 // in LFS); without it the call returns the ~130-byte LFS pointer text, which
 // would stream as a broken image.
 async function getImageBlob(conn, filePath, ver) {
-  const gitApi = await conn.getGitApi();
-  const versionDesc = toVersionDescriptor(ver);
-  const item = await gitApi.getItemContent(
-    ADO_REPO,
-    filePath,
-    ADO_PROJECT,
-    undefined,        // scopePath
-    undefined,        // recursionLevel
-    undefined,        // includeContentMetadata
-    undefined,        // latestProcessedChange
-    true,             // download — raw bytes
-    versionDesc,
-    undefined,        // includeContent
-    true              // resolveLfs — return the real blob, not the LFS pointer
-  );
-  const chunks = [];
-  for await (const chunk of item) {
-    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-  }
-  return Buffer.concat(chunks);
+  return adoBlobs(conn).getBlob(filePath, ver);
 }
 
 
@@ -6621,12 +6616,11 @@ const {
   listStagedBranches, stagedTotal,
 } = _inventory;
 
-// The three functions below stay in index.js because they call ADO
-// (mcpCreateBranch, resolveTarget, getBranchTip, createPush, openPr,
-// updatePullRequest, gitApi.getItems) — everything ELSE about staged state
-// now lives behind _inventory, reached here only via snapshot() (read) and
-// removeXMatching() / setPrPublishes() (write-after-success), never via a
-// raw array.
+// The three functions below stay in index.js because they orchestrate several
+// provider capabilities (repo content + authoring) with the local staged
+// inventory. Backend calls themselves now live behind those providers;
+// inventory access is only via snapshot() (read) and removeXMatching() /
+// setPrPublishes() (write-after-success), never via a raw array.
 async function pushStagedBranches() {
   const results = [];
   const { branches, files, folders, prs } = _inventory.snapshot();

@@ -6,13 +6,23 @@
 // renderer and is only covered by the live smokes, so it stays in index.js.
 
 import { createAdoRepoContentProvider } from "./ado-repo-content-provider.js";
+import { createAdoBlobProvider } from "./ado-blob-provider.js";
 
 const providers = new WeakMap();
+const blobProviders = new WeakMap();
 function repoContent(conn) {
   let provider = providers.get(conn);
   if (!provider) {
     provider = createAdoRepoContentProvider(conn);
     providers.set(conn, provider);
+  }
+  return provider;
+}
+function blobs(conn) {
+  let provider = blobProviders.get(conn);
+  if (!provider) {
+    provider = createAdoBlobProvider(conn);
+    blobProviders.set(conn, provider);
   }
   return provider;
 }
@@ -29,18 +39,10 @@ export async function getSpecContentAt(conn, repoId, filePath, branch = "main") 
 // read-only spec view's image proxy). Same shape as getImageBlob but repo-scoped
 // by GUID and branch — download=true (raw bytes), resolveLfs=true (real blob).
 export async function getSpecBlobAt(conn, repoId, filePath, branch = "main") {
-  const gitApi = await conn.getGitApi();
-  const item = await gitApi.getItemContent(
-    repoId, filePath, undefined,
-    undefined, undefined, undefined, undefined,
-    true,                                     // download — raw bytes
-    { version: branch, versionType: 0 },
-    undefined,
-    true                                      // resolveLfs — real blob, not pointer
-  );
-  const chunks = [];
-  for await (const chunk of item) chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-  return Buffer.concat(chunks);
+  return blobs(conn).getBlob(filePath, branch, {
+    repo: repoId,
+    project: undefined,
+  });
 }
 
 // Build the ADO web URL for a spec file so a result can open in Azure DevOps.

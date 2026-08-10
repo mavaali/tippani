@@ -107,9 +107,11 @@ interface WorkItemProvider {
 // transport) is backend-specific, and because it is the one capability a
 // provider can be "read-only + resolve" for without touching write paths at all.
 interface BlobProvider {
-  getBlob(repo, path, ref) -> {bytes, contentType}   // MUST resolve LFS pointers
-                                                       // server-side, matching
-                                                       // getImageBlob's contract
+  getBlob(repo, path, ref) -> bytes                 // MUST request LFS-resolved
+                                                     // bytes server-side; MIME,
+                                                     // pointer defense, path guard,
+                                                     // and response headers stay
+                                                     // above the provider line
 }
 ```
 
