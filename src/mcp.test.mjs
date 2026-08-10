@@ -175,6 +175,20 @@ try {
       r.instructions === undefined);
     check("open_pr: reports open thread count", r.openThreadCount === 2);
   }
+  {
+    await byName.open_pr.handler({
+      prId: 82,
+      provider: "github",
+      owner: "mavaali",
+      repo: "tippani",
+    });
+    const call = ensurePortalCalls.at(-1);
+    check("open_pr GitHub: forwards provider/owner/repo",
+      call.provider === "github" &&
+      call.owner === "mavaali" &&
+      call.repo === "tippani" &&
+      call.prId === 82);
+  }
 
   // --- list_threads ---
   {

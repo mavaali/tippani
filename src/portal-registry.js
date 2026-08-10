@@ -21,12 +21,18 @@ export function registryDir() {
 }
 
 /** Write (or overwrite) this portal's registry entry, keyed by port. */
-export function writeInstance({ port, prId, token, pid, url, shimPid }) {
+export function writeInstance({
+  port, prId, token, pid, url, shimPid,
+  provider = "ado", owner = null, repo = null,
+}) {
   try {
     fs.mkdirSync(REG_DIR, { recursive: true, mode: 0o700 });
     const entry = {
       port: Number(port),
       prId: Number(prId),
+      provider,
+      owner,
+      repo,
       token,
       pid: pid ?? process.pid,
       // The shim process that spawned this portal, if any. Startup reaping kills

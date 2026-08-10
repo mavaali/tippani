@@ -237,8 +237,14 @@ GitHub tokens resolve from CLI flag, environment, then `gh auth token`.
 Host-scoped cache files prevent PR-number collisions with ADO. A local fake-API
 smoke boots the portal, renders a spec, posts an inline comment, writes private
 viewed state, and submits formal approval; it runs in CI with no external
-network or repository writes. Browse/discovery, MCP provider selection, and
-remote PR authoring remain later integration slices.
+network or repository writes. Browse/discovery and remote PR authoring remain
+later integration slices.
+
+MCP `open_pr` now accepts `provider:"github"` plus `owner`/`repo`. The portal
+launcher includes provider/repository in registry identity (so GitHub PR #N
+never adopts ADO PR #N), forwards `TIPPANI_GH_TOKEN`, and launches the same
+direct-PR portal headlessly. ADO token validation remains independent and
+fail-fast; missing GitHub auth does not disable ADO/local tools.
 
 ## Capability gaps are a first-class, visible design element
 

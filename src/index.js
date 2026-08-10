@@ -7899,6 +7899,12 @@ async function main() {
   // PRs; widen via query.creator = 'any'. Returns summarized PRs for the /prs
   // page + list_prs tool.
   async function doListPrs(query = {}) {
+    if (_hostKind === "github") {
+      return {
+        prs: [],
+        error: "Pull-request discovery is not available for GitHub repositories. Open a specific pull request.",
+      };
+    }
     if (_isOffline || !_conn) return { prs: [], error: "offline" };
     let currentUserId = null;
     let identityError = null;
@@ -9293,7 +9299,17 @@ if ($path) { [Console]::Out.Write($path) }
       fs.writeFileSync(tokenPath, _sessionToken + "\n", { mode: 0o600 });
       // Register this portal so MCP clients can discover it by PR/port and
       // adopt it instead of colliding on the port (multi-PR parallelism).
-      writeInstance({ port: PORT, prId: _prId, token: _sessionToken, pid: process.pid, url: base, shimPid: Number(process.env.TIPPANI_SHIM_PID) || null });
+      writeInstance({
+        port: PORT,
+        prId: _prId,
+        provider: _hostKind,
+        owner: _githubOwner,
+        repo: _githubRepo,
+        token: _sessionToken,
+        pid: process.pid,
+        url: base,
+        shimPid: Number(process.env.TIPPANI_SHIM_PID) || null,
+      });
       const cleanup = () => {
         try { fs.unlinkSync(tokenPath); } catch {}
         removeInstance(PORT);

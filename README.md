@@ -241,9 +241,14 @@ Tippani exposes a [Model Context Protocol](https://modelcontextprotocol.io) serv
 }
 ```
 
+For GitHub, set `TIPPANI_GH_TOKEN` instead (or leave it unset when `gh auth
+token` works in the MCP server's environment). GitHub and ADO tokens are
+separate; a supplied ADO token still gets its existing fail-fast audience/type
+validation.
+
 **Tools (40):**
 
-- **Portal & navigation** — `open_pr` (opens a PR for review; the PR reading/comment tools act on it — or start from `list_prs` / `search_specs` or a branch), `open_file`, `open_thread`, `show_feedback` (cross-PR triage page), `set_view`, `set_feedback_filter`, `refresh_spec`.
+- **Portal & navigation** — `open_pr` (ADO by default; for GitHub pass `provider: "github"`, `owner`, and `repo`), `open_file`, `open_thread`, `show_feedback` (cross-PR triage page), `set_view`, `set_feedback_filter`, `refresh_spec`.
 - **Reading** — `list_threads`, `get_thread`, `get_spec`, `get_spec_draft`, `triage_summary`; focus with `focus_thread`.
 - **Stage-then-push** — stage review work with `stage_draft`, `edit_spec`, and `stage_resolve_thread`; stage authoring work with `stage_branch`, `stage_spec`, and `stage_spec_pr`. Nothing staged by MCP reaches your repository host until one explicit `push_staged_changes` call. Also `clear_draft` and `clear_spec_edit`.
 - **Discovery** — `list_prs`, `search_specs`, `search_work_items`, `get_file_commits`.

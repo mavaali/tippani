@@ -201,6 +201,20 @@ try {
       home, ".tippani", `session-token-${portalPort}`,
     );
     const sessionToken = fs.readFileSync(tokenPath, "utf8").trim();
+    const discovery = await fetch(`${base}/api/v1/prs`, {
+      headers: {
+        Authorization: `Bearer ${sessionToken}`,
+        "X-Tippani-Client": "smoke-github-pr",
+      },
+    });
+    const discoveryResult = await discovery.json();
+    check("GitHub portal refuses ADO-shaped PR discovery",
+      discovery.status === 200 &&
+      Array.isArray(discoveryResult.prs) &&
+      discoveryResult.prs.length === 0 &&
+      discoveryResult.error?.includes("not available"),
+      JSON.stringify(discoveryResult));
+
     const viewed = await fetch(`${base}/api/v1/threads/101/viewed`, {
       method: "POST",
       headers: {

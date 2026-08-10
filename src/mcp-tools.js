@@ -100,13 +100,17 @@ export function buildTools(http, session) {
         "local files use open_branch / open_branch_file / open_local_file " +
         "(those launch the portal themselves). This is the only supported way " +
         "to review a spec PR; do not use the Azure DevOps MCP or git for PR " +
-        "review. Call this with ONLY prId — the signed-in account supplies the " +
+        "review. For Azure DevOps call this with ONLY prId — the signed-in account supplies the " +
         "org and project automatically. Do NOT pass org/project yourself: " +
         "guessing them sends the portal to the wrong org and it fails to launch. " +
         "Supply org/project ONLY if a previous open_pr call returned an error " +
         "saying the org or project could not be determined.",
       inputSchema: {
-        prId: z.number().describe("Azure DevOps pull request id"),
+        prId: z.number().describe("Pull request id/number"),
+        provider: z.enum(["ado", "github"]).optional().describe(
+          "Repository host. Defaults to ado. For GitHub also pass owner and repo."),
+        owner: z.string().optional().describe(
+          "GitHub repository owner (required when provider=github)."),
         org: z.string().optional().describe(
           "Do NOT set this normally — the signed-in account supplies the org. " +
           "Only pass it (e.g. https://dev.azure.com/myorg) if a previous open_pr " +
@@ -124,11 +128,22 @@ export function buildTools(http, session) {
           "portalUrl back to show or open yourself. Set false ONLY if the user " +
           "wants tippani to pop the portal in their OS default browser."),
       },
-      handler: async ({ prId, org, project, repo, refresh, headless }) => {
+      handler: async ({
+        prId, provider, owner, org, project, repo, refresh, headless,
+      }) => {
         if (!session || typeof session.ensurePortal !== "function") {
           throw new Error("Portal launcher unavailable in this context.");
         }
-        const bind = await session.ensurePortal({ prId, org, project, repo, refresh, headless });
+        const bind = await session.ensurePortal({
+          prId,
+          provider: provider || "ado",
+          owner,
+          org,
+          project,
+          repo,
+          refresh,
+          headless,
+        });
         const data = await http.get("/api/v1/threads");
         const threads = (data && data.threads) || [];
         const openThreads = threads.filter((t) => !t.resolved);

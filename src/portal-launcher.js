@@ -21,6 +21,7 @@ import net from "net";
 import path from "path";
 import { fileURLToPath } from "url";
 import openDefault from "open";
+import { normalizeGitHubCoordinates } from "./github-target.js";
 import { listInstances, removeInstance, reapInstances } from "./portal-registry.js";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -57,6 +58,8 @@ export function createPortalSession({
   basePort = Number(process.env.TIPPANI_PORT) || 3847,
   portSpan = 20,
   adoToken = process.env.TIPPANI_ADO_TOKEN || null,
+  githubToken = process.env.TIPPANI_GH_TOKEN ||
+    process.env.GITHUB_TOKEN || null,
   clientName = process.env.TIPPANI_CLIENT_NAME || "tippani-mcp",
   nodeBin = process.execPath,
   portalEntry = PORTAL_ENTRY,
@@ -114,35 +117,76 @@ export function createPortalSession({
   }
 
   // A live portal already open for this PR (any process), or null.
-  async function findLivePortalForPr(prId) {
+  function sameTarget(inst, {
+    prId, provider = "ado", owner = null, repo = null,
+  }) {
+    const instProvider = inst.provider || "ado"; // backward-compatible entries
+    const instGitHub = normalizeGitHubCoordinates(inst);
+    const targetGitHub = normalizeGitHubCoordinates({ owner, repo });
+    return Number(inst.prId) === Number(prId) &&
+      instProvider === provider &&
+      (provider !== "github" ||
+        (instGitHub.owner === targetGitHub.owner &&
+          instGitHub.repo === targetGitHub.repo));
+  }
+
+  async function findLivePortalForPr(target) {
     for (const inst of listInstancesFn()) {
-      if (Number(inst.prId) !== prId) continue;
+      if (!sameTarget(inst, target)) continue;
       const url = inst.url || `http://localhost:${inst.port}`;
       if (await healthyAt(url, inst.token)) {
-        return { port: Number(inst.port), url, token: inst.token, prId, owned: false };
+        return {
+          port: Number(inst.port),
+          url,
+          token: inst.token,
+          ...target,
+          owned: false,
+        };
       }
     }
     return null;
   }
 
-  async function ensurePortal({ prId, org, project, repo, refresh, headless = true } = {}) {
+  async function ensurePortal({
+    prId, org, project, repo, refresh, headless = true,
+    provider = "ado", owner,
+  } = {}) {
     const id = Number(prId);
     if (!id) throw new Error("open_pr requires a numeric prId.");
+    const github = normalizeGitHubCoordinates({ owner, repo });
+    if (provider === "github" && (!github.owner || !github.repo)) {
+      throw new Error("GitHub open_pr requires owner and repo.");
+    }
+    const target = {
+      prId: id,
+      provider,
+      owner: provider === "github" ? github.owner : null,
+      repo: provider === "github" ? github.repo : null,
+    };
 
     let result;
     // 1. Already bound to a live portal for this PR.
-    if (active && active.prId === id && (await healthyAt(active.url, active.token))) {
+    if (active && sameTarget(active, target) &&
+        (await healthyAt(active.url, active.token))) {
       result = { reused: true, prId: id, url: active.url };
     } else {
       // 2. Adopt another process's live portal already open for this PR — don't
       //    spawn a duplicate or collide on its port.
-      const found = await findLivePortalForPr(id);
+      const found = await findLivePortalForPr(target);
       if (found) {
         active = found;
         result = { reused: true, adopted: true, prId: id, url: found.url };
       } else {
         // 3. Launch a new portal on a free port, leaving other PRs' portals alone.
-        active = await launchNew({ prId: id, org, project, repo, refresh });
+        active = await launchNew({
+          prId: id,
+          org,
+          project,
+          repo: provider === "github" ? target.repo : repo,
+          refresh,
+          provider,
+          owner: target.owner,
+        });
         result = { reused: false, prId: id, url: active.url };
       }
     }
@@ -164,19 +208,29 @@ export function createPortalSession({
   }
 
   // Ensure a portal exists for cross-PR browsing (list_prs). Reuses the active
-  // portal (PR-bound OR browse — both serve /prs + /api/v1/prs), or an existing
-  // browse portal (prId 0) in the registry, else launches a PR-less browse
-  // portal (reads org/project from ~/.tippani/config.json).
+  // ADO portal (PR-bound OR browse — both serve /prs + /api/v1/prs), or an
+  // existing ADO browse portal (prId 0) in the registry, else launches a PR-less
+  // browse portal (reads org/project from ~/.tippani/config.json).
   async function ensureBrowsePortal({ headless = true } = {}) {
-    if (active && (await healthyAt(active.url, active.token))) {
+    if (active && (active.provider || "ado") === "ado" &&
+        (await healthyAt(active.url, active.token))) {
       if (!headless) await maybeOpenBrowser();
       return { reused: true, url: active.url };
     }
     for (const inst of listInstancesFn()) {
-      if (Number(inst.prId) !== 0) continue;
+      if (Number(inst.prId) !== 0 || (inst.provider || "ado") !== "ado") continue;
       const url = inst.url || `http://localhost:${inst.port}`;
       if (await healthyAt(url, inst.token)) {
-        active = { port: Number(inst.port), url, token: inst.token, prId: 0, owned: false };
+        active = {
+          port: Number(inst.port),
+          url,
+          token: inst.token,
+          prId: 0,
+          provider: "ado",
+          owner: null,
+          repo: null,
+          owned: false,
+        };
         if (!headless) await maybeOpenBrowser();
         return { reused: true, adopted: true, url };
       }
@@ -186,21 +240,35 @@ export function createPortalSession({
     return { reused: false, url: active.url };
   }
 
-  async function launchNew({ prId, org, project, repo, refresh, browse } = {}) {
+  async function launchNew({
+    prId, org, project, repo, refresh, browse,
+    provider = "ado", owner,
+  } = {}) {
     let lastErr = null;
     for (let port = basePort; port < basePort + portSpan; port++) {
       // Fast pre-check: skip ports already in use WITHOUT spawning. A spawned
       // portal runs the full ADO fetch before it binds and hits EADDRINUSE, so
       // probing here avoids a full fetch (or the ready timeout) per busy port.
       if (!(await isPortFreeFn(port))) { lastErr = `port ${port} in use`; continue; }
-      const res = await tryLaunchOnPort(port, { prId, org, project, repo, refresh, browse });
+      const res = await tryLaunchOnPort(port, {
+        prId, org, project, repo, refresh, browse, provider, owner,
+      });
       if (res.ok) {
         // Track so stop() can tear down every portal we own, not just the last.
         ownedChildren.set(port, res.child);
         res.child.on("exit", () => {
           if (ownedChildren.get(port) === res.child) ownedChildren.delete(port);
         });
-        return { port, url: `http://localhost:${port}`, token: res.token, prId: browse ? 0 : prId, owned: true };
+        return {
+          port,
+          url: `http://localhost:${port}`,
+          token: res.token,
+          prId: browse ? 0 : prId,
+          provider,
+          owner: provider === "github" ? owner : null,
+          repo: provider === "github" ? repo : null,
+          owned: true,
+        };
       }
       lastErr = res.error;
       // Port busy (another PR's portal or a stale entry) → try the next one.
@@ -211,19 +279,31 @@ export function createPortalSession({
     );
   }
 
-  function tryLaunchOnPort(port, { prId, org, project, repo, refresh, browse }) {
+  function tryLaunchOnPort(port, {
+    prId, org, project, repo, refresh, browse, provider, owner,
+  }) {
     // The portal launches headless — the shim owns browser-opening (see
     // maybeOpenBrowser) so both launch and adopt bring the portal up uniformly.
     const args = browse
       ? [portalEntry, "--browse", `--port=${port}`, "--headless"]
-      : [portalEntry, String(prId), `--port=${port}`, "--headless"];
-    if (org) args.push(`--org=${org}`);
-    if (project) args.push(`--project=${project}`);
-    if (repo) args.push(`--repo=${repo}`);
+      : provider === "github"
+        ? [
+            portalEntry,
+            `github:${owner}/${repo}#${prId}`,
+            `--port=${port}`,
+            "--headless",
+          ]
+        : [portalEntry, String(prId), `--port=${port}`, "--headless"];
+    if (provider !== "github") {
+      if (org) args.push(`--org=${org}`);
+      if (project) args.push(`--project=${project}`);
+      if (repo) args.push(`--repo=${repo}`);
+    }
     if (refresh) args.push("--refresh");
 
     const env = { ...process.env };
     if (adoToken) env.TIPPANI_ADO_TOKEN = adoToken;
+    if (githubToken) env.TIPPANI_GH_TOKEN = githubToken;
     // Tell the portal who spawned it so startup reaping can detect orphans.
     env.TIPPANI_SHIM_PID = String(process.pid);
 
@@ -248,8 +328,14 @@ export function createPortalSession({
         // Match OUR portal: same port AND our prId. A different PR already on
         // this port must NOT be adopted here — our child will hit EADDRINUSE
         // and exit, and we move on.
-        const inst = listInstancesFn().find(
-          (i) => Number(i.port) === port && Number(i.prId) === (browse ? 0 : prId));
+        const inst = listInstancesFn().find((i) =>
+          Number(i.port) === port &&
+          sameTarget(i, browse ? {
+            prId: 0, provider: "ado", owner: null, repo: null,
+          } : {
+            prId, provider, owner: provider === "github" ? owner : null,
+            repo: provider === "github" ? repo : null,
+          }));
         if (inst && (await healthyAt(inst.url || `http://localhost:${port}`, inst.token))) {
           resolve({ ok: true, token: inst.token, child: proc });
           return;

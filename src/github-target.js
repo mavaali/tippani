@@ -1,5 +1,12 @@
 // Pure GitHub target/auth selection helpers for CLI boot.
 
+export function normalizeGitHubCoordinates({ owner, repo } = {}) {
+  return {
+    owner: String(owner || "").trim().toLowerCase(),
+    repo: String(repo || "").trim().replace(/\.git$/i, "").toLowerCase(),
+  };
+}
+
 export function parseGitHubTarget(args = [], env = {}) {
   const positional = args.filter((arg) => !String(arg).startsWith("--"));
   const explicit = args.find((arg) => String(arg).startsWith("--github="));
@@ -29,6 +36,7 @@ export function parseGitHubTarget(args = [], env = {}) {
   } else {
     return { isGitHub: false };
   }
+  ({ owner, repo } = normalizeGitHubCoordinates({ owner, repo }));
   const id = Number(prId);
   if (!owner || !repo || !Number.isFinite(id) || id <= 0) {
     return {
@@ -39,7 +47,7 @@ export function parseGitHubTarget(args = [], env = {}) {
   return {
     isGitHub: true,
     owner,
-    repo: repo.replace(/\.git$/i, ""),
+    repo,
     prId: id,
   };
 }
