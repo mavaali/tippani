@@ -77,6 +77,7 @@ import { createAdoReviewProvider } from "./ado-review-provider.js";
 import { createAdoRepoContentProvider } from "./ado-repo-content-provider.js";
 import { createAdoAuthoringProvider } from "./ado-authoring-provider.js";
 import { createAdoWorkItemProvider } from "./ado-work-item-provider.js";
+import { createAdoSearchProvider } from "./ado-search-provider.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -331,6 +332,7 @@ const _adoReviewProviders = new WeakMap();
 const _adoRepoContentProviders = new WeakMap();
 const _adoAuthoringProviders = new WeakMap();
 const _adoWorkItemProviders = new WeakMap();
+const _adoSearchProviders = new WeakMap();
 function adoReview(conn) {
   if (!conn) throw new Error("ADO review provider requires a connection");
   let provider = _adoReviewProviders.get(conn);
@@ -370,6 +372,15 @@ function adoWorkItems(conn) {
   }
   return provider;
 }
+function adoSearch(conn) {
+  if (!conn) throw new Error("ADO search provider requires a connection");
+  let provider = _adoSearchProviders.get(conn);
+  if (!provider) {
+    provider = createAdoSearchProvider(conn, { org: ADO_ORG });
+    _adoSearchProviders.set(conn, provider);
+  }
+  return provider;
+}
 
 async function getPullRequest(conn, prId) {
   return adoReview(conn).getPullRequest(prId);
@@ -387,19 +398,8 @@ async function listPullRequests(conn, criteria, top = 50) {
 // method, so this calls the org-level REST endpoint directly (same auth handler
 // as every other call, via conn.rest). Best-effort: returns [] on failure.
 async function listOrgPullRequests(conn, criteria, top = 50) {
-  const base = ADO_ORG.replace(/\/+$/, "");
-  const statusName = { 1: "active", 2: "abandoned", 3: "completed", 4: "all" }[criteria.status] || "active";
-  const params = new URLSearchParams();
-  params.set("api-version", "7.1");
-  params.set("$top", String(top));
-  params.set("searchCriteria.status", statusName);
-  if (criteria.creatorId) params.set("searchCriteria.creatorId", criteria.creatorId);
-  if (criteria.reviewerId) params.set("searchCriteria.reviewerId", criteria.reviewerId);
-  if (criteria.targetRefName) params.set("searchCriteria.targetRefName", criteria.targetRefName);
-  const url = `${base}/_apis/git/pullrequests?${params.toString()}`;
   try {
-    const resp = await conn.rest.get(url);
-    return (resp && resp.result && resp.result.value) || [];
+    return await adoSearch(conn).searchPullRequests(criteria, top);
   } catch (e) {
     console.error("listOrgPullRequests failed:", e.message);
     return [];
@@ -7864,17 +7864,12 @@ async function main() {
     const q = (query == null ? "" : String(query)).trim();
     const proj = (project && String(project).trim()) || ADO_PROJECT;
     if (!q) return { specs: [], project: proj, count: 0 };
-    // almssearch is a sibling host: dev.azure.com/{org} -> almsearch.dev.azure.com/{org}
-    const searchBase = ADO_ORG.replace("://dev.azure.com", "://almsearch.dev.azure.com");
-    const url = `${searchBase}/_apis/search/codesearchresults?api-version=7.1`;
     // Page size: the MCP path (no enrichment) takes the full Code Search page and
     // limits itself; the browser UI enriches each hit, so it keeps the page tighter.
     const pageTop = Number.isFinite(top) && top > 0 ? Math.min(top, 1000) : (enrich ? 100 : 1000);
-    const body = { searchText: `${q} ext:md`, "$skip": 0, "$top": pageTop, filters: { Project: [proj] } };
     let result;
     try {
-      const resp = await _conn.rest.create(url, body);
-      result = resp && resp.result;
+      result = await adoSearch(_conn).searchSpecs(proj, q, pageTop);
     } catch (e) {
       // search_specs relies on ADO Code Search (almsearch.dev.azure.com), a
       // per-org extension. A brand-new org without it provisioned fails here
