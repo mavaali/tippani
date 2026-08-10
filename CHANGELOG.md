@@ -1,140 +1,207 @@
 # Changelog
 
-## Unreleased — Remote spec authoring + Discovery + docs
+## 1.7.0 (unreleased)
 
-End-to-end **remote authoring** with no working tree: stage a branch, add or
-edit `.md` files, stage a PR (with an optional Spec-review work-item link), and
-publish the whole set with one `push_staged_changes`. From branch `clickstop-2`.
+The release that makes Tippani a place you can *start* — and now *write* — not
+just a viewer you hand a PR id to. Discovery turns the portal into a home screen;
+specs render their visuals; a branch or a local clone becomes a first-class
+review surface with private annotations; you can author a whole spec and open its
+PR without a working tree; and the front door finally opens without an account.
 
-- **Discovery home** — Specs (ADO Code Search), Review queue, Work items (WIQL),
-  Branches (remote + local), and a personal Reading list, all in one screen.
-- **Staged everywhere** — replies, resolutions, file adds/edits, PR intents, and
-  draft→published promotions are staged locally; one **Push to remote** crosses
-  into Azure DevOps. Staged PR cards can be deleted before publishing.
-- **Shared staged-changes ticker** refreshed from both Branches and the Review
-  queue.
-- **"Personal comments" are now "Annotations"** — the private, line-anchored
-  notes are renamed across the UI, the MCP tools (`add_annotation`,
-  `read_annotations`, `resolve_annotation`, …), and the docs. Fittingly,
-  *tippani* itself means "annotation".
-- **Links behave sensibly** — clicking a link inside a rendered spec opens a
-  Markdown file that lives under the current file's root folder **in Tippani**
-  (the read-only reviewing view), and everything else — external URLs,
-  non-Markdown files, and files outside that root — in your **OS default
-  browser**. Relative doc links like `docs/x.md` no longer 404. Only links in
-  rendered content are intercepted; breadcrumbs, the contents rail, and in-page
-  anchors are unaffected.
-- **MCP** — exactly 40 tools; the four authoring tools are `stage_branch`,
-  `stage_spec`, `stage_spec_pr`, and `push_staged_changes`.
-- **Docs** — rewritten [README](README.md) (User Manual + hub), a full
+Covers [#68](https://github.com/mavaali/tippani/pull/68),
+[#69](https://github.com/mavaali/tippani/pull/69),
+[#70](https://github.com/mavaali/tippani/pull/70),
+[#71](https://github.com/mavaali/tippani/pull/71), and
+[#72](https://github.com/mavaali/tippani/pull/72).
+
+### Added — write specs, not just review them ([#71](https://github.com/mavaali/tippani/pull/71))
+End-to-end **remote authoring with no working tree**: stage a branch, add or edit
+`.md` files, stage a PR (optionally linked to a Spec-review work item), and
+publish the whole set with one `push_staged_changes`. Clickstop 1 made a branch a
+first-class *review* surface but kept a single writer — the agent made every file
+change with its own tools. This closes that gap: the agent (or a person) can
+create and edit specs and open the PR **through Tippani itself**, with no clone
+and no half-finished commits scattered across the host.
+
+- **One publication boundary.** Replies, resolutions, file adds and edits, PR
+  intents, and draft→published promotions are all staged locally; a single
+  **Push to remote** crosses into Azure DevOps. A partial authoring session
+  leaves nothing on the remote, and a branch that moved underneath you is caught
+  before it overwrites newer work. Staged PR cards can be deleted before
+  publishing.
+- **Authoring tools** — `stage_branch` → `stage_spec` → `stage_spec_pr` →
+  `push_staged_changes`, with a shared staged-changes ticker refreshed from both
+  Branches and the Review queue.
+- **A personal Reading list** joins Specs, Review queue, Work items, and Branches
+  on the Discovery home.
+- **"Personal comments" are now "Annotations"** — renamed across the UI, the MCP
+  tools (`add_annotation`, `read_annotations`, `resolve_annotation`, …), and the
+  docs. Fittingly, *tippani* itself means "annotation".
+- **Links behave sensibly.** A link inside a rendered spec opens a Markdown file
+  under the current file's root folder **in Tippani**; everything else — external
+  URLs, non-Markdown files, files outside that root — opens in your OS browser.
+  Relative doc links like `docs/x.md` no longer 404. Only links in rendered
+  content are intercepted; breadcrumbs, the contents rail, and in-page anchors
+  are unaffected.
+- **Docs** — a rewritten [README](README.md) (User Manual + hub), a full
   [User Guide](docs/user-guide.md) with screenshots of every screen, and a
   complete [MCP & API Reference](docs/mcp-api.md).
-## Unreleased — Credibility + zero-setup demo
 
-Two fixes to what tippani claims about itself, plus a front door that needs no
-Azure DevOps account.
-
-### Fixed — Approve / Request Changes actually votes
-`POST /api/review` computed a vote and then threw it away: it never called Azure
-DevOps, always returned `{ok: true}`, and the UI toasted "Approved!" over a
-no-op. It now records the signed-in user's vote on the pull request via
-`createPullRequestReviewer`.
-
-- **Request Changes maps to -5** (waiting for author), not -10 (rejected). The
-  bottom bar is a routine review action; -10 is ADO's hard block.
-- **Unknown review types are rejected**, not silently voted. The old
-  `type === "approve" ? 10 : -5` turned any unrecognised string into a -5.
-- **Votes are never queued offline.** A stale vote synced later could approve a
-  PR whose content has since changed, so offline/disconnected/no-PR states
-  return a `409` with an actionable reason instead.
-- **The client trusts the server.** `submitReview()` now reports success only
-  when the response says the vote landed, surfaces the server's error text, and
-  disables the buttons while in flight.
-- Vote mapping and preconditions extracted to a pure `review-vote.js` with tests.
-
-### Added — `tippani --demo`
-A working demo portal already existed but shipped to nobody: it lived in
-`scripts/`, which the npm package excludes, and nothing referenced it.
-
-- `npx tippani --demo` opens the portal on a sample spec with sample comment
-  threads. No account, no credentials, no clone. Honours `--port` and `--headless`.
-- Moved `scripts/demo.js` to `src/demo.js` so it ships and bundles; exposed as
-  `startDemo()` and still runnable directly (`npm run demo`).
-- **Deduped ~85 lines** of design-system and helper code the demo had copied
-  from `index.js` (`cssVariables`, `escHtml`, `stripMarkdown`,
-  `changeTypeBadge`) — now imported from `html-util.js` so the demo cannot drift
-  from the real portal. The page templates remain duplicated; tracked in
+### Added — try it with no setup ([#72](https://github.com/mavaali/tippani/pull/72))
+- **`npx tippani --demo`** opens the portal on a sample spec with sample comment
+  threads: no account, no credentials, no clone. Honours `--port` and
+  `--headless`. A working demo portal already existed but shipped to nobody — it
+  lived in `scripts/`, which the npm package excludes, and nothing referenced it.
+  Moved to `src/demo.js` so it ships and bundles, exposed as `startDemo()`, and
+  still runnable directly (`npm run demo`).
+- **Deduped ~85 lines** of design-system and helper code the demo had copied from
+  `index.js` (`cssVariables`, `escHtml`, `stripMarkdown`, `changeTypeBadge`) —
+  now imported from `html-util.js`, so the demo cannot drift from the real
+  portal. The page templates remain duplicated; tracked in
   [#62](https://github.com/mavaali/tippani/issues/62).
-- The demo's stub `/api/review` matches the real route's contract, so the
-  buttons behave identically and say so.
 
-### Fixed — documentation drift
-- README advertised **19 MCP tools**; there are **40**. Documented the missing
-  groups: discovery, local review, and annotations.
-- README said the MCP shim "will refuse to start" without an access token. It
-  boots in local-only mode; a token is only needed for the host tools.
+### Added — Discovery: find work without leaving Tippani ([#69](https://github.com/mavaali/tippani/pull/69))
+Tippani had to be *handed* a PR id before it could do anything; listing PRs,
+searching work items, and locating specs all still happened in Azure DevOps.
+Discovery makes the portal where the flow begins, and lands as MCP tools so an
+agent can run the whole loop through Tippani alone — without a separate ADO MCP
+server in the picture.
 
-### Removed
-- Dead `getSpecFiles()` (defined, never called).
+- **Review queue** — pull requests scoped by **role** (specs I'm reviewing, specs
+  I'm authoring) rather than just my own active PRs. Cards open the PR **inside
+  Tippani**, re-driving the browse portal into PR-bound mode instead of bouncing
+  out to ADO. Served at the browse home and at `/prs`.
+- **Work-item search** — a WIQL query against ADO work items (`search_work_items`),
+  defaulting to Features from the last month for the current user (`@Me`), with
+  linked result IDs and a fixed-width results table.
+- **Spec search** — full-text search over the specs repo (`search_specs`) for
+  finding a spec by its content and opening it in a **read-only** Read view, with
+  review history (`get_file_commits`). Lists only `.md` files, the one type
+  Tippani renders.
+- **Faceted Discovery home** hosting all three panes, plus a **Branches** tab
+  (remote and local).
+- **CLI token fallback for `tippani-mcp`** (`--ado-token=<t>`).
 
-## Unreleased — Personal comments + local (ADO-less) review
+### Added — specs render their visuals ([#68](https://github.com/mavaali/tippani/pull/68))
+A spec full of broken image icons and raw diagram source is *worse* than opening
+the file in Azure DevOps, which renders both. This brings the portal to parity on
+the whole visual layer.
 
-File/branch-scoped **personal comments** on a draft spec (no PR), and a
-**local-clone review** path that reads branches/files straight from a git clone
-via server-side git. From branch `clickstop-1`.
+- **Embedded images render.** Relative `![](Images/foo.png)` references are
+  rewritten to a Tippani `/media` route that fetches the blob from ADO with the
+  server-side token and streams it with the right content-type. The browser can't
+  do this alone: the blobs sit in a private repo, an `<img>` GET can't attach an
+  `Authorization` header, and ADO's session cookies are `SameSite` so they aren't
+  sent from `localhost`. The proxy is limited to image content-types so it can't
+  be used as a general repo file-read proxy.
+- **Git-LFS-backed images resolve to real bytes.** `getItemContent` returns the
+  ~130-byte LFS pointer, not the PNG; `getImageBlob` passes `resolveLfs=true` so
+  ADO substitutes the real object. An `isLfsPointer()` guard makes the route
+  respond `502` rather than streaming pointer text mislabeled as an image.
+- **Mermaid diagrams render** — locally bundled (no CDN, works offline),
+  `securityLevel: "strict"`, theme-aware, re-rendering when the view or theme
+  changes. A diagram that fails to parse degrades to its raw code with a note
+  instead of blanking the section. ADO's native `:::mermaid` container syntax is
+  normalized server-side so **both** syntaxes render through one path.
+- **Hardening:** the image proxy neutralizes SVG-borne XSS, and `:::mermaid`
+  normalization is breakout-proof.
 
-### Review-response hardening (adversarial PR review)
-- **Durable comment store.** Writes are atomic (temp-file + `renameSync`) and
-  now **throw** on failure, so `create`/`edit`/`resolve`/`reply` return
-  `{ ok: false }` instead of a false success; a corrupt store is **quarantined**
-  (`*.corrupt-<ts>`) and surfaced rather than silently read as "zero comments"
-  and overwritten. Disk I/O extracted to `personal-comments-store.js` with tests.
-- **Stored-XSS fix.** Inline `<script>` data embeds go through a new
-  `jsonForScript` helper (escapes `<`, U+2028/9) so a comment (or spec/thread
-  text) containing `</script>…` can't break out of the script. Applied to the
-  personal-comments embed and its siblings across the reviewing/editor pages.
-- **Anchors survive edits.** Comments now carry a content-addressed anchor
-  (`blockHash` + heading path) re-resolved on every render: a hash match
-  re-points the line exactly when a block moves, a heading-path match tracks a
-  lightly-edited block (`moved`), and a deleted block is marked `stale` rather
-  than silently mispointing. Exposed to MCP (`anchorState`) and shown as a card
-  badge. Pure engine in `personal-comments.js` with tests.
-- **Local-git hardening.** `runGit` gets a 15s timeout (a wedged git can't hang
-  a request); base-branch resolution now includes `develop`/`trunk` (no
-  dead-end); the working-tree read is **symlink-safe** (realpath containment,
-  not a `..`-string check). Testable helpers in `local-git.js`.
-- **Single-write resolve.** `resolve`-with-note applies the reply + the resolved
-  flag in one load/save (was two cycles). Mutating MCP handlers echo the
-  resolved `{repo,branch,path}` so a stale ambient context is visible.
-- **DNS-rebind guard.** A Host allow-list (localhost/127.0.0.1/[::1]) rejects
-  rebind attempts on every request.
-- **Local reads gated to approved roots.** A caller-supplied `?local=`/MCP path
-  can no longer read arbitrary `.md` anywhere: local reads require a root the
-  user deliberately opened (Repo box / `openLocalRepo` / `--local-repo`),
-  persisted across sessions and realpath-matched.
-- **Comments keyed by repo identity.** Personal comments key on the clone's
-  origin URL (falling back to the realpath) instead of the raw absolute path, so
-  moving/renaming the clone no longer orphans notes; existing path-keyed notes
-  migrate lazily per file.
-- **Slim state polling.** `/api/v1/state` ships only the small seq/version
-  header by default; the 1.2s pollers fetch the heavy draft bodies with
-  `?full=1` only when the version bumps.
-- **CI.** `.github/workflows/ci.yml` runs the full suite on Node 20/22/24 for
-  every push/PR (the offline portal smokes stay dev-only — they need a cached
-  PR fixture).
-- **LLM-facing strings.** `refresh_spec` no longer claims "reloads from ADO" in
-  local mode; comment-tool grammar fixed.
-- **MCP boots ADO-less for local review.** The shim no longer `process.exit(1)`s
-  at startup when there's no Azure DevOps token — it starts in local-only mode
-  (local review works; ADO tools ask for a token if used). A token that IS
+### Added — review a branch or a local clone, with private annotations ([#70](https://github.com/mavaali/tippani/pull/70))
+A pull request is no longer the only unit of review. Point Tippani at a branch —
+or at a folder on disk — and read a spec before it's ever proposed.
+
+- **Local-clone review.** Server-side git reads branches and files straight from
+  a clone: an editable Repo box, clickable files, a mode badge, and a read-only
+  reviewing view. No PR, and no Azure DevOps connection at all. Reachable via
+  `--local-repo=<path>`, `TIPPANI_LOCAL_REPO`, or the Repo box.
+- **Private annotations** — personal, line-anchored notes on a draft spec, scoped
+  to (repo, branch, file) and stored on your machine. They carry a
+  **content-addressed anchor** (`blockHash` + heading path) re-resolved on every
+  render, so a note follows its block when the document is edited: a hash match
+  re-points exactly, a heading-path match tracks a lightly-edited block
+  (`moved`), and a deleted block is marked `stale` rather than silently
+  mispointing to the wrong line. Surfaced to MCP as `anchorState` and as a drift
+  badge on the card.
+- **MCP surface for both** — `open_branch`, `open_branch_file`, and the
+  annotation tools, which ensure a browse portal exists before posting.
+- **The MCP shim boots without a token.** It no longer exits at startup when
+  there's no Azure DevOps token — it starts in local-only mode, so local review
+  works and the host tools ask for a token only if used. A token that *is*
   supplied but is the wrong kind still fails fast, so a misbound account still
   surfaces on Test connection.
 
-### Two description claims corrected (apply on the PR)
-- The MCP server now boots **without** an ADO token for local review (it starts
-  in local-only mode); a token is only needed for the ADO tools.
-- The **address** step is out-of-band: `edit_spec` is PR-bound and there is no
-  branch-write tool, so this is the read-only half of the loop.
+### Fixed — Approve / Request Changes actually votes ([#72](https://github.com/mavaali/tippani/pull/72))
+`POST /api/review` computed a vote and then threw it away: it never called Azure
+DevOps, always returned `{ok: true}`, and the UI toasted "Approved!" over a
+no-op. It now records the signed-in user's vote via `createPullRequestReviewer`.
+
+- **Request Changes maps to -5** (waiting for author), not -10 (rejected). The
+  reviewing bar is a routine action; -10 is the hard block.
+- **Unknown review types are rejected**, not silently voted. The old
+  `type === "approve" ? 10 : -5` turned any unrecognised string into a -5.
+- **Votes are never queued offline.** A stale vote sent later could approve a PR
+  whose content has since changed, so offline / disconnected / no-PR states
+  return a `409` with an actionable reason instead.
+- **The client trusts the server.** `submitReview()` reports success only when
+  the response says the vote landed, surfaces the server's error text, and
+  disables the buttons while in flight.
+- Vote mapping and preconditions extracted to a pure `review-vote.js` with tests.
+
+### Security & robustness
+- **Durable annotation store.** Writes are atomic (temp-file + `renameSync`) and
+  **throw** on failure, so `create`/`edit`/`resolve`/`reply` return
+  `{ ok: false }` instead of a false success; a corrupt store is **quarantined**
+  (`*.corrupt-<ts>`) and surfaced rather than silently read as "zero comments"
+  and then overwritten. Disk I/O extracted to `personal-comments-store.js`.
+- **Stored-XSS fix.** Inline `<script>` data embeds go through a `jsonForScript`
+  helper (escapes `<`, U+2028/9) so a comment — or spec or thread text —
+  containing `</script>…` can't break out of the script element. Applied across
+  the reviewing and editor pages.
+- **SVG-XSS neutralized** in the image proxy; `:::mermaid` normalization is
+  breakout-proof.
+- **Local reads gated to approved roots.** A caller-supplied `?local=` or MCP
+  path can no longer read arbitrary `.md` anywhere on disk: local reads require a
+  root the user deliberately opened, persisted across sessions and
+  realpath-matched.
+- **Local-git hardening.** `runGit` gets a 15s timeout (a wedged git can't hang a
+  request); base-branch resolution includes `develop`/`trunk`; the working-tree
+  read is symlink-safe (realpath containment, not a `..`-string check).
+- **DNS-rebind guard.** A Host allow-list (localhost/127.0.0.1/`[::1]`) rejects
+  rebind attempts on every request.
+- Also from the #69 review: a one-way door closed, and the queue no longer
+  fails open.
+
+### Changed
+- **Annotations key on repo identity.** They key on the clone's origin URL
+  (falling back to the realpath) rather than the raw absolute path, so moving or
+  renaming a clone no longer orphans notes; existing path-keyed notes migrate
+  lazily per file.
+- **Single-write resolve.** Resolve-with-note applies the reply and the resolved
+  flag in one load/save (was two cycles). Mutating MCP handlers echo the resolved
+  `{repo, branch, path}` so a stale ambient context is visible.
+- **Slim state polling.** `/api/v1/state` ships only the small seq/version header
+  by default; the 1.2s pollers fetch heavy draft bodies with `?full=1` only when
+  the version bumps.
+- **LLM-facing strings.** `refresh_spec` no longer claims "reloads from ADO" in
+  local mode; comment-tool grammar fixed.
+
+### Documentation
+- The docs are rewritten wholesale in [#71](https://github.com/mavaali/tippani/pull/71)
+  (README as User Manual + hub, plus a User Guide and an MCP & API Reference).
+  Two factual corrections carried into that rewrite: the README advertised
+  **19 MCP tools** when there are **40** (the discovery, local-review, and
+  annotation groups were undocumented), and it claimed the MCP shim "will refuse
+  to start" without an access token — it boots in local-only mode, and a token is
+  needed only for the host tools.
+
+### Internal
+- **CI.** `.github/workflows/ci.yml` runs the full suite on Node 20/22/24 for
+  every push and PR. (The offline portal smokes stay dev-only — they need a
+  cached PR fixture.)
+- Extracted `html-util.js`, `ado-read.js`, `local-git.js`,
+  `personal-comments.js`, `personal-comments-store.js`, and `review-vote.js`
+  out of `index.js`, each with tests.
+- Removed dead `getSpecFiles()` (defined, never called).
 
 ## 1.6.0 (2026-07-16)
 
