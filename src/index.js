@@ -46,10 +46,9 @@ import { createCustomFiles } from "./custom-files.js";
 import { buildReadingList, isPinnedManual, manualRoot } from "./reading-list.js";
 import { fileReviewContext } from "./comment-key.js";
 import { isAllowedHost } from "./host-guard.js";
-import { buildPushChangeSet } from "./push-changeset.js";
 import { planStagedPushes } from "./staged-push-plan.js";
 import { adoCall } from "./ado-call.js";
-import { buildCreateBranchRef, resolveBaseBranch, normalizeBranchRef } from "./ado-refs.js";
+import { resolveBaseBranch, normalizeBranchRef } from "./ado-refs.js";
 import { resolveWriteTarget, draftKeyOf } from "./ado-target.js";
 import { selectAdoAuthSource } from "./ado-auth-source.js";
 import { makeRepoSession, createSessionTokens } from "./repo-session.js";
@@ -75,6 +74,7 @@ import { newComment as pcNew, addComment as pcAdd, updateComment as pcUpdate, re
 import { personalCommentsKey as pcStoreKey, loadPersonalComments as pcStoreLoad, savePersonalComments as pcStoreSave, deletePersonalComments as pcStoreDelete, migrateKey as pcStoreMigrate } from "./personal-comments-store.js";
 import { createStagedInventory, normFolder, parentFolder } from "./staged-inventory.js";
 import { createAdoReviewProvider } from "./ado-review-provider.js";
+import { createAdoRepoContentProvider } from "./ado-repo-content-provider.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -326,6 +326,7 @@ function getAdoConnection(pat) {
 // A WeakMap avoids rebuilding the adapter on every request without extending
 // the connection's lifetime.
 const _adoReviewProviders = new WeakMap();
+const _adoRepoContentProviders = new WeakMap();
 function adoReview(conn) {
   if (!conn) throw new Error("ADO review provider requires a connection");
   let provider = _adoReviewProviders.get(conn);
@@ -335,6 +336,15 @@ function adoReview(conn) {
       getProject: () => ADO_PROJECT,
     });
     _adoReviewProviders.set(conn, provider);
+  }
+  return provider;
+}
+function adoRepoContent(conn) {
+  if (!conn) throw new Error("ADO repo-content provider requires a connection");
+  let provider = _adoRepoContentProviders.get(conn);
+  if (!provider) {
+    provider = createAdoRepoContentProvider(conn);
+    _adoRepoContentProviders.set(conn, provider);
   }
   return provider;
 }
@@ -593,9 +603,7 @@ function viewedWarning(err) {
 // explicit repo/project so the authoring write path can target any repo without
 // leaning on the module globals.
 async function getBranchTip(conn, branchRef, repoId = ADO_REPO, project = ADO_PROJECT) {
-  return adoReview(conn).getBranchTip(branchRef, {
-    repo: repoId, project,
-  });
+  return adoRepoContent(conn).getBranchTip(repoId, project, branchRef);
 }
 
 // Commit an edited file to a branch via the ADO push API. expectedOldObjectId, when
@@ -6439,8 +6447,7 @@ async function resolveTarget({ org, project, repo } = {}) {
   const t = resolveWriteTarget({ org, project, repo });
   const conn = buildConnForOrg(t.org);
   if (!conn) { const e = new Error("no ADO connection for " + t.org); e.noConn = true; throw e; }
-  const gitApi = await conn.getGitApi();
-  const info = await adoCall(() => gitApi.getRepository(t.repo, t.project), { label: "getRepository" });
+  const info = await adoRepoContent(conn).resolveRepository(t.repo, t.project);
   return {
     conn, org: t.org, project: t.project, repo: t.repo,
     repoId: info?.id || t.repo,
@@ -6471,15 +6478,23 @@ async function pushRemoteSpec({ org, project, repo, branch, message, oldObjectId
   // captured a base object id when it was opened.
   const adds = staged.filter((d) => !d.baseObjectId).map((d) => ({ path: d.path, content: d.body }));
   const edits = staged.filter((d) => d.baseObjectId).map((d) => ({ path: d.path, content: d.body }));
-  const push = buildPushChangeSet({ adds, edits, message: message || "Update spec", branchRef, oldObjectId: currentTip });
-  let result;
+  let pushed;
   try {
-    const gitApi = await target.conn.getGitApi();
-    result = await adoCall(() => gitApi.createPush(push, target.repoId, target.project), { label: "createPush" });
+    pushed = await adoRepoContent(target.conn).pushFiles(
+      target.repoId,
+      target.project,
+      {
+        adds,
+        edits,
+        message: message || "Update spec",
+        branchRef,
+        oldObjectId: currentTip,
+      },
+    );
   } catch (e) {
     return { ok: false, status: 502, body: { ok: false, error: "push failed: " + (e?.message || e) } };
   }
-  const commitId = result?.commits?.[0]?.commitId || result?.refUpdates?.[0]?.newObjectId || null;
+  const commitId = pushed.commitId;
   for (const d of staged) _remoteSpecDrafts.delete(draftKeyOf({ project: target.project, repo: target.repo, branch, path: d.path }));
   return { ok: true, status: 200, body: { ok: true, repo: target.repo, project: target.project, commitId, pushedFiles: staged.map((d) => d.path) } };
 }
@@ -6521,7 +6536,7 @@ async function mcpCreateBranch({ org, project, repo, branch, base } = {}) {
   try { target = await resolveTarget({ org, project, repo }); }
   catch (e) { return { ok: false, error: e.message }; }
   const branchRef = normalizeBranchRef(branch);
-  const gitApi = await target.conn.getGitApi();
+  const repoContent = adoRepoContent(target.conn);
   // Already exists? Adopt it (idempotent), don't fail or clobber.
   try {
     const tip = await getBranchTip(target.conn, branchRef, target.repoId, target.project);
@@ -6533,7 +6548,9 @@ async function mcpCreateBranch({ org, project, repo, branch, base } = {}) {
   // Resolve the base branch + its tip.
   let available = [];
   try {
-    const refs = await adoCall(() => gitApi.getRefs(target.repoId, target.project, "heads/"), { label: "getRefs" });
+    const refs = await repoContent.listBranches(
+      target.repoId, target.project, { filter: "heads/" },
+    );
     available = (refs || []).map((r) => String(r.name).replace("refs/heads/", ""));
   } catch (e) { return { ok: false, error: "failed to list branches: " + (e?.message || e) }; }
   const baseName = resolveBaseBranch(available, base);
@@ -6541,14 +6558,26 @@ async function mcpCreateBranch({ org, project, repo, branch, base } = {}) {
   let baseTip;
   try { baseTip = await getBranchTip(target.conn, normalizeBranchRef(baseName), target.repoId, target.project); }
   catch (e) { return { ok: false, error: "failed to read base branch tip: " + (e?.message || e) }; }
-  const refUpdate = buildCreateBranchRef({ branch, baseTip });
   let result;
-  try { result = await adoCall(() => gitApi.updateRefs([refUpdate], target.repoId, target.project), { label: "updateRefs" }); }
-  catch (e) { return { ok: false, error: "create branch failed: " + (e?.message || e) }; }
-  const upd = Array.isArray(result) ? result[0] : result;
-  if (upd && upd.success === false) return { ok: false, error: "create branch rejected: " + (upd.updateStatus || "unknown") };
+  try {
+    result = await repoContent.createBranch(
+      target.repoId, target.project, { branch, baseTip },
+    );
+  }
+  catch (e) {
+    const message = e?.message || String(e);
+    // Preserve the pre-provider user-facing distinction: ADO explicitly
+    // rejecting the ref update was "create branch rejected: <status>";
+    // transport/other failures were "create branch failed: <error>".
+    return {
+      ok: false,
+      error: message.startsWith("create branch rejected:")
+        ? message
+        : "create branch failed: " + message,
+    };
+  }
   openAuthoringSession({ id: branchRef, repo: target.repo, branch });
-  return { ok: true, org: target.org, project: target.project, repo: target.repo, branch, branchRef, base: baseName, created: true, objectId: baseTip };
+  return { ok: true, org: target.org, project: target.project, repo: target.repo, branch, branchRef: result.branchRef, base: baseName, created: true, objectId: result.objectId };
 }
 
 // Clickstop 2: staged branches, files, folders, PR intents, and PR-publish
@@ -6619,16 +6648,19 @@ async function pushStagedBranches() {
     let commitId = null;
     if (group.adds.length || group.edits.length) {
       try {
-        const push = buildPushChangeSet({
-          adds: group.adds,
-          edits: group.edits,
-          message: `Tippani: publish ${group.branch}`,
-          branchRef,
-          oldObjectId: currentTip,
-        });
-        const gitApi = await target.conn.getGitApi();
-        const pushResult = await adoCall(() => gitApi.createPush(push, target.repoId, target.project), { label: "push staged content" });
-        commitId = pushResult?.commits?.[0]?.commitId || pushResult?.refUpdates?.[0]?.newObjectId || null;
+        const pushed = await adoRepoContent(target.conn).pushFiles(
+          target.repoId,
+          target.project,
+          {
+            adds: group.adds,
+            edits: group.edits,
+            message: `Tippani: publish ${group.branch}`,
+            branchRef,
+            oldObjectId: currentTip,
+            label: "push staged content",
+          },
+        );
+        commitId = pushed.commitId;
       } catch (e) {
         results.push({ project: group.project, repo: group.repo, branch: group.branch, ok: false, error: "content push failed: " + (e?.message || e) });
         continue;
@@ -6685,12 +6717,16 @@ async function listBranchFolders({ project, repo, branch, scope } = {}) {
   const version = String(eff).replace(/^refs\/heads\//, "");
   const out = new Map();
   let adoError = null;
-  let gitApi = null;
+  let repoContent = null;
   if (!_isOffline && _conn && repo) {
     try {
-      gitApi = await _conn.getGitApi();
+      repoContent = adoRepoContent(_conn);
       const scopePath = scopeN ? "/" + scopeN : "/";
-      const items = await gitApi.getItems(repo, proj, scopePath, 1, false, false, false, false, { version, versionType: 0 });
+      const items = await repoContent.listItems(
+        repo,
+        proj,
+        { scopePath, branch: version, recursionLevel: 1 },
+      );
       for (const it of items || []) {
         if (!it || !it.isFolder || !it.path) continue;
         const pn = normFolder(it.path);
@@ -6709,11 +6745,19 @@ async function listBranchFolders({ project, repo, branch, scope } = {}) {
   const folders = [...out.values()];
   // Mark parents: a folder shows an expander if it has ADO subfolders or created subfolders.
   for (const folder of folders) { if (_inventory._folderHasChild(repo, branch, folder.path)) folder.hasChildren = true; }
-  if (gitApi) {
+  if (repoContent) {
     await Promise.all(folders.map(async (folder) => {
       if (folder.hasChildren || !folder._ado) return;
       try {
-        const sub = await gitApi.getItems(repo, proj, "/" + folder.path, 1, false, false, false, false, { version, versionType: 0 });
+        const sub = await repoContent.listItems(
+          repo,
+          proj,
+          {
+            scopePath: "/" + folder.path,
+            branch: version,
+            recursionLevel: 1,
+          },
+        );
         folder.hasChildren = (sub || []).some((it) => it && it.isFolder && parentFolder(normFolder(it.path)) === folder.path);
       } catch (e) { /* ignore probe failure */ }
     }));
@@ -7869,7 +7913,7 @@ async function main() {
     const list = Array.isArray(files) ? files.slice(0, 25) : [];
     if (!list.length) return { files: [], count: 0 };
     const perFile = Number.isFinite(top) && top > 0 ? Math.min(Math.floor(top), 50) : 10;
-    const gitApi = await _conn.getGitApi();
+    const repoContent = adoRepoContent(_conn);
     const out = new Array(list.length);
     const one = async (f) => {
       const repoId = String((f && (f.repo || f.repoId)) || "").trim();
@@ -7877,10 +7921,8 @@ async function main() {
       const branch = (String((f && f.branch) || "main").trim().replace(/^refs\/heads\//, "")) || "main";
       if (!repoId || !filePath) return { repo: repoId, path: filePath, branch, error: "missing repo or path" };
       try {
-        const commits = await gitApi.getCommits(
-          repoId,
-          { itemPath: filePath, itemVersion: { version: branch, versionType: 0 } },
-          undefined, 0, perFile
+        const commits = await repoContent.getFileCommits(
+          repoId, filePath, branch, perFile,
         );
         return {
           repo: repoId,
@@ -7921,10 +7963,10 @@ async function main() {
   async function listMyBranches({ project } = {}) {
     if (_isOffline || !_conn) return { branches: [], error: "offline" };
     const proj = (project && String(project).trim()) || ADO_PROJECT;
-    const gitApi = await _conn.getGitApi();
+    const repoContent = adoRepoContent(_conn);
     let repos;
     try {
-      repos = await gitApi.getRepositories(proj);
+      repos = await repoContent.listRepositories(proj);
     } catch (e) {
       const error = friendlyAdoError(e, "List repositories");
       console.error("List repositories failed:", error);
@@ -7939,8 +7981,9 @@ async function main() {
         if (i >= list.length) break;
         const repo = list[i];
         try {
-          // getRefs(repoId, project, filter, includeLinks, includeStatuses, includeMyBranches)
-          const refs = await gitApi.getRefs(repo.id, proj, undefined, false, false, true);
+          const refs = await repoContent.listBranches(
+            repo.id, proj, { includeMyBranches: true },
+          );
           for (const row of branchesForRepo(refs, repo, ADO_ORG)) all.push(row);
         } catch (e) {
           console.error(`getRefs failed for ${repo.name}:`, friendlyAdoError(e, "List branches"));
@@ -7959,7 +8002,9 @@ async function main() {
         if (i >= list.length) break;
         const repo = list[i];
         try {
-          const refs = await gitApi.getRefs(repo.id, proj, "heads/main", false, false, false);
+          const refs = await repoContent.listBranches(
+            repo.id, proj, { filter: "heads/main" },
+          );
           const main = (refs || []).find((ref) => ref && ref.name === "refs/heads/main");
           const row = summarizeBranchRef(main, repo, ADO_ORG);
           if (row) mains.push(row);
@@ -8264,7 +8309,7 @@ async function main() {
     const repoRef = String(repo || repoName || "").trim();
     if (!repoRef || !b || !filePath) return { ok: false, error: "repo, branch and path required." };
     let info;
-    try { const gitApi = await _conn.getGitApi(); info = await gitApi.getRepository(repoRef, proj); }
+    try { info = await adoRepoContent(_conn).resolveRepository(repoRef, proj); }
     catch (e) { return { ok: false, error: "Could not find that repository." }; }
     if (!info || !info.id) return { ok: false, error: "Could not find that repository." };
     const back = `/branch?project=${encodeURIComponent(proj)}&repo=${encodeURIComponent(info.id)}&repoName=${encodeURIComponent(info.name)}&ref=${encodeURIComponent(b)}`;
@@ -8306,11 +8351,11 @@ async function main() {
     const version = String(ref || "").replace(/^refs\/heads\//, "").trim();
     if (!version) return { ok: false, error: "Missing branch." };
     try {
-      const gitApi = await _conn.getGitApi();
+      const repoContent = adoRepoContent(_conn);
       // Resolve the repo (accepts id or name) to its canonical id/name + default.
       let repoInfo;
       try {
-        repoInfo = await gitApi.getRepository(repoRef, proj);
+        repoInfo = await repoContent.resolveRepository(repoRef, proj);
       } catch (e) {
         console.error(`getRepository failed for ${repoRef}:`, friendlyAdoError(e, "Resolve repo"));
         return { ok: false, error: "Could not find that repository." };
@@ -8325,14 +8370,10 @@ async function main() {
       }
       // diffCommonCommit=true -> compare merge-base(base, branch)..branch, so the
       // result is exactly what the branch changed since it forked.
-      const diffs = await gitApi.getCommitDiffs(
+      const diffs = await repoContent.diffBranches(
         repoId,
         proj,
-        true,
-        2000,
-        0,
-        { version: base, versionType: 0 },
-        { version, versionType: 0 }
+        { base, target: version, top: 2000 },
       );
       const paths = mdPathsFromChanges(diffs && diffs.changes);
       return { ok: true, project: proj, ref: version, repoId, repoName, base, paths, count: paths.length };
