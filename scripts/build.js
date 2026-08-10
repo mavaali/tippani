@@ -16,6 +16,47 @@ function run(cmd, opts = {}) {
   execSync(cmd, { cwd: ROOT, stdio: "inherit", ...opts });
 }
 
+// The SEA binary is a literal copy of a `node` executable with the app blob
+// injected. `which node` on a dev machine can resolve to a Homebrew/nvm build
+// that's dynamically linked against Homebrew dylibs (e.g.
+// /opt/homebrew/opt/icu4c@77/...), which makes the "standalone" binary fail
+// to launch with a dyld error on any machine without that exact Homebrew
+// setup. We pin to, download, and verify an official nodejs.org build
+// instead — those only link against macOS system frameworks.
+const SEA_NODE_VERSION = "v24.19.0";
+
+function assertNoThirdPartyLinks(binPath) {
+  const out = execSync(`otool -L "${binPath}"`, { encoding: "utf8" });
+  const bad = out
+    .split("\n")
+    .slice(1)
+    .map((l) => l.trim().split(" ")[0])
+    .filter(Boolean)
+    .filter((p) => !p.startsWith("/usr/lib/") && !p.startsWith("/System/"));
+  if (bad.length) {
+    throw new Error(
+      `node binary links against non-system libraries, so the SEA build would not be standalone:\n  ${bad.join("\n  ")}`
+    );
+  }
+}
+
+function resolveOfficialNode() {
+  const arch = process.arch === "arm64" ? "arm64" : "x64";
+  const dirName = `node-${SEA_NODE_VERSION}-darwin-${arch}`;
+  const cacheDir = path.join(process.env.HOME || "/tmp", ".cache", "tippani-build");
+  const nodeBin = path.join(cacheDir, dirName, "bin", "node");
+  if (!fs.existsSync(nodeBin)) {
+    fs.mkdirSync(cacheDir, { recursive: true });
+    const tarball = `${dirName}.tar.gz`;
+    console.log(`   Downloading official Node.js build: ${SEA_NODE_VERSION} (${arch})...`);
+    run(`curl -fsSL -o ${tarball} https://nodejs.org/dist/${SEA_NODE_VERSION}/${tarball}`, { cwd: cacheDir });
+    run(`tar -xzf ${tarball}`, { cwd: cacheDir });
+    fs.rmSync(path.join(cacheDir, tarball));
+  }
+  assertNoThirdPartyLinks(nodeBin);
+  return nodeBin;
+}
+
 console.log("\n=== tippani — Build ===\n");
 
 // Clean
@@ -55,8 +96,12 @@ if (process.platform === "darwin") {
   const seaConfig = { main: "dist/cli.cjs", output: "dist/sea-prep.blob", disableExperimentalSEAWarning: true };
   fs.writeFileSync(path.join(DIST, "sea-config.json"), JSON.stringify(seaConfig));
   try {
-    run("node --experimental-sea-config dist/sea-config.json");
-    run(`cp $(which node) dist/bin/tippani`);
+    // The SEA blob format is tied to the exact Node build that generates it,
+    // so it must be produced by the same official binary we inject it into
+    // — not by whatever `node` happens to be on PATH.
+    const officialNode = resolveOfficialNode();
+    run(`"${officialNode}" --experimental-sea-config dist/sea-config.json`);
+    fs.copyFileSync(officialNode, path.join(DIST, "bin", "tippani"));
     run("chmod 755 dist/bin/tippani");
     run("codesign --remove-signature dist/bin/tippani");
     run(
