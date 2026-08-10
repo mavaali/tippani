@@ -1,6 +1,6 @@
 # Changelog
 
-## 1.7.0 (unreleased)
+## 1.7.0 (2026-08-09)
 
 The release that makes Tippani a place you can *start* — and now *write* — not
 just a viewer you hand a PR id to. Discovery turns the portal into a home screen;
