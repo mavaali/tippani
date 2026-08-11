@@ -381,6 +381,11 @@ try {
     try { await failingNavTools.open_thread.handler({ threadId: 201 }); }
     catch (e) { surfaced = e === navFailure; }
     check("open_thread: surfaces navigation failure instead of reporting success", surfaced);
+    // Discovery tools: the fetched data is the PRIMARY result, the browser
+    // steer a courtesy — a failed steer must not discard a successful query.
+    const prsDespiteNav = await failingNavTools.list_prs.handler({});
+    check("list_prs: returns data despite navigation failure", Array.isArray(prsDespiteNav.prs) && prsDespiteNav.prs.length === 1);
+    check("list_prs: reports the failed steer as navError", typeof prsDespiteNav.navError === "string" && prsDespiteNav.navError.includes("navigation unavailable"));
   }
 
   // --- separate-tabs mode: nav tools open a fresh browser tab instead ---
@@ -404,7 +409,7 @@ try {
   {
     let stopCalls = 0;
     const closeSession = { stop: () => { stopCalls++; } };
-    // http whose nav POST fails fast → browserNudged false, no 1.4s wait.
+    // http whose nav POST fails fast → browserNudged false, no nudge wait.
     const failHttp = createHttpClient({ baseUrl: BASE, token: TOKEN, clientName: "mcp-test", fetch: async () => { throw new Error("no portal"); } });
     const closeTools = Object.fromEntries(buildTools(failHttp, closeSession).map((t) => [t.name, t]));
     const r = await closeTools.close_tippani.handler({});

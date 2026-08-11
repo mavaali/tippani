@@ -4245,6 +4245,9 @@ body.sidebar-mode-comments .spec .rh-marker { display: none !important; }
    reply + reply box off-screen — older comments scroll internally; the latest
    comment stays visible. Scrollbar only appears when the list exceeds the cap. */
 .thread-comments { max-height: 42vh; overflow-y: auto; overflow-x: hidden; resize: vertical; }
+/* Dragging the resize handle writes an inline height — once the user has
+   resized, lift the 42vh cap so the list can GROW past it, not only shrink. */
+.thread-comments[style*="height"] { max-height: none; }
 .comment-thread:hover { box-shadow: 0 4px 16px rgba(0,0,0,0.08); }
 .thread-active { border-left: 3px solid var(--cp-accent); }
 .thread-resolved { border-left: 3px solid var(--cp-success); opacity: 0.7; }
@@ -6530,8 +6533,11 @@ function markThreadResolvedInPlace(threadId) {
   if (btn) { btn.disabled = true; btn.textContent = '\u2713 Resolved'; }
   const td = THREADS_DATA.find((t) => Number(t.id) === Number(threadId));
   if (td) td.resolved = true;
-  const bubble = document.querySelector('.inline-bubble[data-thread-id="' + threadId + '"]');
-  if (bubble) { bubble.classList.remove('inline-bubble-active'); bubble.classList.add('inline-bubble-resolved'); }
+  // ALL matching bubbles: the initial placement lives in #spec-content and a
+  // Proposed-view re-placement in #spec-current — the visible one may be either.
+  document.querySelectorAll('.inline-bubble[data-thread-id="' + threadId + '"]').forEach((bubble) => {
+    bubble.classList.remove('inline-bubble-active'); bubble.classList.add('inline-bubble-resolved');
+  });
 }
 
 async function submitReview(type) {

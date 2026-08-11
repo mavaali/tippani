@@ -61,5 +61,33 @@ const expiringSoon = (t, at) => at >= NOW + 4 * 60 * 1000; // "expires within ~5
   ok("same token: apply not called", applied === null);
 }
 
+// Failure cooldown: a failed acquisition reports failedAt, and while the
+// cooldown holds the CLI is NOT probed again (this gate runs before every tool
+// call — without the cooldown a signed-out CLI would stall every call).
+{
+  let acquires = 0;
+  const failing = { selfAcquired: true, currentToken: "old", isExpiring: expiringSoon, acquire: async () => { acquires++; return ""; }, apply: async () => {} };
+
+  const r1 = await maybeRefreshToken({ ...failing, nowMs: NOW });
+  eq("failed acquire: reports failedAt", r1.failedAt, NOW);
+
+  const r2 = await maybeRefreshToken({ ...failing, nowMs: NOW + 60 * 1000, lastFailedAt: r1.failedAt });
+  eq("within cooldown: reason", r2.reason, "cooldown");
+  eq("within cooldown: acquire not re-run", acquires, 1);
+
+  const r3 = await maybeRefreshToken({ ...failing, nowMs: NOW + 6 * 60 * 1000, lastFailedAt: r1.failedAt });
+  eq("after cooldown: acquire re-runs", acquires, 2);
+  eq("after cooldown: still failing reports fresh failedAt", r3.failedAt, NOW + 6 * 60 * 1000);
+
+  // A successful re-mint after a prior failure still applies once cooldown passes.
+  let applied = null;
+  const r4 = await maybeRefreshToken({
+    ...failing, nowMs: NOW + 12 * 60 * 1000, lastFailedAt: r3.failedAt,
+    acquire: async () => "fresh", apply: async (t) => { applied = t; },
+  });
+  eq("recovery after cooldown: refreshed", r4.refreshed, true);
+  eq("recovery after cooldown: applied", applied, "fresh");
+}
+
 console.log(`token-refresh: ${pass} passed, ${fail} failed`);
 if (fail) process.exit(1);

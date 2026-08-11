@@ -11,6 +11,12 @@
 // Pure and dependency-injected so it is unit-testable without a portal or CLI:
 // the caller supplies isExpiring (usually isExpiredJwt with an expiry skew),
 // acquire (re-run the CLI fallback), and apply (persist + push the new token).
+//
+// A failed acquisition is COOLED DOWN via lastFailedAt: the CLI fallback runs
+// external commands with multi-second timeouts, and this gate sits in front of
+// EVERY tool call — without a cooldown, an expired token plus a signed-out CLI
+// (e.g. `az login` lapsed) would stall every call, including purely local ones,
+// forever. Callers persist the returned failedAt and pass it back.
 
 export async function maybeRefreshToken({
   selfAcquired,
@@ -20,12 +26,19 @@ export async function maybeRefreshToken({
   isExpiring,
   acquire,
   apply,
+  lastFailedAt = 0,
+  failureCooldownMs = 5 * 60 * 1000,
 }) {
   if (!selfAcquired || !currentToken) return { refreshed: false, reason: "not-self-acquired" };
   if (!isExpiring(currentToken, nowMs + skewMs)) return { refreshed: false, reason: "still-valid" };
+  if (lastFailedAt && nowMs - lastFailedAt < failureCooldownMs) {
+    return { refreshed: false, reason: "cooldown" };
+  }
 
   const fresh = await acquire();
-  if (!fresh || fresh === currentToken) return { refreshed: false, reason: "no-new-token" };
+  if (!fresh || fresh === currentToken) {
+    return { refreshed: false, reason: "no-new-token", failedAt: nowMs };
+  }
 
   await apply(fresh);
   return { refreshed: true, token: fresh };

@@ -97,12 +97,16 @@ const tools = buildTools(http, session);
 
 // Re-mint a SELF-ACQUIRED bearer when it is near expiry, before a tool runs.
 // A host-injected token is left alone (the host owns its refresh). Best-effort:
-// a failure here never blocks the tool call.
+// a failure here never blocks the tool call. A failed re-mint is cooled down
+// (maybeRefreshToken's lastFailedAt) so an expired token plus a signed-out CLI
+// doesn't re-run multi-second CLI probes before every tool call.
+let _acquireFailedAt = 0;
 async function ensureFreshAdoToken() {
   try {
-    await maybeRefreshToken({
+    const r = await maybeRefreshToken({
       selfAcquired: _selfAcquired,
       currentToken: process.env.TIPPANI_ADO_TOKEN,
+      lastFailedAt: _acquireFailedAt,
       isExpiring: (t, at) => isExpiredJwt(t, at),
       acquire: () => acquireAdoTokenFromCli({ audience: process.env.TIPPANI_ADO_AUDIENCE }),
       apply: async (t) => {
@@ -112,6 +116,8 @@ async function ensureFreshAdoToken() {
         try { if (session.getToken()) await http.post("/api/v1/ado-token", { token: t }); } catch {}
       },
     });
+    if (r && r.failedAt) _acquireFailedAt = r.failedAt;
+    else if (r && r.refreshed) _acquireFailedAt = 0;
   } catch { /* best-effort */ }
 }
 

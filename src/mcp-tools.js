@@ -70,6 +70,16 @@ export function buildTools(http, session) {
       await http.post("/api/v1/nav", { path });
     }
   }
+  // Best-effort variant for tools whose PRIMARY result is fetched data and the
+  // browser steer is a courtesy (list_prs, search_specs, search_work_items): a
+  // failed steer must not discard the successfully-fetched result as a tool
+  // error. Returns {} on success or { navError } to merge into the result.
+  // Tools whose purpose IS navigation (open_thread, open_file, show_feedback,
+  // set_view) keep the strict navigate() so a failed move is reported as one.
+  async function navigateBestEffort(path) {
+    try { await navigate(path); return {}; }
+    catch (e) { return { navError: String(e?.message || e) }; }
+  }
   // POST that first keeps the current provider portal live, self-healing a
   // dropped GitHub review instead of silently switching mutations to ADO.
   async function ensuredPost(path, body) {
@@ -429,8 +439,8 @@ export function buildTools(http, session) {
         if (target) qs.set("target", target);
         if (typeof top === "number") qs.set("top", String(top));
         const data = await http.get("/api/v1/prs" + (qs.toString() ? "?" + qs.toString() : ""));
-        await navigate("/discovery");
-        return data;
+        const nav = await navigateBestEffort("/discovery");
+        return { ...data, ...nav };
       },
     },
     {
@@ -457,8 +467,8 @@ export function buildTools(http, session) {
         const qs = new URLSearchParams({ tab: "workitems" });
         if (typeof wiql === "string") qs.set("wiql", wiql);
         if (project) qs.set("project", project);
-        await navigate("/discovery?" + qs.toString());
-        return data;
+        const nav = await navigateBestEffort("/discovery?" + qs.toString());
+        return { ...data, ...nav };
       },
     },
     {
@@ -492,8 +502,8 @@ export function buildTools(http, session) {
         const qs = new URLSearchParams({ tab: "specs" });
         if (typeof query === "string") qs.set("q", query);
         if (project) qs.set("project", project);
-        await navigate("/discovery?" + qs.toString());
-        return data;
+        const nav = await navigateBestEffort("/discovery?" + qs.toString());
+        return { ...data, ...nav };
       },
     },
     {
@@ -924,7 +934,9 @@ export function buildTools(http, session) {
         try {
           await http.post("/api/v1/nav", { path: "/closed" });
           browserNudged = true;
-          await new Promise((r) => setTimeout(r, 1400));
+          // Wait at least one full NAV_WATCHER poll period (1500ms) so the tab
+          // is guaranteed a poll before the portal dies under it.
+          await new Promise((r) => setTimeout(r, 1700));
         } catch {}
         // Tear down every portal this shim owns (graceful: kills the background
         // process and removes its registry entry).

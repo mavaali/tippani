@@ -8,6 +8,12 @@ import GithubSlugger from "github-slugger";
 // A prior hand-rolled slug (`replace(/[^\w]+/g, "-")`) collapsed punctuation runs
 // differently, so any heading with `/`, `,`, arrows, etc. produced a TOC link
 // that pointed at no heading.
+//
+// Known parity gaps (line-based scan, inherited from the prior implementation):
+// a `#` line inside a fenced code block is treated as a heading (phantom TOC
+// entry that also consumes a slugger slot, which can shift duplicate suffixes),
+// and a heading containing link syntax (`## [Title](url)`) slugs the raw text
+// including the URL, while rehype-slug slugs only the rendered text.
 export function buildToc(content) {
   const slugger = new GithubSlugger();
   const toc = [];
