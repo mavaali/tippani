@@ -99,7 +99,7 @@ registerControlApi(app, {
   // Clickstop 2: open_local_file forwards here.
   mcpOpenFile: async ({ path: p } = {}) =>
     p === "/ok/a.md"
-      ? { ok: true, opened: "/open-file-view?path=" + p, realpath: p }
+      ? { ok: true, opened: "/open-file-view?path=" + p, realpath: p, repo: "file:" + p, branch: "", path: p }
       : { ok: false, reason: "outside-root", error: "outside every approved folder" },
   // Reading list (custom-files) fakes.
   customFilesList: () => [],
@@ -248,6 +248,7 @@ try {
     const before = browsePortalCalls.length;
     const r = await byName.open_local_file.handler({ path: "/ok/a.md" });
     check("open_local_file: valid path -> ok + realpath", r.ok === true && r.realpath === "/ok/a.md");
+    check("open_local_file: returns file: annotation addressing", r.repo === "file:/ok/a.md" && r.branch === "" && r.path === "/ok/a.md");
     check("open_local_file: ensured a browse portal", browsePortalCalls.length === before + 1);
     let rejected = false, rejStatus = 0;
     try { await byName.open_local_file.handler({ path: "/etc/passwd.md" }); }
@@ -362,9 +363,24 @@ try {
 
   // --- open_thread (single-tab default) ---
   {
-    const r = await byName.open_thread.handler({ threadId: 14974588 });
-    check("open_thread: steers tab to /goto/thread url", r.ok === true && focus.get().navUrl === "/goto/thread/14974588");
-    check("open_thread: single-tab does NOT open a new browser tab", !openUrlCalls.includes("/goto/thread/14974588"));
+    const r = await byName.open_thread.handler({ threadId: 201 });
+    check("open_thread: returns the selected thread content", r.thread.id === 201 && r.thread.comments[0].content === "Add metric");
+    check("open_thread: steers tab to /goto/thread url", r.ok === true && r.opened === "/goto/thread/201" && focus.get().navUrl === "/goto/thread/201");
+    check("open_thread: single-tab does NOT open a new browser tab", !openUrlCalls.includes("/goto/thread/201"));
+  }
+  {
+    const navFailure = new Error("navigation unavailable");
+    const failingNavHttp = {
+      ...http,
+      post: (requestPath, body) => requestPath === "/api/v1/nav"
+        ? Promise.reject(navFailure)
+        : http.post(requestPath, body),
+    };
+    const failingNavTools = Object.fromEntries(buildTools(failingNavHttp, stubSession).map((t) => [t.name, t]));
+    let surfaced = false;
+    try { await failingNavTools.open_thread.handler({ threadId: 201 }); }
+    catch (e) { surfaced = e === navFailure; }
+    check("open_thread: surfaces navigation failure instead of reporting success", surfaced);
   }
 
   // --- separate-tabs mode: nav tools open a fresh browser tab instead ---
@@ -376,10 +392,10 @@ try {
       separateTabs: true,
     };
     const tabTools = Object.fromEntries(buildTools(http, tabSession).map((t) => [t.name, t]));
-    await tabTools.open_thread.handler({ threadId: 42 });
+    const openedThread = await tabTools.open_thread.handler({ threadId: 202 });
     await tabTools.open_file.handler({ fileIndex: 1 });
     await tabTools.show_feedback.handler({});
-    check("separate-tabs: open_thread opens a new tab", tabUrlCalls.includes("/goto/thread/42"));
+    check("separate-tabs: open_thread returns content and opens a new tab", openedThread.thread.id === 202 && tabUrlCalls.includes("/goto/thread/202"));
     check("separate-tabs: open_file opens a new tab", tabUrlCalls.includes("/file/1"));
     check("separate-tabs: show_feedback opens a new tab", tabUrlCalls.includes("/feedback"));
   }

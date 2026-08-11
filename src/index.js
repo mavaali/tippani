@@ -41,7 +41,7 @@ import { reattachFrontmatter } from "./frontmatter.js";
 import { sortThreadsByLine } from "./thread-order.js";
 import { identityFromAdoToken, isExpiredJwt } from "./ado-token-check.js";
 import { buildPrCriteria, summarizePr, mergeRolePrs, prStatusLabel } from "./pr-criteria.js";
-import { navSkipsBarePathClobber, navShouldNavigate, navTarget } from "./nav-guard.js";
+import { navCursor, navSkipsBarePathClobber, navShouldNavigate, navTarget } from "./nav-guard.js";
 import { createApprovedRoots } from "./approved-roots.js";
 import { classifyOpenFilePath, classifyAddFile } from "./open-file-path.js";
 import { resolveLinkAction } from "./open-external.js";
@@ -943,6 +943,7 @@ function buildSourceMap(content) {
 // fetch to /api/v1/state is auth-exempt like the other in-page polls.
 const NAV_WATCHER = `<script>
 (function(){
+  ${navCursor.toString()}
   ${navSkipsBarePathClobber.toString()}
   ${navTarget.toString()}
   ${navShouldNavigate.toString()}
@@ -952,9 +953,17 @@ const NAV_WATCHER = `<script>
       if (!r.ok) return;
       const s = await r.json();
       if (!s || !s.navUrl || !Number.isFinite(s.navSeq)) return;
-      var last = 0;
-      try { last = Number(sessionStorage.getItem('tippaniNavSeq')) || 0; } catch (e) {}
-      if (s.navSeq <= last) return;
+      var storedEpoch = '', storedSeq = 0;
+      try {
+        storedEpoch = sessionStorage.getItem('tippaniNavEpoch') || '';
+        storedSeq = Number(sessionStorage.getItem('tippaniNavSeq')) || 0;
+      } catch (e) {}
+      var cursor = navCursor(s.navEpoch, s.navSeq, storedEpoch, storedSeq);
+      try {
+        if (cursor.epoch) sessionStorage.setItem('tippaniNavEpoch', cursor.epoch);
+        if (cursor.lastSeq !== storedSeq) sessionStorage.setItem('tippaniNavSeq', String(cursor.lastSeq));
+      } catch (e) {}
+      if (!cursor.shouldApply) return;
       try { sessionStorage.setItem('tippaniNavSeq', String(s.navSeq)); } catch (e) {}
       // Same-origin-only + don't clobber a deliberate same-path query deep-link
       // (e.g. ?edit=1) — both handled by navShouldNavigate. Navigate to the
@@ -8858,7 +8867,10 @@ async function main() {
     _focus.setPcContext({ repo: ctx.repo, branch: ctx.branch, path: ctx.path });
     _focus.setPcSelected(null);
     _focus.setNav(p);
-    return { ok: true, opened: p, realpath: real };
+    // Return the annotation addressing so the caller can target this file
+    // explicitly on the annotation tools (a local file is keyed
+    // repo="file:<realpath>", branch="").
+    return { ok: true, opened: p, realpath: real, repo: ctx.repo, branch: ctx.branch, path: ctx.path };
   }
 
   // Discovery branch page: list the markdown files that are UNIQUE to a branch —

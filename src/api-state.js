@@ -16,7 +16,9 @@
 // (per the Phase 1 design decision — "ephemeral, server memory only"), and
 // the LLM re-stages in milliseconds if it loses its slot.
 
-export function createFocusStore() {
+import { randomUUID } from "node:crypto";
+
+export function createFocusStore({ navEpoch = randomUUID() } = {}) {
   let focusedThreadId = null;
   let version = 0;
   // Single-tab navigation: which portal path the LLM wants the user's ONE open
@@ -54,7 +56,7 @@ export function createFocusStore() {
   const VIEWS = ["current", "diff", "proposed"];
   return {
     get() {
-      return { focusedThreadId, version, navUrl, navSeq, view, viewSeq, filter, filterSeq, pcContext, pcSelectedId, pcCommand, pcCommandSeq, pcDataSeq, line, lineSeq };
+      return { focusedThreadId, version, navUrl, navSeq, navEpoch, view, viewSeq, filter, filterSeq, pcContext, pcSelectedId, pcCommand, pcCommandSeq, pcDataSeq, line, lineSeq };
     },
     set(threadId) {
       const next = threadId == null ? null : Number(threadId);
@@ -76,7 +78,7 @@ export function createFocusStore() {
       navUrl = url;
       navSeq++;
       version++;
-      return { navUrl, navSeq, version };
+      return { navUrl, navSeq, navEpoch, version };
     },
     // Set the spec view the browser should switch to (item 3). Always bumps so a
     // repeat set to the same view still fires the browser's apply.

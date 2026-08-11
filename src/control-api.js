@@ -875,6 +875,7 @@ export function registerControlApi(app, deps) {
       version: f.version,
       navUrl: f.navUrl,
       navSeq: f.navSeq,
+      navEpoch: f.navEpoch,
       view: f.view,
       viewSeq: f.viewSeq,
       filter: f.filter,

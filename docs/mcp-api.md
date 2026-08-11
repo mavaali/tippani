@@ -44,7 +44,7 @@ report and stop if the retry also fails.
 | `triage_summary` | Categorized triage of every thread: counts of needs-your-reply / awaiting-reviewer / viewed / FYI / resolved, plus a per-thread list. | — |
 | `show_feedback` | Open the Feedback page — a cross-thread triage list for the whole PR. | — |
 | `set_feedback_filter` | Focus the Feedback page by state(s), reviewer, file, and/or text query. `clear=true` shows all. | `states`, `reviewer`, `file`, `query`, `clear` |
-| `open_thread` | Open one thread in a single-thread view with a reply box (shows any staged draft). | `threadId` |
+| `open_thread` | Select one thread and return its full content plus any staged draft. File threads open in context and scroll both the thread pane and file contents to the anchor; PR-level threads open standalone. Navigation failure is reported as failure. | `threadId` |
 | `focus_thread` | Scroll the browser to a thread and highlight it (`threadId=null` clears focus). | `threadId` |
 | `set_view` | Switch the reading view of a file: `current`, `diff`, or `proposed`. Call after `edit_spec` — the view never auto-flips. | `view`, `fileIndex` |
 | `open_file` | Open a changed file at the file view, optionally scrolled to a line. Read-only. | `fileIndex`, `line` |
@@ -53,6 +53,11 @@ report and stop if the retry also fails.
 | `get_file_commits` | Bulk commit history for up to 25 spec files (id, author/committer, message, change counts, url). | `files*`, `top` |
 
 ### Staged review replies and edits
+
+Review reply drafts (`stage_draft`) and PR spec proposals (`edit_spec`) are
+currently tied to the running portal process and are lost when that process
+restarts. Staged resolves use the disk-backed pending queue and survive a
+restart.
 
 | Tool | Purpose | Parameters |
 |---|---|---|

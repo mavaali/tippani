@@ -18,10 +18,11 @@ function check(name, cond) {
 
 // --- FocusStore ---
 {
-  const f = createFocusStore();
+  const f = createFocusStore({ navEpoch: "epoch-a" });
   const initial = f.get();
   check("focus: starts null", initial.focusedThreadId === null);
   check("focus: starts at v0", initial.version === 0);
+  check("nav: exposes its process epoch", initial.navEpoch === "epoch-a");
 
   const s1 = f.set(42);
   check("focus: set(42) records id", s1.focusedThreadId === 42);
@@ -50,6 +51,7 @@ function check(name, cond) {
   const n1 = f.setNav("/goto/thread/7");
   check("nav: setNav records url", n1.navUrl === "/goto/thread/7");
   check("nav: setNav bumps navSeq", n1.navSeq === 1);
+  check("nav: setNav carries the process epoch", n1.navEpoch === "epoch-a");
   check("nav: setNav bumps version", n1.version === v0 + 1);
   check("nav: get() exposes navUrl", f.get().navUrl === "/goto/thread/7");
 

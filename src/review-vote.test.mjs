@@ -218,10 +218,12 @@ try {
       _isOffline = false;
     }
   } finally {
-    server.close();
+    await new Promise((resolve, reject) => {
+      server.close((error) => error ? reject(error) : resolve());
+    });
   }
 }
 
 console.log(`\nreview-vote.test: ${pass} passed, ${fail} failed`);
-process.exit(fail === 0 ? 0 : 1);
+process.exitCode = fail === 0 ? 0 : 1;
 

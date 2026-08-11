@@ -67,7 +67,7 @@ export function buildTools(http, session) {
     if (session && session.separateTabs && typeof session.openUrl === "function") {
       await session.openUrl(path);
     } else {
-      try { await http.post("/api/v1/nav", { path }); } catch {}
+      await http.post("/api/v1/nav", { path });
     }
   }
   // POST that first keeps the current provider portal live, self-healing a
@@ -191,14 +191,18 @@ export function buildTools(http, session) {
     {
       name: "open_thread",
       description:
-        "Open a specific comment thread in the user's browser — a single-thread view " +
-        "with the comments and a reply box that shows any staged draft. Use to bring the " +
-        "user to a thread you want them to look at, or right after stage_draft so they can " +
-        "review and post your proposed reply.",
+        "Select one comment thread for both the user and yourself. For a file-anchored " +
+        "thread, the browser opens its file and scrolls both the thread pane and file " +
+        "contents to the anchor; a PR-level thread opens its standalone view. Returns the " +
+        "full thread content and any staged draft, so do not follow it with get_thread. " +
+        "Use whenever the user names, selects, or asks to inspect a specific thread, and " +
+        "right after stage_draft so they can review the proposed reply.",
       inputSchema: { threadId: z.number() },
       handler: async ({ threadId }) => {
-        await navigate(`/goto/thread/${threadId}`);
-        return { ok: true, opened: `/goto/thread/${threadId}` };
+        const thread = await http.get(`/api/v1/threads/${threadId}`);
+        const opened = `/goto/thread/${threadId}`;
+        await navigate(opened);
+        return { ok: true, opened, thread };
       },
     },
     {
@@ -532,18 +536,23 @@ export function buildTools(http, session) {
       name: "read_annotations",
       description:
         "Read ALL annotations on the spec file the user currently has open " +
-        "in the reviewing page (opened from a branch). Returns every annotation " +
-        "(id, anchor line, author, text, resolved) plus which one is selected. " +
-        "Read-only. Optionally target a specific file with repo+branch+path.",
+        "in the reviewing page. Returns every annotation (id, anchor line, " +
+        "author, text, resolved) plus which one is selected. Read-only. " +
+        "Defaults to the open file; to target one explicitly pass repo+branch+path. " +
+        "For a LOCAL file (opened with open_local_file) the addressing is " +
+        "repo=\"file:<absolute path>\", branch=\"\" (empty), path=\"<absolute path>\" " +
+        "\u2014 open_local_file returns exactly these fields, so pass them back verbatim.",
       inputSchema: {
-        repo: z.string().optional().describe("Repo GUID (defaults to the open file)"),
-        branch: z.string().optional().describe("Branch (defaults to the open file)"),
+        repo: z.string().optional().describe("Repo GUID, or file:<absolute path> for a local file (defaults to the open file)"),
+        branch: z.string().optional().describe("Branch; empty string \"\" for a local file (defaults to the open file)"),
         path: z.string().optional().describe("File path (defaults to the open file)"),
       },
       handler: async ({ repo, branch, path }) => {
         if (session && typeof session.ensureBrowsePortal === "function") await session.ensureBrowsePortal();
+        // Keep an explicit empty-string branch (correct for a file: local file);
+        // only drop genuinely-absent (null/undefined) coordinates.
         const q = [["repo", repo], ["branch", branch], ["path", path]]
-          .filter(([, v]) => v).map(([k, v]) => `${k}=${encodeURIComponent(v)}`).join("&");
+          .filter(([, v]) => v != null).map(([k, v]) => `${k}=${encodeURIComponent(v)}`).join("&");
         return http.get("/api/v1/annotations/all" + (q ? "?" + q : ""));
       },
     },
@@ -709,9 +718,11 @@ export function buildTools(http, session) {
       description:
         "Open ONE arbitrary .md file read-only in the reviewing view by its " +
         "absolute path on disk (no branch, no ADO), so the user can read it and " +
-        "the personal-comment tools have a target. The file must sit inside a " +
-        "folder the user has opened in Tippani (an approved root) — a path " +
-        "outside every approved root is rejected, never read. Read-only.",
+        "the annotation tools have a target. The file must sit inside a " +
+        "folder the user has opened in Tippani (an approved root) \u2014 a path " +
+        "outside every approved root is rejected, never read. Read-only. Returns " +
+        "the file's annotation addressing (repo=\"file:<abs path>\", branch=\"\", " +
+        "path) \u2014 pass those back to read_annotations/add_annotation to target it.",
       inputSchema: {
         path: z.string().describe("Absolute path to a .md file inside an approved root"),
       },

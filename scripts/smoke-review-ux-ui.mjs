@@ -131,6 +131,8 @@ async function main() {
     check("editor auto-load path wired (isEditing + setMarkdown in poll)",
       /isEditing\(\)/.test(file.html) && /setMarkdown\(/.test(file.html));
     check("comment threads are click-to-focus (onThreadClick)", /onThreadClick/.test(file.html));
+    check("focused thread scrolls both the comments pane and file anchor",
+      /function focusThread[\s\S]*scrollSidebarThreadToTop\(el\)[\s\S]*scrollDocToThread\(threadId\)/.test(file.html));
 
     // Persistent Bordeaux highlight, light + dark, and NOT on a timer.
     check("focus highlight uses Bordeaux (light #6d071a, dark #b23a58)",

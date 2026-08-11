@@ -342,6 +342,7 @@ try {
     const r = await call("/api/v1/state");
     check("nav: state exposes navUrl", r.body.navUrl === "/goto/thread/101");
     check("nav: state exposes navSeq", typeof r.body.navSeq === "number" && r.body.navSeq >= 1);
+    check("nav: state exposes a process epoch", typeof r.body.navEpoch === "string" && r.body.navEpoch.length > 0);
   }
   {
     const r = await call("/api/v1/nav", { method: "POST", headers: authHeaders, body: {} });
