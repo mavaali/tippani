@@ -18,7 +18,7 @@ export function createGitHubViewedStore(filePath, { fsImpl = fs } = {}) {
   }
 
   function saveAll(data) {
-    fsImpl.mkdirSync(path.dirname(filePath), { recursive: true });
+    fsImpl.mkdirSync(path.dirname(filePath), { recursive: true, mode: 0o700 });
     const tmp = `${filePath}.tmp-${process.pid}-${Date.now()}`;
     fsImpl.writeFileSync(tmp, JSON.stringify(data, null, 2), {
       encoding: "utf8",

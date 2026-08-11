@@ -13,6 +13,25 @@ export function navSkipsBarePathClobber(hereSearch, herePathname, navPathname, n
   return navPathname === herePathname && !navSearch && !!hereSearch;
 }
 
+// Resolve the browser's per-tab navigation cursor against the current portal
+// process. navSeq restarts at zero with each process, while sessionStorage
+// survives a same-port restart. A changed epoch resets only that stale cursor;
+// repeat suppression remains monotonic within one process.
+export function navCursor(serverEpoch, serverSeq, storedEpoch, storedSeq) {
+  const nextEpoch = typeof serverEpoch === "string" ? serverEpoch : "";
+  const priorEpoch = typeof storedEpoch === "string" ? storedEpoch : "";
+  const parsedStoredSeq = Number(storedSeq);
+  const priorSeq = Number.isFinite(parsedStoredSeq) && parsedStoredSeq >= 0 ? parsedStoredSeq : 0;
+  const reset = !!nextEpoch && nextEpoch !== priorEpoch;
+  const lastSeq = reset ? 0 : priorSeq;
+  const nextSeq = Number(serverSeq);
+  return {
+    epoch: nextEpoch || priorEpoch,
+    lastSeq,
+    shouldApply: Number.isFinite(nextSeq) && nextSeq > lastSeq,
+  };
+}
+
 // Resolve a nav target to its SAME-ORIGIN path (pathname+search+hash), or null
 // when the value is malformed, foreign-origin, a javascript: URL, or empty. The
 // watcher navigates to THIS resolved path — never the raw navUrl — so a value

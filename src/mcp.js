@@ -27,10 +27,11 @@ import {
   authorSpecPromptMessages,
 } from "./routing-directive.js";
 import { createPortalSession } from "./portal-launcher.js";
-import { inspectAdoToken, tokenRejectionMessage } from "./ado-token-check.js";
+import { inspectAdoToken, tokenRejectionMessage, isExpiredJwt } from "./ado-token-check.js";
 import { cliFallbackEnabled, acquireAdoTokenFromCli } from "./ado-token-cli.js";
 import { selectGitHubToken } from "./github-target.js";
 import { execSync } from "node:child_process";
+import { maybeRefreshToken } from "./token-refresh.js";
 
 // Give MCP "Test connection" real meaning: validate the bound account's ADO
 // token before serving. If it isn't an Azure DevOps git/REST token (wrong
@@ -41,9 +42,10 @@ import { execSync } from "node:child_process";
 // first (Git Credential Manager, then Azure CLI). This is on by default and lets
 // a standalone VS Code user run Tippani without a host injecting a token; disable
 // it with TIPPANI_ADO_TOKEN_CLI_FALLBACK=0 in the MCP server's env.
+let _selfAcquired = false;
 if (!process.env.TIPPANI_ADO_TOKEN && cliFallbackEnabled()) {
   const cliToken = await acquireAdoTokenFromCli({ audience: process.env.TIPPANI_ADO_AUDIENCE });
-  if (cliToken) process.env.TIPPANI_ADO_TOKEN = cliToken;
+  if (cliToken) { process.env.TIPPANI_ADO_TOKEN = cliToken; _selfAcquired = true; }
 }
 // A token is required only for the ADO surface (open_pr, list_prs, PR review).
 // Local review (open_branch / open_branch_file / personal comments) reads a git
@@ -93,6 +95,32 @@ const http = createHttpClient({
 });
 const tools = buildTools(http, session);
 
+// Re-mint a SELF-ACQUIRED bearer when it is near expiry, before a tool runs.
+// A host-injected token is left alone (the host owns its refresh). Best-effort:
+// a failure here never blocks the tool call. A failed re-mint is cooled down
+// (maybeRefreshToken's lastFailedAt) so an expired token plus a signed-out CLI
+// doesn't re-run multi-second CLI probes before every tool call.
+let _acquireFailedAt = 0;
+async function ensureFreshAdoToken() {
+  try {
+    const r = await maybeRefreshToken({
+      selfAcquired: _selfAcquired,
+      currentToken: process.env.TIPPANI_ADO_TOKEN,
+      lastFailedAt: _acquireFailedAt,
+      isExpiring: (t, at) => isExpiredJwt(t, at),
+      acquire: () => acquireAdoTokenFromCli({ audience: process.env.TIPPANI_ADO_AUDIENCE }),
+      apply: async (t) => {
+        process.env.TIPPANI_ADO_TOKEN = t;
+        // Push the fresh bearer into a running portal (host-driven swap); if no
+        // portal is up yet, the next open_pr spawns with the refreshed env.
+        try { if (session.getToken()) await http.post("/api/v1/ado-token", { token: t }); } catch {}
+      },
+    });
+    if (r && r.failedAt) _acquireFailedAt = r.failedAt;
+    else if (r && r.refreshed) _acquireFailedAt = 0;
+  } catch { /* best-effort */ }
+}
+
 const server = new McpServer(
   { name: "tippani", version: "0.1.0" },
   // `instructions` is sent in the initialize response — the first guidance the
@@ -113,6 +141,7 @@ for (const t of tools) {
     { description: t.description, inputSchema: t.inputSchema },
     async (args) => {
       try {
+        await ensureFreshAdoToken();
         const result = await t.handler(args || {});
         return {
           content: [{ type: "text", text: JSON.stringify(result, null, 2) }],

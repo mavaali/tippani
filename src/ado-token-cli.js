@@ -82,7 +82,13 @@ export async function acquireAdoTokenFromCli({ audience, run = defaultRun, sourc
 // the source, so a missing CLI just means "this source produced nothing".
 function defaultRun(cmd, args, { input } = {}) {
   return new Promise((resolve, reject) => {
-    const child = spawn(cmd, args, { windowsHide: true });
+    // Node >=20 refuses to spawn a .cmd/.bat shim (e.g. az.cmd) directly — it
+    // throws EINVAL. On Windows, run the trusted CLI through cmd.exe so the shim
+    // resolves. Args here are fixed constants (no user input), so this is safe.
+    const [file, argv] = process.platform === "win32"
+      ? [process.env.ComSpec || "cmd.exe", ["/d", "/s", "/c", cmd, ...args]]
+      : [cmd, args];
+    const child = spawn(file, argv, { windowsHide: true });
     let stdout = "", stderr = "";
     const timer = setTimeout(() => { child.kill(); reject(new Error("timeout")); }, 20_000);
     child.stdout.on("data", (d) => { stdout += d; });

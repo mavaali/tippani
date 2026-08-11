@@ -31,14 +31,17 @@ import {
 } from "./api-state.js";
 import { registerControlApi } from "./control-api.js";
 import { renderSpecBody } from "./spec-source-map.js";
+import { buildToc } from "./toc.js";
+import { classifyLocalMedia } from "./local-media.js";
 import { isReadOnlyWiql, summarizeWorkItem, buildWorkItemUrl, WORK_ITEM_FIELDS } from "./work-item.js";
 import { isTableBlock, computeTableDiff } from "./table-diff.js";
 import { updateViewed } from "./viewed-map.js";
 import { writeInstance, removeInstance } from "./portal-registry.js";
 import { reattachFrontmatter } from "./frontmatter.js";
+import { sortThreadsByLine } from "./thread-order.js";
 import { identityFromAdoToken, isExpiredJwt } from "./ado-token-check.js";
 import { buildPrCriteria, summarizePr, mergeRolePrs, prStatusLabel } from "./pr-criteria.js";
-import { navSkipsBarePathClobber, navShouldNavigate, navTarget } from "./nav-guard.js";
+import { navCursor, navSkipsBarePathClobber, navShouldNavigate, navTarget } from "./nav-guard.js";
 import { createApprovedRoots } from "./approved-roots.js";
 import { classifyOpenFilePath, classifyAddFile } from "./open-file-path.js";
 import { resolveLinkAction } from "./open-external.js";
@@ -63,8 +66,8 @@ import {
   summarizeNonMarkdown,
 } from "./config-util.js";
 import { resolveImagePath, imageContentType, isLfsPointer, secureImageHeaders, isValidRepoId } from "./image-src.js";
-import { cssVariables, changeTypeBadge, escHtml, stripMarkdown, jsonForScript } from "./html-util.js";
-import { getSpecContentAt, getSpecBlobAt, buildSpecWebUrl } from "./ado-read.js";
+import { cssVariables, changeTypeBadge, escHtml, stripMarkdown, jsonForScript, errorPage } from "./html-util.js";
+import { getSpecContentAt, getSpecBlobAt, buildSpecWebUrl, getLastCommitAuthor } from "./ado-read.js";
 import { branchesForRepo, repoOptions, branchNamePlaceholder, sortBranches, shortBranchName, summarizeBranchRef } from "./branch-list.js";
 import { branchFileRows, visibleFileCount, mdPathsFromChanges, buildSpecHref, stagedFileComparison } from "./branch-files.js";
 import { validateLocalRepo, resolveGitDir, parseGitHead, parsePackedRefs, mergeLocalBranches, parseOriginHeadDefault, userCreatedBranches } from "./local-repo.js";
@@ -905,7 +908,6 @@ function stripFrontmatter(content) {
 
 function buildSourceMap(content) {
   const lines = content.split("\n");
-  const toc = [];
   const sourceMap = {};
   let pIdx = 0;
   let inPara = false;
@@ -913,12 +915,6 @@ function buildSourceMap(content) {
 
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
-    const hm = line.match(/^(#{1,6})\s+(.+)/);
-    if (hm) {
-      const text = hm[2].replace(/[*_`\[\]]/g, "");
-      const id = text.toLowerCase().replace(/[^\w]+/g, "-").replace(/-$/, "");
-      toc.push({ id, text, level: hm[1].length });
-    }
     if (line.trim() === "") {
       if (inPara) {
         sourceMap[pIdx] = { startLine: paraStart + 1, endLine: i };
@@ -934,7 +930,7 @@ function buildSourceMap(content) {
     }
   }
   if (inPara) sourceMap[pIdx] = { startLine: paraStart + 1, endLine: lines.length };
-  return { toc, sourceMap };
+  return { toc: buildToc(content), sourceMap };
 }
 
 // --- Shared CSS variable system ---
@@ -947,6 +943,7 @@ function buildSourceMap(content) {
 // fetch to /api/v1/state is auth-exempt like the other in-page polls.
 const NAV_WATCHER = `<script>
 (function(){
+  ${navCursor.toString()}
   ${navSkipsBarePathClobber.toString()}
   ${navTarget.toString()}
   ${navShouldNavigate.toString()}
@@ -956,9 +953,17 @@ const NAV_WATCHER = `<script>
       if (!r.ok) return;
       const s = await r.json();
       if (!s || !s.navUrl || !Number.isFinite(s.navSeq)) return;
-      var last = 0;
-      try { last = Number(sessionStorage.getItem('tippaniNavSeq')) || 0; } catch (e) {}
-      if (s.navSeq <= last) return;
+      var storedEpoch = '', storedSeq = 0;
+      try {
+        storedEpoch = sessionStorage.getItem('tippaniNavEpoch') || '';
+        storedSeq = Number(sessionStorage.getItem('tippaniNavSeq')) || 0;
+      } catch (e) {}
+      var cursor = navCursor(s.navEpoch, s.navSeq, storedEpoch, storedSeq);
+      try {
+        if (cursor.epoch) sessionStorage.setItem('tippaniNavEpoch', cursor.epoch);
+        if (cursor.lastSeq !== storedSeq) sessionStorage.setItem('tippaniNavSeq', String(cursor.lastSeq));
+      } catch (e) {}
+      if (!cursor.shouldApply) return;
       try { sessionStorage.setItem('tippaniNavSeq', String(s.navSeq)); } catch (e) {}
       // Same-origin-only + don't clobber a deliberate same-path query deep-link
       // (e.g. ?edit=1) — both handled by navShouldNavigate. Navigate to the
@@ -989,8 +994,8 @@ function buildPickerPage(pr, changedFiles, threads = []) {
       const parentPath = f.path.split("/").slice(0, -1).join("/") + "/";
       const badge = changeTypeBadge(f.changeType);
       const badgeClass = badge.color === "success" ? "badge-success" : "badge-accent";
-      return `<a href="/file/${i}" class="file-card">
-        <div class="file-icon">📄</div>
+      return `<a href="/file/${i}" class="file-card" onclick="document.body.classList.add('nav-loading')">
+        <div class="file-icon"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" aria-hidden="true"><path d="M4 1.5h5L12.5 5v9a.5.5 0 0 1-.5.5H4a.5.5 0 0 1-.5-.5V2a.5.5 0 0 1 .5-.5Z"/><path d="M9 1.5V5h3.5"/></svg></div>
         <div class="file-info">
           <div class="file-name">${escHtml(fileName)}</div>
           <div class="file-path">${escHtml(parentPath)}</div>
@@ -1026,7 +1031,7 @@ body { font-family: "Segoe UI", Aptos, Calibri, -apple-system, BlinkMacSystemFon
 .pr-card h1 { font-size: 19px; font-weight: 700; margin-bottom: 6px; text-align: center; }
 .pr-meta { font-size: 13px; color: var(--cp-text-muted); display: flex; align-items: center; justify-content: center; gap: 8px; flex-wrap: wrap; }
 .pr-meta .pr-badge { display: inline-block; padding: 2px 10px; border-radius: 99px; font-size: 11px; font-weight: 600; background: var(--cp-accent-soft); color: var(--cp-accent); }
-.pr-desc { margin-top: 6px; font-size: 13px; color: var(--cp-text-muted); line-height: 1.5; text-align: center; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.pr-desc { margin-top: 10px; font-size: 13px; color: var(--cp-text-muted); line-height: 1.5; text-align: center; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 .pr-desc.expanded { -webkit-line-clamp: unset; overflow: visible; }
 .pr-desc-toggle { margin-top: 4px; background: none; border: none; color: var(--cp-accent); cursor: pointer; font-size: 12px; font-weight: 600; }
 
@@ -1034,15 +1039,20 @@ body { font-family: "Segoe UI", Aptos, Calibri, -apple-system, BlinkMacSystemFon
 
 .file-list { display: flex; flex-direction: column; gap: 6px; }
 
-.file-card { display: flex; align-items: center; gap: 14px; padding: 14px 18px; background: var(--cp-surface); border: 1px solid var(--cp-border); border-radius: 12px; text-decoration: none; color: var(--cp-text); transition: all 0.15s; cursor: pointer; }
+.file-card { display: flex; align-items: center; gap: 14px; padding: 11px 16px; background: var(--cp-surface); border: 1px solid var(--cp-border); border-radius: 12px; text-decoration: none; color: var(--cp-text); transition: all 0.15s; cursor: pointer; }
 .file-card:hover { background: var(--cp-accent-soft); border-color: var(--cp-accent); box-shadow: 0 2px 8px rgba(0,0,0,0.06); }
-.file-icon { font-size: 22px; flex-shrink: 0; }
+.file-icon { flex-shrink: 0; display: flex; align-items: center; color: var(--cp-text-muted); }
+.file-icon svg { width: 20px; height: 20px; }
 .file-info { flex: 1; min-width: 0; }
 .file-name { font-size: 14px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.file-path { font-size: 12px; color: var(--cp-text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 2px; }
+.file-path { font-size: 12px; color: var(--cp-text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 4px; }
 .badge { display: inline-block; padding: 2px 10px; border-radius: 99px; font-size: 11px; font-weight: 600; flex-shrink: 0; }
 .badge-accent { background: var(--cp-accent-soft); color: var(--cp-accent); }
 .badge-success { background: rgba(22,163,74,0.1); color: var(--cp-success); }
+/* Navigation loading bar: shown when opening a file (full-page nav). */
+body.nav-loading { cursor: progress; }
+body.nav-loading::after { content: ''; position: fixed; left: 0; top: 0; height: 2px; width: 100%; background: var(--cp-accent); transform-origin: left; animation: navLoad 1.4s ease-out forwards; z-index: 9999; }
+@keyframes navLoad { 0% { transform: scaleX(0); } 55% { transform: scaleX(0.7); } 100% { transform: scaleX(0.96); } }
 
 <\/style>
 <script>
@@ -1378,7 +1388,7 @@ function buildHomePage(
       ? `/open/${pr.id}?owner=${encodeURIComponent(pr.project || project || "")}&repo=${encodeURIComponent(pr.repo || "")}`
       : `/open/${pr.id}`;
     return `<a class="pr-card" href="${escHtml(openHref)}" data-author="${escHtml(pr.author || "")}" data-project="${escHtml(pr.project || "(none)")}" data-activity="${activity}" data-status="${status}" data-search="${escHtml(((pr.title || "") + " " + (pr.author || "")).toLowerCase())}">
-      <div class="pr-top"><span class="pr-id">#${pr.id}</span><span class="pr-status">${statusLabel(pr.status)}</span>${pr.isDraft ? '<span class="pr-draft">Draft</span>' : ""}${roleBadge(pr.roles)}${pr.isDraft ? `<button type="button" class="pr-publish-btn" data-pr-id="${pr.id}" data-project="${escHtml(pr.project || "")}" data-repo="${escHtml(pr.repo || "")}" data-title="${escHtml(pr.title || "")}">Publish</button>` : ""}</div>
+      <div class="pr-top"><span class="pr-id">#${pr.id}</span><span class="pr-status">${statusLabel(pr.status)}</span>${pr.isDraft ? '<span class="pr-draft">Draft</span>' : ""}${roleBadge(pr.roles)}${pr.isDraft ? `<button type="button" class="pr-publish-btn" data-pr-id="${pr.id}" data-project="${escHtml(pr.project || "")}" data-repo="${escHtml(pr.repo || "")}" data-title="${escHtml(pr.title || "")}">Publish PR</button>` : ""}</div>
       <div class="pr-title">${escHtml(pr.title || "")}</div>
       <div class="pr-meta">${escHtml(pr.author || "")} \u00b7 ${escHtml(pr.source || "")} \u2192 ${escHtml(pr.target || "")}${pr.repo ? " \u00b7 " + escHtml(pr.repo) : ""}${pr.project ? " \u00b7 " + escHtml(pr.project) : ""}</div>
     </a>`;
@@ -1946,7 +1956,7 @@ table.wi-results { width: 100%; table-layout: fixed; border-collapse: collapse; 
     try { var d = await (await fetch('/api/v1/staged')).json(); (d.prPublishes || []).forEach(function (p) { ids[prPublishKey(p.project, p.repo, p.pullRequestId)] = true; }); } catch (e) {}
     document.querySelectorAll('.pr-publish-btn').forEach(function (b) {
       var staged = ids[prPublishKey(b.getAttribute('data-project'), b.getAttribute('data-repo'), b.getAttribute('data-pr-id'))];
-      b.textContent = staged ? 'Publish staged \u2713' : 'Publish';
+      b.textContent = staged ? 'Publish PR staged \u2713' : 'Publish PR';
       b.classList.toggle('pr-publish-staged', !!staged);
     });
   }
@@ -3317,6 +3327,7 @@ body { font-family: "Segoe UI", Aptos, Calibri, -apple-system, sans-serif; backg
 .toc-item { display: block; font-size: 13px; color: var(--cp-text-muted); text-decoration: none; padding: 4px 8px; border-radius: 6px; line-height: 1.35; }
 .toc-item:hover { background: var(--cp-surface-soft); color: var(--cp-text); }
 .ro-empty { font-size: 12px; color: var(--cp-text-muted); padding: 12px; }
+.ro-doc :is(h1,h2,h3,h4,h5,h6) { scroll-margin-top: 16px; }
 /* Margin review threads: absolutely positioned beside their anchor block, sharing the page scroll (no separate scrollbar). Collapsed to a summary; expand on click. */
 .rh-thread { position: absolute; left: 10px; right: 10px; padding: 8px 10px; border: 1px solid var(--cp-border); border-radius: 10px; background: var(--cp-surface); cursor: pointer; transition: box-shadow 0.15s, border-color 0.15s; }
 .rh-thread:hover { box-shadow: 0 2px 10px rgba(0,0,0,0.08); }
@@ -3334,12 +3345,13 @@ body { font-family: "Segoe UI", Aptos, Calibri, -apple-system, sans-serif; backg
 .rh-thread.rh-expanded .rh-summary { display: none; }
 .rh-full { display: none; margin-top: 6px; }
 .rh-thread.rh-expanded .rh-full { display: block; }
+.rh-thread.rh-expanded:not(.pc-card) .rh-full { max-height: 55vh; overflow-y: auto; }
 /* Personal comments always show their full text (not a clamped 2-line summary);
    a single very long comment scrolls within the card rather than overflowing the
    page's vertical space. */
 .pc-card .rh-summary { display: none; }
 .pc-card .rh-full { display: block; }
-.pc-card .pc-view .rh-body { max-height: calc(100vh - 160px); overflow-y: auto; }
+.pc-card .pc-view .rh-body { max-height: calc(100vh - 160px); overflow-y: auto; resize: vertical; }
 /* Replies (follow-up notes, e.g. the assistant recording how it addressed the comment). */
 .pc-replies { margin-top: 8px; border-top: 1px dashed var(--cp-border); padding-top: 6px; }
 .pc-reply { margin-top: 6px; padding-left: 8px; border-left: 2px solid var(--cp-accent); }
@@ -3376,7 +3388,7 @@ body { font-family: "Segoe UI", Aptos, Calibri, -apple-system, sans-serif; backg
 .ro-doc a { color: var(--cp-accent); }
 .ro-doc p, .ro-doc li, .ro-doc a, .ro-doc code { overflow-wrap: anywhere; }
 .ro-doc code { font-family: Consolas, "Courier New", monospace; font-size: 0.9em; background: var(--cp-surface-soft); padding: 1px 5px; border-radius: 5px; }
-.ro-doc pre { background: #1e1e1e; color: #d4d4d4; padding: 14px 16px; border-radius: 10px; overflow-x: auto; margin: 12px 0; }
+.ro-doc pre { background: var(--cp-code-bg); color: var(--cp-code-fg); border: 1px solid var(--cp-border); padding: 14px 16px; border-radius: 10px; overflow-x: auto; margin: 12px 0; }
 .ro-doc pre code { background: none; padding: 0; color: inherit; }
 .ro-doc blockquote { border-left: 3px solid var(--cp-border-strong); padding-left: 14px; color: var(--cp-text-muted); margin: 12px 0; }
 .ro-doc table { border-collapse: collapse; margin: 14px 0; font-size: 14px; max-width: 100%; }
@@ -3596,6 +3608,7 @@ body.show-markers .rh-marker { display: inline-flex; }
       var pcShowResolvedState = true;      // hide/show resolved cards (MCP-driven)
       var pcLastDataSeq = RO_PC_DATASEQ;   // last comment-data version this page has applied
       var pcLastCmdSeq = 0;                // last one-shot UI command applied
+      var pcLastLineSeq = 0;               // last go_to_line seq applied (baselined on first poll)
       var pcPollInit = false;              // first poll only syncs baselines
       function pcEsc(s) { return String(s == null ? '' : s).replace(/[&<>"]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; }); }
       function pcWhen(iso) { try { return new Date(iso).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }); } catch (e) { return ''; } }
@@ -3653,8 +3666,14 @@ body.show-markers .rh-marker { display: inline-flex; }
       function pcPoll() {
         fetch('/api/v1/state').then(function (r) { return r.ok ? r.json() : null; }).then(function (s) {
           if (!s) return;
-          if (!pcPollInit) { pcPollInit = true; if (typeof s.pcCommandSeq === 'number') pcLastCmdSeq = s.pcCommandSeq; if (typeof s.pcDataSeq === 'number') pcLastDataSeq = Math.max(pcLastDataSeq, s.pcDataSeq); return; }
+          if (!pcPollInit) { pcPollInit = true; if (typeof s.pcCommandSeq === 'number') pcLastCmdSeq = s.pcCommandSeq; if (typeof s.pcDataSeq === 'number') pcLastDataSeq = Math.max(pcLastDataSeq, s.pcDataSeq); if (typeof s.lineSeq === 'number') pcLastLineSeq = s.lineSeq; return; }
           if (typeof s.pcDataSeq === 'number' && s.pcDataSeq > pcLastDataSeq) { pcLastDataSeq = s.pcDataSeq; pcReloadComments(); }
+          if (typeof s.lineSeq === 'number' && s.lineSeq > pcLastLineSeq) {
+            pcLastLineSeq = s.lineSeq;
+            // go_to_line: scroll the open file to a source line (same-page, no reopen).
+            var goB = Number.isFinite(s.line) ? blockForLine(s.line) : null;
+            if (goB) goB.scrollIntoView({ behavior: 'smooth', block: 'center' });
+          }
           if (typeof s.pcCommandSeq === 'number' && s.pcCommandSeq > pcLastCmdSeq) {
             pcLastCmdSeq = s.pcCommandSeq;
             var cmd = s.pcCommand;
@@ -3930,7 +3949,7 @@ ${NAV_WATCHER}
 }
 
 // --- Spec review page (3-column layout) ---
-function buildSpecPage(specHtml, toc, metadata, pr, threads, specPath, sourceMap, changedFiles, currentFileIndex, rawMarkdown, canEdit, baseObjectId, viewedMap = {}, viewedError = null, reviewing = false, ctx = null) {
+function buildSpecPage(specHtml, toc, metadata, pr, threads, specPath, sourceMap, changedFiles, currentFileIndex, rawMarkdown, canEdit, baseObjectId, viewedMap = {}, viewedError = null, reviewing = false, ctx = null, reviewPc = null) {
   const tocHtml = toc
     .map(
       (t) =>
@@ -3942,9 +3961,15 @@ function buildSpecPage(specHtml, toc, metadata, pr, threads, specPath, sourceMap
   const author = escHtml(pr.createdBy?.displayName || "Unknown");
   const prId = pr.pullRequestId;
   const _clipName = (s) => { const n = String(s || "").split("/").pop() || "File"; return n.length > 16 ? n.slice(0, 16) + "\u2026" : n; };
+  // Personal Comments (annotations) data: branch/file-editor mode supplies it via
+  // ctx.pc; a real PR review page supplies it via reviewPc (independent of ctx,
+  // which stays branch-mode-only). dualMode = a real PR page with annotations
+  // available, i.e. the sidebar can toggle between Comments and Annotations.
+  const pcCtx = (ctx && ctx.pc) ? ctx.pc : (reviewPc || null);
+  const dualMode = !ctx && !!pcCtx;
 
   // Split threads: active (status 1=active, 0=unknown) vs resolved (status 2=fixed, 4=closed etc.)
-  const allThreads = (threads || []).filter((t) => t.comments?.length > 0);
+  const allThreads = sortThreadsByLine((threads || []).filter((t) => t.comments?.length > 0));
   const activeThreads = allThreads.filter((t) => t.status !== 2 && t.status !== 4);
   const resolvedThreads = allThreads.filter((t) => t.status === 2 || t.status === 4);
 
@@ -3998,28 +4023,31 @@ function buildSpecPage(specHtml, toc, metadata, pr, threads, specPath, sourceMap
           </div>
         </form>`;
     return `<div class="comment-thread ${statusClass}" data-thread-id="${t.id}" data-thread-line="${t.threadContext?.rightFileStart?.line || ""}" onclick="onThreadClick(event, ${t.id})">
-      ${(anchor || statusTag) ? `<div class="comment-anchor">${isResolved ? "✓ " : ""}${escHtml(anchor)}${statusTag}</div>` : ""}
-      ${isResolved ? `<details><summary class="resolved-summary">${escHtml(t.comments[0]?.author?.displayName || "Comment")} — resolved</summary>` : ""}
-      <div class="thread-comments">${commentsHtml}</div>
-      ${actions}
-      ${isResolved ? `</details>` : ""}
+      <div class="thread-head">
+        <button type="button" class="thread-collapse-btn" title="Collapse / expand" aria-label="Collapse or expand this comment" aria-expanded="true" onclick="toggleThreadCollapse(event, ${t.id})">\u25be</button>
+        <div class="comment-anchor">${isResolved ? `<span class="resolved-check">\u2713 </span>` : ""}${escHtml(anchor) || "Comment"}${statusTag}</div>
+      </div>
+      <div class="thread-body">
+        <div class="thread-comments">${commentsHtml}</div>
+        ${actions}
+      </div>
     </div>`;
   }
 
-  const activeHtml = activeThreads.length === 0
-    ? `<p class="empty-comments">No active comments. Click on a paragraph to start a review.</p>`
-    : activeThreads.map(t => buildThreadHtml(t, false)).join("");
-  const resolvedHtml = resolvedThreads.map(t => buildThreadHtml(t, true)).join("");
-  const threadsHtml = activeHtml + (resolvedThreads.length > 0
-    ? `<div class="sidebar-section-label" style="margin-top:16px;">Resolved (${resolvedThreads.length})</div>${resolvedHtml}`
-    : "");
+  // Render active + resolved threads as a single list ordered by anchor line
+  // (sortThreadsByLine) so the pane reads top-to-bottom with the document.
+  // Resolving a thread must not move it (its line is unchanged), only restyle it.
+  // activeThreads/resolvedThreads are still used for the header counts above.
+  const threadsHtml = allThreads.length === 0
+    ? `<p class="empty-comments">No comments yet. Click on a paragraph to start a review.</p>`
+    : allThreads.map(t => buildThreadHtml(t, t.status === 2 || t.status === 4)).join("");
 
   // File navigation list for left sidebar
   const filesNavHtml = changedFiles
     .map((f, i) => {
       const name = f.path.split("/").pop();
       const active = i === currentFileIndex ? "file-nav-active" : "";
-      return `<a href="/file/${i}" class="file-nav-item ${active}" title="${escHtml(f.path)}">${escHtml(name)}</a>`;
+      return `<a href="/file/${i}" class="file-nav-item ${active}" title="${escHtml(f.path)}" onclick="document.body.classList.add('nav-loading')">${escHtml(name)}</a>`;
     })
     .join("\n");
 
@@ -4089,7 +4117,7 @@ button:focus-visible { outline: 2px solid var(--cp-accent); outline-offset: 2px;
 .brand-sub { font-size: 11px; font-weight: 400; color: var(--cp-text-muted); flex-shrink: 0; white-space: nowrap; }
 .hdr-sep { color: var(--cp-border); margin: 0 2px; }
 .pr-info { min-width: 0; }
-.pr-info h1 { font-size: 14px; font-weight: 600; line-height: 1.3; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pr-info h1 { font-size: 15px; font-weight: 700; line-height: 1.3; color: var(--cp-text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .pr-meta { font-size: 11px; color: var(--cp-text-muted); margin-top: 1px; display: flex; align-items: center; gap: 4px; }
 .comment-count-active { color: var(--cp-accent); font-weight: 600; }
 .comment-count-resolved { color: var(--cp-success); font-weight: 500; }
@@ -4109,6 +4137,16 @@ button:focus-visible { outline: 2px solid var(--cp-accent); outline-offset: 2px;
 
 /* 3-column layout */
 .layout { display: flex; flex: 1; min-height: 0; }
+/* Narrow viewports: shrink the side rails, then drop the right rail entirely. */
+@media (max-width: 1000px) {
+  .sidebar-left { width: 200px; }
+  .sidebar-right { width: 240px; }
+}
+@media (max-width: 760px) {
+  .sidebar-right { display: none; }
+  .sidebar-left { width: 180px; }
+  .main-content { padding: 0 16px 32px; }
+}
 
 /* Resize handles */
 .resize-handle { width: 5px; flex-shrink: 0; cursor: col-resize; background: transparent; position: relative; z-index: 10; transition: background 0.15s; }
@@ -4120,10 +4158,11 @@ body.col-resizing * { cursor: col-resize !important; user-select: none !importan
 
 /* Left sidebar */
 .sidebar-left { width: 260px; flex-shrink: 0; display: flex; flex-direction: column; border-right: 1px solid var(--cp-border); background: var(--cp-bg-elevated); overflow: hidden; }
-.sidebar-left-scroll { flex: 1; overflow-y: auto; padding: 16px; }
+.sidebar-left-scroll { flex: 1; overflow-y: auto; padding: 16px; -webkit-mask-image: linear-gradient(to bottom, transparent 0, black 12px, black calc(100% - 16px), transparent 100%); mask-image: linear-gradient(to bottom, transparent 0, black 12px, black calc(100% - 16px), transparent 100%); }
 .sidebar-section-label { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; color: var(--cp-text-muted); margin-bottom: 8px; margin-top: 16px; }
 .sidebar-section-label:first-child { margin-top: 0; }
 .sidebar-section-label:first-child { margin-top: 0; }
+.sidebar-section-label-sub { margin-top: 20px; padding-top: 12px; border-top: 1px solid var(--cp-border); font-size: 10px; opacity: 0.9; }
 
 .toc-item { display: block; font-size: 13px; padding: 4px 8px; border-left: 2px solid transparent; color: var(--cp-text-muted); text-decoration: none; transition: all 0.12s; border-radius: 0 4px 4px 0; }
 .toc-item:hover { color: var(--cp-text); background: var(--cp-accent-soft); text-decoration: none; }
@@ -4132,6 +4171,10 @@ body.col-resizing * { cursor: col-resize !important; user-select: none !importan
 .file-nav-item { display: block; font-size: 12px; padding: 5px 8px; color: var(--cp-text-muted); text-decoration: none; border-radius: 6px; transition: all 0.12s; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .file-nav-item:hover { background: var(--cp-accent-soft); color: var(--cp-text); text-decoration: none; }
 .file-nav-active { background: var(--cp-highlight); color: var(--cp-accent); font-weight: 600; }
+/* Navigation loading bar: shown when opening a file (full-page nav). */
+body.nav-loading { cursor: progress; }
+body.nav-loading::after { content: ''; position: fixed; left: 0; top: 0; height: 2px; width: 100%; background: var(--cp-accent); transform-origin: left; animation: navLoad 1.4s ease-out forwards; z-index: 9999; }
+@keyframes navLoad { 0% { transform: scaleX(0); } 55% { transform: scaleX(0.7); } 100% { transform: scaleX(0.96); } }
 
 /* Main content */
 .main-content { flex: 1; min-width: 0; overflow-y: auto; padding: 0 40px 40px; background: var(--cp-bg); scroll-padding-top: 56px; }
@@ -4151,13 +4194,24 @@ body.branch-mode .spec { background: transparent; border: none; box-shadow: none
 .spec .commentable .comment-btn { position: absolute; left: -36px; top: 6px; width: 24px; height: 24px; border-radius: 6px; background: var(--cp-accent); color: var(--cp-accent-fg); border: none; font-size: 14px; font-weight: 700; cursor: pointer; display: flex; align-items: center; justify-content: center; opacity: 0; transition: opacity 0.12s; line-height: 1; z-index: 5; }
 .spec .commentable:hover .comment-btn { opacity: 1; }
 .spec .commentable .comment-btn:hover { background: var(--cp-accent-hover); }
+/* Comments/Annotations toggle (real PR review + annotations both available).
+   Only one set of per-block affordances makes sense at a time: the PR "+"
+   comment button belongs to Comments mode, the annotation dot/markers to
+   Annotations mode — hide whichever doesn't match the active mode. */
+.sidebar-mode-toggle { display: flex; gap: 2px; flex: 1 1 auto; background: var(--cp-bg); border-radius: 8px; padding: 2px; }
+.sidebar-mode-btn { flex: 1 1 auto; background: none; border: none; font-size: 11px; font-weight: 600; color: var(--cp-text-muted); padding: 5px 8px; border-radius: 6px; cursor: pointer; transition: all 0.12s; }
+.sidebar-mode-btn:hover { color: var(--cp-text); }
+.sidebar-mode-btn.active { background: var(--cp-surface); color: var(--cp-accent); box-shadow: 0 1px 3px rgba(0,0,0,0.08); }
+body.sidebar-mode-annotations .spec .commentable .comment-btn { display: none !important; }
+body.sidebar-mode-comments .spec .pc-add { display: none !important; }
+body.sidebar-mode-comments .spec .rh-marker { display: none !important; }
 
 .spec table { width: 100%; border-collapse: collapse; margin: 1rem 0; font-size: 0.875rem; }
 .spec th { background: var(--cp-surface-soft); padding: 8px 12px; text-align: left; font-weight: 600; border: 1px solid var(--cp-border); }
 .spec td { padding: 8px 12px; border: 1px solid var(--cp-border); }
 .spec tr:nth-child(even) td { background: var(--cp-surface-soft); }
 .spec code { background: var(--cp-surface-soft); padding: 1px 5px; border-radius: 4px; font-family: Consolas, "Courier New", monospace; font-size: 13px; border: 1px solid var(--cp-border); }
-.spec pre { background: #1e1e1e; color: #d4d4d4; padding: 16px; border-radius: 10px; overflow-x: auto; margin: 1rem 0; }
+.spec pre { background: var(--cp-code-bg); color: var(--cp-code-fg); border: 1px solid var(--cp-border); padding: 16px; border-radius: 10px; overflow-x: auto; margin: 1rem 0; }
 .spec pre code { background: none; padding: 0; color: inherit; border: none; font-size: 13px; }
 .spec ul, .spec ol { padding-left: 1.5rem; margin-bottom: 0.75rem; }
 .spec li { margin-bottom: 0.2rem; line-height: 1.6; }
@@ -4190,7 +4244,10 @@ body.branch-mode .spec { background: transparent; border: none; box-shadow: none
 /* Item 9: cap a thread's comment list so a long thread doesn't push the last
    reply + reply box off-screen — older comments scroll internally; the latest
    comment stays visible. Scrollbar only appears when the list exceeds the cap. */
-.thread-comments { max-height: 42vh; overflow-y: auto; overflow-x: hidden; }
+.thread-comments { max-height: 42vh; overflow-y: auto; overflow-x: hidden; resize: vertical; }
+/* Dragging the resize handle writes an inline height — once the user has
+   resized, lift the 42vh cap so the list can GROW past it, not only shrink. */
+.thread-comments[style*="height"] { max-height: none; }
 .comment-thread:hover { box-shadow: 0 4px 16px rgba(0,0,0,0.08); }
 .thread-active { border-left: 3px solid var(--cp-accent); }
 .thread-resolved { border-left: 3px solid var(--cp-success); opacity: 0.7; }
@@ -4201,6 +4258,15 @@ body.branch-mode .spec { background: transparent; border: none; box-shadow: none
 .resolved-summary::before { content: '▸ '; }
 details[open] .resolved-summary::before { content: '▾ '; }
 .comment-anchor { font-size: 11px; color: var(--cp-accent); margin-bottom: 8px; font-weight: 500; }
+/* Per-comment expand/collapse (state persisted per PR+file in localStorage). */
+.thread-head { display: flex; align-items: flex-start; gap: 6px; }
+.thread-head .comment-anchor { flex: 1 1 auto; min-width: 0; }
+.thread-collapse-btn { flex-shrink: 0; width: 18px; height: 18px; line-height: 1; padding: 0; border: none; background: none; color: var(--cp-text-muted); cursor: pointer; font-size: 12px; border-radius: 4px; transition: transform 0.12s, color 0.12s, background 0.12s; }
+.thread-collapse-btn:hover { color: var(--cp-text); background: var(--cp-surface-soft); }
+.comment-thread.thread-collapsed .thread-collapse-btn { transform: rotate(-90deg); }
+.comment-thread.thread-collapsed .thread-body { display: none; }
+.comment-thread.thread-collapsed .comment-anchor { margin-bottom: 0; }
+.resolved-check { font-weight: 600; }
 .comment-reply { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--cp-border); }
 .comment-meta { display: flex; gap: 8px; align-items: center; margin-bottom: 4px; }
 .comment-author { font-weight: 600; font-size: 12px; color: var(--cp-text); }
@@ -4260,9 +4326,10 @@ details[open] .resolved-summary::before { content: '▾ '; }
 .rh-thread.rh-expanded .rh-summary { display: none; }
 .rh-full { display: none; margin-top: 6px; }
 .rh-thread.rh-expanded .rh-full { display: block; }
+.rh-thread.rh-expanded:not(.pc-card) .rh-full { max-height: 55vh; overflow-y: auto; }
 .pc-card .rh-summary { display: none; }
 .pc-card .rh-full { display: block; }
-.pc-card .pc-view .rh-body { max-height: calc(100vh - 160px); overflow-y: auto; }
+.pc-card .pc-view .rh-body { max-height: calc(100vh - 160px); overflow-y: auto; resize: vertical; }
 .pc-replies { margin-top: 8px; border-top: 1px dashed var(--cp-border); padding-top: 6px; }
 .pc-reply { margin-top: 6px; padding-left: 8px; border-left: 2px solid var(--cp-accent); }
 .pc-reply-meta { font-size: 10px; font-weight: 700; color: var(--cp-accent); margin-bottom: 2px; }
@@ -4322,8 +4389,8 @@ body.show-markers .rh-marker { display: inline-flex; }
 .review-btn { padding: 10px 28px; font-size: 14px; font-weight: 700; border-radius: 8px; border: none; cursor: pointer; transition: all 0.15s; font-family: inherit; }
 .review-btn-approve { background: var(--cp-success); color: #fff; }
 .review-btn-approve:hover { opacity: 0.9; }
-.review-btn-changes { background: transparent; color: var(--cp-danger); border: 1.5px solid var(--cp-danger); }
-.review-btn-changes:hover { background: var(--cp-danger); color: #fff; }
+.review-btn-changes { background: transparent; color: var(--cp-text); border: 1.5px solid var(--cp-border-strong); }
+.review-btn-changes:hover { background: var(--cp-surface-soft); color: var(--cp-text); }
 
 /* Sync status bar */
 .sync-bar { display: none; height: 36px; align-items: center; justify-content: center; gap: 10px; background: var(--cp-surface-soft); border-top: 1px solid var(--cp-border); font-size: 12px; color: var(--cp-text-muted); flex-shrink: 0; }
@@ -4406,7 +4473,7 @@ body.show-markers .rh-marker { display: inline-flex; }
   if (window.matchMedia('(prefers-color-scheme: dark)').matches) document.documentElement.dataset.theme = 'dark';
 <\/script>
 </head>
-<body class="${ctx ? "branch-mode" : ""}" style="display:flex;flex-direction:column;">
+<body class="${ctx ? "branch-mode" : ""}${dualMode ? " sidebar-mode-comments" : ""}" style="display:flex;flex-direction:column;">
 ${ctx ? renderCrumbBar([{ label: "Home", href: "/discovery" }, { label: ctx.backLabel || "Branch", href: ctx.backHref || "/discovery" }, { label: _clipName(specPath) }], { right: headerActions }) : renderCrumbBar([{ label: "Home", href: "/discovery" }, { label: `PR #${prId}`, href: "/" }, { label: _clipName(changedFiles[currentFileIndex]?.path || specPath) }], { right: headerActions })}
 
 <div class="spec-head">
@@ -4423,7 +4490,7 @@ ${ctx ? renderCrumbBar([{ label: "Home", href: "/discovery" }, { label: ctx.back
     <div class="sidebar-left-scroll">
       <div class="tp-pane-head"><span class="sidebar-section-label">Contents</span><button type="button" class="tp-collapse-btn" onclick="tpPaneCollapse('left')" title="Collapse" aria-label="Collapse contents">«</button></div>
       ${tocHtml}
-      ${ctx ? "" : `<div class="sidebar-section-label" style="margin-top:24px;">Files in PR</div>
+      ${ctx ? "" : `<div class="sidebar-section-label sidebar-section-label-sub">Files in PR</div>
       ${filesNavHtml}`}
     </div>
     <button type="button" class="tp-rail" onclick="tpPaneCollapse('left')" title="Expand contents" aria-label="Expand contents"><span>»</span><span class="tp-rail-label">Contents</span></button>
@@ -4466,7 +4533,7 @@ ${ctx ? renderCrumbBar([{ label: "Home", href: "/discovery" }, { label: ctx.back
       <span class="fmt-group">
         <button class="fmt-btn" id="fmtLink" title="Link (⌘K)" aria-label="Insert link" tabindex="-1">🔗</button>
         <button class="fmt-btn" id="fmtImage" title="Image" aria-label="Insert image" tabindex="-1">🖼</button>
-        ${ctx && ctx.pc ? '<button class="fmt-btn" id="fmtComment" title="Add annotation at cursor" aria-label="Add annotation at cursor" tabindex="-1">💬</button>' : ""}
+        ${pcCtx ? '<button class="fmt-btn" id="fmtComment" title="Add annotation at cursor" aria-label="Add annotation at cursor" tabindex="-1">💬</button>' : ""}
       </span>
       <span class="fmt-sep" role="separator"></span>
       <span class="fmt-group">
@@ -4484,13 +4551,22 @@ ${ctx ? renderCrumbBar([{ label: "Home", href: "/discovery" }, { label: ctx.back
 
   <div class="resize-handle" id="resizeRight"></div>
 
-  <aside class="sidebar-right${ctx && ctx.pc ? " pc-margin" : ""}" id="sidebarRight">
-    <div class="tp-pane-head"><button type="button" class="tp-collapse-btn" onclick="tpPaneCollapse('right')" title="Collapse" aria-label="Collapse comments">»</button><span class="sidebar-section-label">${ctx && ctx.pc ? "Annotations" : `Comments <span class="comment-count-badge">${activeThreads.length} active</span>`}</span></div>
-    ${ctx && ctx.pc
-      ? `<div class="pc-margin-body" id="pcMarginBody"><div class="ro-empty">No annotations yet.</div></div>`
-      : `<div class="kbd-hint"><kbd>J</kbd>/<kbd>K</kbd> next/prev · <kbd>R</kbd> reply · <kbd>S</kbd> skip · <kbd>⌘↵</kbd> post &amp; next</div>
-    ${threadsHtml}`}
-    <button type="button" class="tp-rail" onclick="tpPaneCollapse('right')" title="Expand comments" aria-label="Expand comments"><span>«</span><span class="tp-rail-label">${ctx && ctx.pc ? "Annotations" : "Comments"}</span></button>
+  <aside class="sidebar-right${pcCtx && !dualMode ? " pc-margin" : ""}" id="sidebarRight">
+    <div class="tp-pane-head"><button type="button" class="tp-collapse-btn" onclick="tpPaneCollapse('right')" title="Collapse" aria-label="Collapse comments">»</button>${dualMode
+      ? `<div class="sidebar-mode-toggle" role="tablist" aria-label="Sidebar view">
+        <button type="button" class="sidebar-mode-btn active" id="sidebarModeComments" role="tab" aria-selected="true" onclick="setSidebarMode('comments')">Comments <span class="comment-count-badge">${activeThreads.length} active</span></button>
+        <button type="button" class="sidebar-mode-btn" id="sidebarModeAnnotations" role="tab" aria-selected="false" onclick="setSidebarMode('annotations')">Annotations</button>
+      </div>`
+      : `<span class="sidebar-section-label">${pcCtx ? "Annotations" : `Comments <span class="comment-count-badge">${activeThreads.length} active</span>`}</span>`}</div>
+    ${dualMode
+      ? `<div id="sidebarComments"><div class="kbd-hint"><kbd>J</kbd>/<kbd>K</kbd> next/prev · <kbd>R</kbd> reply · <kbd>S</kbd> skip · <kbd>⌘↵</kbd> post &amp; next</div>
+    ${threadsHtml}</div>
+    <div id="sidebarAnnotations" style="display:none"><div class="pc-margin-body" id="pcMarginBody"><div class="ro-empty">No annotations yet.</div></div></div>`
+      : (pcCtx
+        ? `<div class="pc-margin-body" id="pcMarginBody"><div class="ro-empty">No annotations yet.</div></div>`
+        : `<div class="kbd-hint"><kbd>J</kbd>/<kbd>K</kbd> next/prev · <kbd>R</kbd> reply · <kbd>S</kbd> skip · <kbd>⌘↵</kbd> post &amp; next</div>
+    ${threadsHtml}`)}
+    <button type="button" class="tp-rail" onclick="tpPaneCollapse('right')" title="Expand comments" aria-label="Expand comments"><span>«</span><span class="tp-rail-label" id="sidebarRailLabel">${pcCtx && !dualMode ? "Annotations" : "Comments"}</span></button>
   </aside>
 </div>
 
@@ -4568,8 +4644,10 @@ window.tippani = (function () {
   // source the original/proposed from the client buffer (stateless preview).
   const BRANCH = ${jsonForScript(ctx && ctx.save ? ctx.save : null)};
   window.__BRANCH = BRANCH;
-  // Personal Comments payload (branch mode). Null for PRs → the PR threads pane stays.
-  window.__PC = ${jsonForScript(ctx && ctx.pc ? ctx.pc : null)};
+  // Personal Comments payload: branch mode (ctx.pc) or a real PR page that also
+  // offers annotations (reviewPc). BRANCH stays null for real PRs either way, so
+  // existing PR-only behavior (no BRANCH) is unaffected.
+  window.__PC = ${jsonForScript(pcCtx)};
   const ORIG_TITLE = document.title;
   let editor = null;
   let editMode = false;
@@ -5043,6 +5121,7 @@ window.tippani = (function () {
 </script>
 <script>
 const SPEC_PATH = ${jsonForScript(specPath)};
+const PR_ID = ${jsonForScript(prId)};
 const CURRENT_FILE_INDEX = ${jsonForScript(currentFileIndex)};
 const SOURCE_MAP = ${jsonForScript(sourceMap)};
 const TOC_DATA = ${jsonForScript(toc)};
@@ -5104,7 +5183,11 @@ document.querySelectorAll(commentableSelector).forEach((el, i) => {
   el.style.position = 'relative';
   el.dataset.blockIdx = blockIdx;
   commentableEls.push(el);
-  if (PC_MODE) { el.classList.add('ro-commentable'); return; }
+  if (PC_MODE) el.classList.add('ro-commentable');
+  // Branch/file-editor mode (window.__BRANCH set) is annotations-only — no PR
+  // comment affordance. A real PR page keeps the "+" button even when personal
+  // annotations are also available, toggled via the Comments/Annotations switch.
+  if (PC_MODE && window.__BRANCH) return;
   el.classList.add('commentable');
   const btn = document.createElement('button');
   btn.className = 'comment-btn';
@@ -5552,58 +5635,86 @@ if (PC_MODE && window.__PC) (function () {
   pcLoad();
 })();
 
-// Place inline comment bubbles on content blocks that have threads
-THREADS_DATA.forEach(td => {
-  if (!td.line) return;
-  const threadEl = document.querySelector('.comment-thread[data-thread-id="' + td.id + '"]');
-  const header = threadEl ? (threadEl.querySelector('.comment-anchor') || threadEl) : null;
+// Collect the outermost commentable blocks under 'container' in document
+// order, skipping a match already covered by an ancestor match (e.g. a 'pre'
+// nested inside a 'blockquote') — mirrors the dedup commentableEls applies via
+// its '.commentable'/'.ro-commentable' class check, without needing to mark up
+// content that isn't the primary #spec-content (e.g. a Proposed-view render).
+function collectCommentableBlocks(container) {
+  const blocks = [];
+  container.querySelectorAll(commentableSelector).forEach((el) => {
+    if (blocks.some((b) => b.contains(el))) return;
+    blocks.push(el);
+  });
+  return blocks;
+}
 
-  // Thread on another file: header navigates to that file (and focuses the thread).
-  const sameFile = !td.file || !SPEC_PATH || td.file === SPEC_PATH;
-  if (!sameFile) {
-    if (header) {
-      header.style.cursor = 'pointer';
-      header.title = 'Open this file and thread';
-      header.addEventListener('click', () => { location.href = '/goto/thread/' + td.id; });
+// Place inline comment bubbles for every reviewer thread onto 'blocks', using
+// 'rangeMap' (a SOURCE_MAP-shaped {blockIdx: {startLine,endLine}}) to find each
+// thread's target block. Reusable so the bubbles can be re-placed against the
+// Proposed view's own freshly-rendered blocks/ranges (#spec-current), not just
+// the initially-rendered #spec-content — otherwise Proposed view shows no
+// reviewer-comment anchors at all, since the initial placement's bubbles are
+// children of #spec-content, which stays hidden while Proposed is active.
+function placeInlineBubbles(blocks, rangeMap) {
+  THREADS_DATA.forEach(td => {
+    if (!td.line) return;
+    const threadEl = document.querySelector('.comment-thread[data-thread-id="' + td.id + '"]');
+    const header = threadEl ? (threadEl.querySelector('.comment-anchor') || threadEl) : null;
+
+    // Thread on another file: header navigates to that file (and focuses the thread).
+    const sameFile = !td.file || !SPEC_PATH || td.file === SPEC_PATH;
+    if (!sameFile) {
+      if (header && !header._inlineBubbleWired) {
+        header._inlineBubbleWired = true;
+        header.style.cursor = 'pointer';
+        header.title = 'Open this file and thread';
+        header.addEventListener('click', () => { location.href = '/goto/thread/' + td.id; });
+      }
+      return;
     }
-    return;
-  }
 
-  // Find the commentable block whose source-map range contains this line; if the
-  // exact line isn't inside a block (e.g. a heading or blank line), fall back to
-  // the nearest block so the thread still scrolls somewhere sensible.
-  let targetEl = null, bestKey = null, bestDist = Infinity;
-  for (const key of Object.keys(SOURCE_MAP)) {
-    const sm = SOURCE_MAP[key];
-    if (td.line >= sm.startLine && td.line <= sm.endLine) { targetEl = commentableEls[parseInt(key)]; break; }
-    const dist = td.line < sm.startLine ? sm.startLine - td.line : td.line - sm.endLine;
-    if (dist < bestDist) { bestDist = dist; bestKey = key; }
-  }
-  if (!targetEl && bestKey != null) targetEl = commentableEls[parseInt(bestKey)];
-  if (!targetEl) return;
-  const bubble = document.createElement('button');
-  bubble.className = 'inline-bubble ' + (td.resolved ? 'inline-bubble-resolved' : 'inline-bubble-active');
-  bubble.textContent = td.count;
-  bubble.title = (td.resolved ? 'Resolved' : 'Active') + ' — ' + td.count + ' comment' + (td.count > 1 ? 's' : '');
-  bubble.setAttribute('aria-label', (td.resolved ? 'Resolved' : 'Active') + ' thread, ' + td.count + ' comment' + (td.count > 1 ? 's' : ''));
-  bubble.addEventListener('click', (e) => {
-    e.stopPropagation();
-    if (threadEl) {
-      threadEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
-      threadEl.style.boxShadow = '0 0 0 2px ' + (td.resolved ? 'var(--cp-success)' : 'var(--cp-accent)');
-      setTimeout(() => threadEl.style.boxShadow = '', 2000);
+    // Find the commentable block whose source-map range contains this line; if the
+    // exact line isn't inside a block (e.g. a heading or blank line), fall back to
+    // the nearest block so the thread still scrolls somewhere sensible.
+    let targetEl = null, bestKey = null, bestDist = Infinity;
+    for (const key of Object.keys(rangeMap)) {
+      const sm = rangeMap[key];
+      if (td.line >= sm.startLine && td.line <= sm.endLine) { targetEl = blocks[parseInt(key)]; break; }
+      const dist = td.line < sm.startLine ? sm.startLine - td.line : td.line - sm.endLine;
+      if (dist < bestDist) { bestDist = dist; bestKey = key; }
+    }
+    if (!targetEl && bestKey != null) targetEl = blocks[parseInt(bestKey)];
+    if (!targetEl) return;
+    const bubble = document.createElement('button');
+    bubble.className = 'inline-bubble ' + (td.resolved ? 'inline-bubble-resolved' : 'inline-bubble-active');
+    bubble.setAttribute('data-thread-id', td.id);
+    bubble.textContent = td.count;
+    bubble.title = (td.resolved ? 'Resolved' : 'Active') + ' — ' + td.count + ' comment' + (td.count > 1 ? 's' : '');
+    bubble.setAttribute('aria-label', (td.resolved ? 'Resolved' : 'Active') + ' thread, ' + td.count + ' comment' + (td.count > 1 ? 's' : ''));
+    bubble.addEventListener('click', (e) => {
+      e.stopPropagation();
+      if (threadEl) {
+        threadEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        threadEl.style.boxShadow = '0 0 0 2px ' + (td.resolved ? 'var(--cp-success)' : 'var(--cp-accent)');
+        setTimeout(() => threadEl.style.boxShadow = '', 2000);
+      }
+    });
+    targetEl.appendChild(bubble);
+
+    // Reverse direction: clicking the thread header scrolls the document to the
+    // corresponding content block and flashes it. Wired once — the header lives
+    // in the persistent sidebar, not the swapped view content, so a later
+    // re-placement (e.g. entering Proposed view) must not double-wire it.
+    if (header && !header._inlineBubbleWired) {
+      header._inlineBubbleWired = true;
+      header.style.cursor = 'pointer';
+      header.title = 'Jump to this location in the document';
+      header.addEventListener('click', () => { scrollDocToThread(td.id); });
     }
   });
-  targetEl.appendChild(bubble);
-
-  // Reverse direction: clicking the thread header scrolls the document to the
-  // corresponding content block and flashes it.
-  if (header) {
-    header.style.cursor = 'pointer';
-    header.title = 'Jump to this location in the document';
-    header.addEventListener('click', () => { scrollDocToThread(td.id); });
-  }
-});
+}
+placeInlineBubbles(commentableEls, SOURCE_MAP);
 
 // GitHub-style diff overlay for a staged spec edit: for each change hunk, hide
 // the affected rendered block and show a red "Current" box + green "Proposed"
@@ -5776,7 +5887,14 @@ async function applyView(view) {
         const r = await fetch('/api/v1/specs/' + CURRENT_FILE_INDEX + '/render?draft=1');
         if (r.ok) d = await r.json();
       }
-      if (d && current) { current.innerHTML = d.html || ''; if (window.tippaniRenderMermaid) window.tippaniRenderMermaid(current); }
+      if (d && current) {
+        current.innerHTML = d.html || '';
+        if (window.tippaniRenderMermaid) window.tippaniRenderMermaid(current);
+        // Re-anchor reviewer comment bubbles onto the Proposed content's own
+        // blocks/ranges — the initial placement's bubbles live on #spec-content,
+        // which is now hidden, so without this Proposed view shows none at all.
+        placeInlineBubbles(collectCommentableBlocks(current), d.ranges || {});
+      }
     } catch {}
     if (!editing) { if (content) content.style.display = 'none'; if (current) current.style.display = ''; }
   } else {
@@ -5836,6 +5954,33 @@ function tpPaneCollapse(side) {
   const on = layout.classList.toggle(cls);
   try { localStorage.setItem('tp-pane-' + side + '-collapsed', on ? '1' : '0'); } catch {}
 }
+
+// Comments/Annotations toggle for a real PR page that also has personal
+// annotations available (dualMode — see buildSpecPage). Switches which panel
+// is visible in the right sidebar and which per-block affordance is active.
+function setSidebarMode(mode) {
+  const aside = document.getElementById('sidebarRight');
+  const commentsPane = document.getElementById('sidebarComments');
+  const annotationsPane = document.getElementById('sidebarAnnotations');
+  if (!aside || !commentsPane || !annotationsPane) return;
+  const toAnnotations = mode === 'annotations';
+  aside.classList.toggle('pc-margin', toAnnotations);
+  commentsPane.style.display = toAnnotations ? 'none' : '';
+  annotationsPane.style.display = toAnnotations ? '' : 'none';
+  document.body.classList.toggle('sidebar-mode-annotations', toAnnotations);
+  document.body.classList.toggle('sidebar-mode-comments', !toAnnotations);
+  const commentsBtn = document.getElementById('sidebarModeComments');
+  const annotationsBtn = document.getElementById('sidebarModeAnnotations');
+  if (commentsBtn) { commentsBtn.classList.toggle('active', !toAnnotations); commentsBtn.setAttribute('aria-selected', toAnnotations ? 'false' : 'true'); }
+  if (annotationsBtn) { annotationsBtn.classList.toggle('active', toAnnotations); annotationsBtn.setAttribute('aria-selected', toAnnotations ? 'true' : 'false'); }
+  const rail = document.getElementById('sidebarRailLabel'); if (rail) rail.textContent = toAnnotations ? 'Annotations' : 'Comments';
+  try { localStorage.setItem('tp-sidebar-mode', mode); } catch {}
+  if (toAnnotations && typeof window.__tpPcRelayout === 'function') window.__tpPcRelayout();
+}
+(function () {
+  if (!document.getElementById('sidebarModeAnnotations')) return; // not dualMode
+  try { const saved = localStorage.getItem('tp-sidebar-mode'); if (saved === 'annotations') setSidebarMode('annotations'); } catch {}
+})();
 (function () {
   const layout = document.getElementById('layout');
   if (!layout) return;
@@ -5937,20 +6082,76 @@ function _getActiveThreadIds() {
 }
 
 function focusThread(threadId, { scroll = true } = {}) {
-  const ids = _getActiveThreadIds();
-  if (!ids.includes(threadId)) return false;
-  document.querySelectorAll('.comment-thread.thread-focused')
-    .forEach(el => el.classList.remove('thread-focused'));
+  // Look up by element so a RESOLVED thread can be focused/navigated too.
+  // _getActiveThreadIds() is J/K-navigation only and must NOT gate focus, or
+  // MCP navigation and clicking a resolved comment would silently no-op.
   const el = document.querySelector('.comment-thread[data-thread-id="' + threadId + '"]');
   if (!el) return false;
+  document.querySelectorAll('.comment-thread.thread-focused')
+    .forEach(e => e.classList.remove('thread-focused'));
   el.classList.add('thread-focused');
-  if (scroll) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  // Reveal a collapsed thread when it's focused so a selected/navigated comment
+  // is readable (transient — not persisted, so a reload restores the saved state).
+  if (el.classList.contains('thread-collapsed')) {
+    el.classList.remove('thread-collapsed');
+    const cbtn = el.querySelector('.thread-collapse-btn');
+    if (cbtn) cbtn.setAttribute('aria-expanded', 'true');
+  }
+  if (scroll) scrollSidebarThreadToTop(el);
   if (scroll && typeof scrollDocToThread === 'function') scrollDocToThread(threadId);
   _focusedThreadId = threadId;
   if (typeof updateDiffMarkers === 'function') updateDiffMarkers();
   if (typeof highlightSectionForThread === 'function') highlightSectionForThread(threadId);
   return true;
 }
+
+// Scroll the right sidebar so the selected comment sits at the TOP of the pane
+// (not centered). getBoundingClientRect delta works regardless of card nesting.
+function scrollSidebarThreadToTop(el) {
+  const pane = document.getElementById('sidebarRight');
+  if (!pane || !el) { if (el && el.scrollIntoView) el.scrollIntoView({ behavior: 'smooth', block: 'start' }); return; }
+  const delta = el.getBoundingClientRect().top - pane.getBoundingClientRect().top;
+  pane.scrollTo({ top: Math.max(0, pane.scrollTop + delta - 12), behavior: 'smooth' });
+}
+
+// --- Per-comment expand/collapse, persisted per PR + file ---------------------
+// Stored map is { [threadId]: collapsed(bool) } — an explicit user choice that
+// overrides the default (resolved threads start collapsed, active expanded).
+const THREAD_COLLAPSE_KEY = 'tippani.threadCollapse:' + PR_ID + ':' + (SPEC_PATH || '');
+function loadThreadCollapse() {
+  try { return JSON.parse(localStorage.getItem(THREAD_COLLAPSE_KEY)) || {}; } catch (e) { return {}; }
+}
+function saveThreadCollapse(map) {
+  try { localStorage.setItem(THREAD_COLLAPSE_KEY, JSON.stringify(map)); } catch (e) {}
+}
+function threadDefaultCollapsed(id) {
+  const td = THREADS_DATA.find((t) => Number(t.id) === Number(id));
+  return !!(td && td.resolved);
+}
+function setThreadCollapsed(el, collapsed) {
+  el.classList.toggle('thread-collapsed', collapsed);
+  const btn = el.querySelector('.thread-collapse-btn');
+  if (btn) btn.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
+}
+function applyThreadCollapse() {
+  const map = loadThreadCollapse();
+  document.querySelectorAll('.comment-thread').forEach((el) => {
+    const id = Number(el.getAttribute('data-thread-id'));
+    const collapsed = Object.prototype.hasOwnProperty.call(map, id) ? !!map[id] : threadDefaultCollapsed(id);
+    setThreadCollapsed(el, collapsed);
+  });
+}
+function toggleThreadCollapse(e, id) {
+  if (e) { e.stopPropagation(); e.preventDefault(); }
+  const el = document.querySelector('.comment-thread[data-thread-id="' + id + '"]');
+  if (!el) return;
+  const collapsed = !el.classList.contains('thread-collapsed');
+  setThreadCollapsed(el, collapsed);
+  const map = loadThreadCollapse();
+  map[id] = collapsed;
+  saveThreadCollapse(map);
+}
+applyThreadCollapse();
 
 // Item 8: click a thread card (but not its buttons/textarea/links) to focus it —
 // Bordeaux border on the thread + its source section, and scroll the doc there.
@@ -6130,6 +6331,7 @@ document.addEventListener('keydown', (e) => {
 (function() {
   let lastVersion = -1;
   let lastViewSeq = -1;
+  let lastLineSeq = null;   // baselined on first poll so a stale go_to_line doesn't yank a fresh open
   let lastSpecDraftKey = null;
   const seenDraftKey = (id, d) => id + ':' + (d ? d.updatedAt : '0');
   const lastDraftSeen = new Map();
@@ -6239,6 +6441,12 @@ document.addEventListener('keydown', (e) => {
           }
         }
       }
+      // go_to_line: scroll THIS open file to a source line (same-page, no reopen).
+      // Baseline on the first poll so a stale command doesn't scroll on load.
+      if (typeof s.lineSeq === 'number') {
+        if (lastLineSeq === null) lastLineSeq = s.lineSeq;
+        else if (s.lineSeq > lastLineSeq) { lastLineSeq = s.lineSeq; try { scrollToLine(s.line); } catch {} }
+      }
     } catch {}
   }
   setInterval(poll, 1500);
@@ -6283,6 +6491,10 @@ document.addEventListener('keydown', (e) => {
 })();
 
 async function resolveThread(threadId) {
+  const el = document.querySelector('.comment-thread[data-thread-id="' + threadId + '"]');
+  const btn = el ? el.querySelector('.btn-thread-resolve') : null;
+  const prevLabel = btn ? btn.textContent : '';
+  if (btn) { btn.disabled = true; btn.textContent = 'Resolving\u2026'; }
   try {
     const res = await fetch('/api/resolve', {
       method: 'POST',
@@ -6293,10 +6505,39 @@ async function resolveThread(threadId) {
     const result = await res.json();
     showToast(result.synced ? 'Thread resolved' : 'Resolve queued \u2014 pending sync');
     updateSyncStatus();
-    setTimeout(() => location.reload(), 500);
+    // In-place: flip status + color only, keep the card expanded and in position
+    // so the pane never jumps. No reload (which would collapse + re-lay-out).
+    markThreadResolvedInPlace(threadId);
   } catch (e) {
+    if (btn) { btn.disabled = false; btn.textContent = prevLabel; }
     showToast('Failed to resolve');
   }
+}
+
+// Flip a thread to resolved WITHOUT reloading: swap the status class (recolors
+// via .thread-resolved CSS), prefix the anchor with a checkmark, and disable the
+// Resolve button. Position, expand state, and comment content are untouched.
+function markThreadResolvedInPlace(threadId) {
+  const el = document.querySelector('.comment-thread[data-thread-id="' + threadId + '"]');
+  if (!el) return;
+  el.classList.remove('thread-active');
+  el.classList.add('thread-resolved');
+  const anchor = el.querySelector('.comment-anchor');
+  if (anchor && !anchor.querySelector('.resolved-check')) {
+    const chk = document.createElement('span');
+    chk.className = 'resolved-check';
+    chk.textContent = '\u2713 ';
+    anchor.insertBefore(chk, anchor.firstChild);
+  }
+  const btn = el.querySelector('.btn-thread-resolve');
+  if (btn) { btn.disabled = true; btn.textContent = '\u2713 Resolved'; }
+  const td = THREADS_DATA.find((t) => Number(t.id) === Number(threadId));
+  if (td) td.resolved = true;
+  // ALL matching bubbles: the initial placement lives in #spec-content and a
+  // Proposed-view re-placement in #spec-current — the visible one may be either.
+  document.querySelectorAll('.inline-bubble[data-thread-id="' + threadId + '"]').forEach((bubble) => {
+    bubble.classList.remove('inline-bubble-active'); bubble.classList.add('inline-bubble-resolved');
+  });
 }
 
 async function submitReview(type) {
@@ -7394,6 +7635,17 @@ async function main() {
     res.type("html").send(buildPickerPage(_pr, _changedFiles, _cache?.threads || []));
   });
 
+  // Terminal "closed" page. close_tippani steers the open tab here (via
+  // /api/v1/nav) just before the portal process is stopped, so the browser lands
+  // on a clear closed state instead of a dead-connection error. window.close()
+  // only works for script-opened tabs; otherwise the message stands.
+  app.get("/closed", (_req, res) => {
+    res.type("html").send(`<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><title>Tippani \u2014 closed</title>
+<style>html,body{height:100%;margin:0}body{display:flex;align-items:center;justify-content:center;font-family:"Segoe UI",system-ui,sans-serif;background:#1a1a1a;color:#e8e8e8}.box{text-align:center;max-width:360px;padding:24px}.t{font-size:18px;font-weight:600;margin-bottom:6px}.s{font-size:13px;color:#9a9a9a;line-height:1.6}</style>
+</head><body><div class="box"><div class="t">Tippani closed</div><div class="s">The review portal has shut down. You can close this tab.</div></div>
+<script>try{window.close();}catch(e){}</script></body></html>`);
+  });
+
   // Discovery re-drive: bind a PR into this (browse) portal at runtime and jump
   // to its spec view — the review-queue cards point here so a PR opens INSIDE
   // Tippani instead of bouncing to ADO. Re-binding a different PR just swaps the
@@ -7609,7 +7861,7 @@ async function main() {
       res.type("html").send(buildReadonlySpecPage({ title, bodyHtml, toc, specPath, repo: repoName, adoUrl, backHref, backLabel, historyUrl, sourceMap: ranges, reviewing, editMode, commentCount, reviewRepo: repoId, reviewBranch: branch, reviewPath: specPath, currentUser: me?.displayName || "You", personalComments, pcDataSeq }));
     } catch (e) {
       console.error(`/spec read-only failed for ${specPath}:`, e.message);
-      res.status(502).send("Could not open the spec. Check the server console.");
+      res.status(502).type("html").send(errorPage({ title: "Couldn't open the spec", message: "Check the server console for details.", backHref: "/", backLabel: "Back to files" }));
     }
   });
 
@@ -7805,21 +8057,19 @@ async function main() {
       // working tree on disk. No ADO.
       const localPath = String(req.query.local || "").trim();
       if (localPath) {
-        const specPathL = String(req.query.spec || "").trim();
-        if (!specPathL) return res.status(404).end();
-        const resolvedL = resolveImagePath(specPathL, req.query.src);
-        if (!resolvedL) return res.status(404).end();
-        const rel = String(resolvedL).replace(/^\/+/, "");
-        if (!rel || rel.includes("\0") || /(^|[\\/])\.\.([\\/]|$)/.test(rel)) return res.status(404).end();
-        const typeL = imageContentType(rel);
-        if (!typeL) return res.status(404).end();
-        const v = validateLocalRepo(localPath);
-        if (!v.ok) return res.status(404).end();
+        const cls = classifyLocalMedia(
+          { local: localPath, spec: req.query.spec, src: req.query.src },
+          { isContained });
+        if (!cls.ok) return res.status(404).end();
         let buf;
-        try { buf = fs.readFileSync(path.join(String(localPath).trim(), rel)); } catch { return res.status(404).end(); }
+        try { buf = fs.readFileSync(cls.abs); } catch { return res.status(404).end(); }
         if (!buf || buf.length === 0) return res.status(404).end();
         if (isLfsPointer(buf)) return res.status(502).end();
-        return res.set("Content-Type", typeL).set(secureImageHeaders()).send(buf);
+        // Local working-tree files change while a doc is being reviewed, so they
+        // must never be cached (the shared header's max-age would serve stale
+        // bytes after an edit). Override to no-store; keep the security headers.
+        return res.set("Content-Type", cls.type).set(secureImageHeaders())
+                  .set("Cache-Control", "no-store").send(buf);
       }
       const repoId = String(req.query.repo || "").trim();
       const specPath = String(req.query.spec || "").trim();
@@ -7928,9 +8178,29 @@ async function main() {
         try { baseObjectId = await getBranchTip(_conn, _branch); } catch { /* non-fatal */ }
       }
       const { map: viewedMap, error: viewedError } = await loadViewedState(_conn, _prId, _isOffline);
-      res.type("html").send(buildSpecPage(specHtml, toc, metadata, _pr, allThreads, filePath, sourceMap, _changedFiles, idx, body, canEdit, baseObjectId, viewedMap, viewedError, !!_pr && !_pr.isDraft));
+
+      // Personal Comments (annotations) — also offered on real PR pages, letting a
+      // reviewer keep private notes alongside official PR threads. Best-effort:
+      // on failure the sidebar just stays Comments-only (no toggle), same as before.
+      // Branch is stored bare (no "refs/heads/" prefix) — same convention as the
+      // branch/file-editor and read-only spec routes — so annotations added while
+      // reviewing a PR are the SAME notes seen when browsing that branch directly.
+      let pcForReview = null;
+      try {
+        const pcBranch = String(_branch || "").replace(/^refs\/heads\//, "");
+        const pcResult = await listPersonalComments({ repo: ADO_REPO, branch: pcBranch, path: filePath, rawText: body, sourceMap });
+        const pcComments = pcResult.comments || [];
+        let pcUser = "You";
+        try { const me = await getMe(); if (me && me.displayName) pcUser = me.displayName; } catch { /* offline → "You" */ }
+        try { _focus.setPcContext({ repo: ADO_REPO, branch: pcBranch, path: filePath }); } catch { /* best-effort */ }
+        let pcDataSeq = 0;
+        try { pcDataSeq = _focus.get().pcDataSeq || 0; } catch { pcDataSeq = 0; }
+        pcForReview = { repo: ADO_REPO, branch: pcBranch, path: filePath, user: pcUser, comments: pcComments, dataSeq: pcDataSeq };
+      } catch { pcForReview = null; }
+
+      res.type("html").send(buildSpecPage(specHtml, toc, metadata, _pr, allThreads, filePath, sourceMap, _changedFiles, idx, body, canEdit, baseObjectId, viewedMap, viewedError, !!_pr && !_pr.isDraft, null, pcForReview));
     } catch (e) {
-      res.status(500).send("Error rendering spec. Check the server console for details.");
+      res.status(500).type("html").send(errorPage({ title: "Couldn't render this file", message: "The spec failed to render. Check the server console for details.", backHref: "/", backLabel: "Back to files" }));
       console.error("Spec render error:", e.message);
     }
   });
@@ -8014,8 +8284,8 @@ async function main() {
       content = raw || "";
     }
     const { body } = stripFrontmatter(content);
-    const { html } = await renderSpecBody(body, specSanitizeSchema, { rewriteImagesForFileIndex: idx });
-    return { html };
+    const { html, ranges } = await renderSpecBody(body, specSanitizeSchema, { rewriteImagesForFileIndex: idx });
+    return { html, ranges };
   }
 
   // Stateless preview of the user's LIVE (uncommitted) editor buffer for the
@@ -8026,10 +8296,10 @@ async function main() {
   async function computeSpecPreview(idx, { original = "", proposed = "" } = {}) {
     const { body: propBody } = stripFrontmatter(String(proposed || ""));
     const { body: origBody } = stripFrontmatter(String(original || ""));
-    const { html } = await renderSpecBody(propBody, specSanitizeSchema, { rewriteImagesForFileIndex: idx });
+    const { html, ranges } = await renderSpecBody(propBody, specSanitizeSchema, { rewriteImagesForFileIndex: idx });
     let hunks = [];
     try { hunks = await computeSpecDiffHunks(origBody, propBody); } catch { hunks = []; }
-    return { html, hunks, source: "user" };
+    return { html, hunks, source: "user", ranges };
   }
 
   // List PRs to review (item 6). Defaults to the authenticated user's active
@@ -8419,7 +8689,10 @@ async function main() {
   }
   function pcCtx(args = {}) {
     const cur = _focus.get().pcContext;
-    return { repo: args.repo || (cur && cur.repo), branch: args.branch || (cur && cur.branch), path: args.path || (cur && cur.path) };
+    // Nullish (not ||) so an explicit empty-string branch — the correct value
+    // for a file:-scheme local file — is preserved rather than coerced to the
+    // (possibly null) fallback, which would point reads at the wrong store key.
+    return { repo: args.repo ?? cur?.repo, branch: args.branch ?? cur?.branch, path: args.path ?? cur?.path };
   }
   async function mcpReadPersonalComments(args = {}) {
     const { repo, branch, path: filePath } = pcCtx(args);
@@ -8600,7 +8873,10 @@ async function main() {
     _focus.setPcContext({ repo: ctx.repo, branch: ctx.branch, path: ctx.path });
     _focus.setPcSelected(null);
     _focus.setNav(p);
-    return { ok: true, opened: p, realpath: real };
+    // Return the annotation addressing so the caller can target this file
+    // explicitly on the annotation tools (a local file is keyed
+    // repo="file:<realpath>", branch="").
+    return { ok: true, opened: p, realpath: real, repo: ctx.repo, branch: ctx.branch, path: ctx.path };
   }
 
   // Discovery branch page: list the markdown files that are UNIQUE to a branch —

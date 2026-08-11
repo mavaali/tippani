@@ -55,7 +55,7 @@ export function createHttpClient({ baseUrl, getBaseUrl, token, getToken, clientN
     get: (p) => req("GET", p),
     post: (p, b) => req("POST", p, b),
     put: (p, b) => req("PUT", p, b),
-    delete: (p) => req("DELETE", p),
+    delete: (p, b) => req("DELETE", p, b),
   };
 }
 
@@ -67,8 +67,18 @@ export function buildTools(http, session) {
     if (session && session.separateTabs && typeof session.openUrl === "function") {
       await session.openUrl(path);
     } else {
-      try { await http.post("/api/v1/nav", { path }); } catch {}
+      await http.post("/api/v1/nav", { path });
     }
+  }
+  // Best-effort variant for tools whose PRIMARY result is fetched data and the
+  // browser steer is a courtesy (list_prs, search_specs, search_work_items): a
+  // failed steer must not discard the successfully-fetched result as a tool
+  // error. Returns {} on success or { navError } to merge into the result.
+  // Tools whose purpose IS navigation (open_thread, open_file, show_feedback,
+  // set_view) keep the strict navigate() so a failed move is reported as one.
+  async function navigateBestEffort(path) {
+    try { await navigate(path); return {}; }
+    catch (e) { return { navError: String(e?.message || e) }; }
   }
   // POST that first keeps the current provider portal live, self-healing a
   // dropped GitHub review instead of silently switching mutations to ADO.
@@ -83,6 +93,10 @@ export function buildTools(http, session) {
   async function ensuredPut(path, body) {
     if (session && typeof session.ensureBrowsePortal === "function") await session.ensureBrowsePortal();
     return http.put(path, body || {});
+  }
+  async function ensuredDelete(path, body) {
+    if (session && typeof session.ensureBrowsePortal === "function") await session.ensureBrowsePortal();
+    return http.delete(path, body || {});
   }
   return [
     {
@@ -187,14 +201,18 @@ export function buildTools(http, session) {
     {
       name: "open_thread",
       description:
-        "Open a specific comment thread in the user's browser — a single-thread view " +
-        "with the comments and a reply box that shows any staged draft. Use to bring the " +
-        "user to a thread you want them to look at, or right after stage_draft so they can " +
-        "review and post your proposed reply.",
+        "Select one comment thread for both the user and yourself. For a file-anchored " +
+        "thread, the browser opens its file and scrolls both the thread pane and file " +
+        "contents to the anchor; a PR-level thread opens its standalone view. Returns the " +
+        "full thread content and any staged draft, so do not follow it with get_thread. " +
+        "Use whenever the user names, selects, or asks to inspect a specific thread, and " +
+        "right after stage_draft so they can review the proposed reply.",
       inputSchema: { threadId: z.number() },
       handler: async ({ threadId }) => {
-        await navigate(`/goto/thread/${threadId}`);
-        return { ok: true, opened: `/goto/thread/${threadId}` };
+        const thread = await http.get(`/api/v1/threads/${threadId}`);
+        const opened = `/goto/thread/${threadId}`;
+        await navigate(opened);
+        return { ok: true, opened, thread };
       },
     },
     {
@@ -265,6 +283,19 @@ export function buildTools(http, session) {
         await navigate(path);
         return { ok: true, opened: path };
       },
+    },
+    {
+      name: "go_to_line",
+      description:
+        "Scroll the file the user ALREADY has open to a 1-based source line, without " +
+        "reopening or switching files. Use for \"scroll to line 130\" / \"jump to that " +
+        "section\" once a file is open (any surface: a PR file, a branch file, or a " +
+        "local file). Read-only same-page scroll — creates no annotation and changes " +
+        "nothing. The open page acts within ~1.5s (it polls).",
+      inputSchema: {
+        line: z.number().int().min(1).describe("1-based source line to scroll to"),
+      },
+      handler: ({ line }) => http.post("/api/v1/commands/go-to-line", { line }),
     },
     {
       name: "get_thread",
@@ -408,8 +439,8 @@ export function buildTools(http, session) {
         if (target) qs.set("target", target);
         if (typeof top === "number") qs.set("top", String(top));
         const data = await http.get("/api/v1/prs" + (qs.toString() ? "?" + qs.toString() : ""));
-        await navigate("/discovery");
-        return data;
+        const nav = await navigateBestEffort("/discovery");
+        return { ...data, ...nav };
       },
     },
     {
@@ -436,8 +467,8 @@ export function buildTools(http, session) {
         const qs = new URLSearchParams({ tab: "workitems" });
         if (typeof wiql === "string") qs.set("wiql", wiql);
         if (project) qs.set("project", project);
-        await navigate("/discovery?" + qs.toString());
-        return data;
+        const nav = await navigateBestEffort("/discovery?" + qs.toString());
+        return { ...data, ...nav };
       },
     },
     {
@@ -471,8 +502,8 @@ export function buildTools(http, session) {
         const qs = new URLSearchParams({ tab: "specs" });
         if (typeof query === "string") qs.set("q", query);
         if (project) qs.set("project", project);
-        await navigate("/discovery?" + qs.toString());
-        return data;
+        const nav = await navigateBestEffort("/discovery?" + qs.toString());
+        return { ...data, ...nav };
       },
     },
     {
@@ -515,19 +546,24 @@ export function buildTools(http, session) {
       name: "read_annotations",
       description:
         "Read ALL annotations on the spec file the user currently has open " +
-        "in the reviewing page (opened from a branch). Returns every annotation " +
-        "(id, anchor line, author, text, resolved) plus which one is selected. " +
-        "Read-only. Optionally target a specific file with repo+branch+path.",
+        "in the reviewing page. Returns every annotation (id, anchor line, " +
+        "author, text, resolved) plus which one is selected. Read-only. " +
+        "Defaults to the open file; to target one explicitly pass repo+branch+path. " +
+        "For a LOCAL file (opened with open_local_file) the addressing is " +
+        "repo=\"file:<absolute path>\", branch=\"\" (empty), path=\"<absolute path>\" " +
+        "\u2014 open_local_file returns exactly these fields, so pass them back verbatim.",
       inputSchema: {
-        repo: z.string().optional().describe("Repo GUID (defaults to the open file)"),
-        branch: z.string().optional().describe("Branch (defaults to the open file)"),
+        repo: z.string().optional().describe("Repo GUID, or file:<absolute path> for a local file (defaults to the open file)"),
+        branch: z.string().optional().describe("Branch; empty string \"\" for a local file (defaults to the open file)"),
         path: z.string().optional().describe("File path (defaults to the open file)"),
       },
       handler: async ({ repo, branch, path }) => {
         if (session && typeof session.ensureBrowsePortal === "function") await session.ensureBrowsePortal();
+        // Keep an explicit empty-string branch (correct for a file: local file);
+        // only drop genuinely-absent (null/undefined) coordinates.
         const q = [["repo", repo], ["branch", branch], ["path", path]]
-          .filter(([, v]) => v).map(([k, v]) => `${k}=${encodeURIComponent(v)}`).join("&");
-        return http.get("/api/v1/personal-comments/all" + (q ? "?" + q : ""));
+          .filter(([, v]) => v != null).map(([k, v]) => `${k}=${encodeURIComponent(v)}`).join("&");
+        return http.get("/api/v1/annotations/all" + (q ? "?" + q : ""));
       },
     },
     {
@@ -541,7 +577,7 @@ export function buildTools(http, session) {
         line: z.number().int().positive().optional().describe("1-based source line to anchor to"),
         repo: z.string().optional(), branch: z.string().optional(), path: z.string().optional(),
       },
-      handler: (args) => ensuredPost("/api/v1/personal-comments/mcp/add", args),
+      handler: (args) => ensuredPost("/api/v1/annotations/mcp/add", args),
     },
     {
       name: "edit_annotation",
@@ -554,7 +590,7 @@ export function buildTools(http, session) {
         id: z.string().optional().describe("Annotation id (defaults to the selected annotation)"),
         repo: z.string().optional(), branch: z.string().optional(), path: z.string().optional(),
       },
-      handler: (args) => ensuredPost("/api/v1/personal-comments/mcp/edit", args),
+      handler: (args) => ensuredPost("/api/v1/annotations/mcp/edit", args),
     },
     {
       name: "delete_annotation",
@@ -562,7 +598,7 @@ export function buildTools(http, session) {
         "Delete an annotation. Defaults to the SELECTED annotation; pass id to " +
         "target a specific one.",
       inputSchema: { id: z.string().optional().describe("Annotation id (defaults to the selected annotation)"), repo: z.string().optional(), branch: z.string().optional(), path: z.string().optional() },
-      handler: (args) => ensuredPost("/api/v1/personal-comments/mcp/delete", args),
+      handler: (args) => ensuredPost("/api/v1/annotations/mcp/delete", args),
     },
     {
       name: "reply_annotation",
@@ -577,7 +613,7 @@ export function buildTools(http, session) {
       },
       handler: async (args) => {
         if (session && typeof session.ensureBrowsePortal === "function") await session.ensureBrowsePortal();
-        return http.post("/api/v1/personal-comments/mcp/reply", args);
+        return http.post("/api/v1/annotations/mcp/reply", args);
       },
     },
     {
@@ -596,7 +632,7 @@ export function buildTools(http, session) {
       },
       handler: async (args) => {
         if (session && typeof session.ensureBrowsePortal === "function") await session.ensureBrowsePortal();
-        return http.post("/api/v1/personal-comments/mcp/resolve", args);
+        return http.post("/api/v1/annotations/mcp/resolve", args);
       },
     },
     {
@@ -605,7 +641,7 @@ export function buildTools(http, session) {
         "Delete ALL resolved annotations on the open spec file. Returns how " +
         "many were removed. Reflects live in the open page.",
       inputSchema: {},
-      handler: (args) => ensuredPost("/api/v1/personal-comments/mcp/delete-resolved", args || {}),
+      handler: (args) => ensuredPost("/api/v1/annotations/mcp/delete-resolved", args || {}),
     },
     {
       name: "delete_all_annotations",
@@ -613,7 +649,7 @@ export function buildTools(http, session) {
         "Delete EVERY annotation on the open spec file (resolved or not). " +
         "Irreversible. Reflects live in the open page.",
       inputSchema: {},
-      handler: (args) => ensuredPost("/api/v1/personal-comments/mcp/clear", args || {}),
+      handler: (args) => ensuredPost("/api/v1/annotations/mcp/clear", args || {}),
     },
     {
       name: "navigate_annotations",
@@ -623,7 +659,7 @@ export function buildTools(http, session) {
       inputSchema: {
         direction: z.enum(["next", "prev", "first", "last"]).describe("Which annotation to select"),
       },
-      handler: ({ direction }) => ensuredPost("/api/v1/personal-comments/mcp/nav", { direction }),
+      handler: ({ direction }) => ensuredPost("/api/v1/annotations/mcp/nav", { direction }),
     },
     {
       name: "jump_to_annotation",
@@ -634,7 +670,7 @@ export function buildTools(http, session) {
         id: z.string().optional().describe("Annotation id"),
         line: z.number().int().positive().optional().describe("Anchor line to jump to"),
       },
-      handler: (args) => ensuredPost("/api/v1/personal-comments/mcp/jump", args),
+      handler: (args) => ensuredPost("/api/v1/annotations/mcp/jump", args),
     },
     {
       name: "show_resolved_annotations",
@@ -642,7 +678,7 @@ export function buildTools(http, session) {
         "Hide or show resolved annotations in the open reviewing page. " +
         "show=false hides resolved ones; show=true (default) shows them all.",
       inputSchema: { show: z.boolean().optional().describe("true = show resolved (default), false = hide") },
-      handler: ({ show }) => ensuredPost("/api/v1/personal-comments/mcp/show-resolved", { show: show !== false }),
+      handler: ({ show }) => ensuredPost("/api/v1/annotations/mcp/show-resolved", { show: show !== false }),
     },
     {
       name: "open_branch",
@@ -692,9 +728,11 @@ export function buildTools(http, session) {
       description:
         "Open ONE arbitrary .md file read-only in the reviewing view by its " +
         "absolute path on disk (no branch, no ADO), so the user can read it and " +
-        "the personal-comment tools have a target. The file must sit inside a " +
-        "folder the user has opened in Tippani (an approved root) — a path " +
-        "outside every approved root is rejected, never read. Read-only.",
+        "the annotation tools have a target. The file must sit inside a " +
+        "folder the user has opened in Tippani (an approved root) \u2014 a path " +
+        "outside every approved root is rejected, never read. Read-only. Returns " +
+        "the file's annotation addressing (repo=\"file:<abs path>\", branch=\"\", " +
+        "path) \u2014 pass those back to read_annotations/add_annotation to target it.",
       inputSchema: {
         path: z.string().describe("Absolute path to a .md file inside an approved root"),
       },
@@ -703,6 +741,28 @@ export function buildTools(http, session) {
           await session.ensureBrowsePortal();
         }
         return http.post("/api/v1/spec/open-file", args);
+      },
+    },
+    {
+      name: "open_local_only",
+      description:
+        "Start Tippani in local-only mode on the Discovery page — no Azure DevOps " +
+        "and NO token required, and no arguments. Brings the portal up (reusing a " +
+        "running one) and returns its `portalUrl`; SHOW that as a clickable link. " +
+        "Use this to open Tippani for local review (open_branch / open_branch_file / " +
+        "open_local_file) without signing in to ADO. The ADO discovery tools " +
+        "(list_prs / open_pr) still need a token.",
+      inputSchema: {},
+      handler: async () => {
+        if (!session || typeof session.ensureBrowsePortal !== "function") {
+          throw new Error("Portal launcher unavailable in this context.");
+        }
+        await session.ensureBrowsePortal();
+        return {
+          portalUrl: typeof session.getBaseUrl === "function" ? session.getBaseUrl() : null,
+          running: !!(typeof session.getToken === "function" && session.getToken()),
+          note: "Local-only mode — no ADO token required.",
+        };
       },
     },
     {
@@ -793,6 +853,98 @@ export function buildTools(http, session) {
       handler: async () => {
         const r = await ensuredPost("/api/v1/branches/push", {});
         return withHints("push_staged_changes", r, {});
+      },
+    },
+    {
+      name: "start_tippani",
+      description:
+        "Start the Tippani portal (browse mode) without opening a specific PR and " +
+        "return its `portalUrl`. Use this to bring Tippani up on demand; the portal " +
+        "runs in the background, so SHOW the returned portalUrl to the user as a " +
+        "clickable link. The entry tools (open_pr, list_prs, search_specs, " +
+        "open_branch, …) also start the portal themselves — this is the explicit " +
+        "start. Safe to call when already running (returns the existing portalUrl).",
+      inputSchema: {},
+      handler: async () => {
+        if (!session || typeof session.ensureBrowsePortal !== "function") {
+          throw new Error("Portal launcher unavailable in this context.");
+        }
+        await session.ensureBrowsePortal();
+        const portalUrl = typeof session.getBaseUrl === "function" ? session.getBaseUrl() : null;
+        return {
+          portalUrl,
+          running: !!(typeof session.getToken === "function" && session.getToken()),
+          note:
+            "Tippani is running in the background — share the portalUrl as a " +
+            "clickable link so the user can open the review UI.",
+        };
+      },
+    },
+    {
+      name: "get_portal_url",
+      description:
+        "Return the Tippani portal `portalUrl` and whether it is currently " +
+        "`running`. This does NOT start the portal — use start_tippani (or an " +
+        "entry tool like open_pr) to launch it. When not running, `running` is " +
+        "false and portalUrl is the address the portal will use once started.",
+      inputSchema: {},
+      handler: async () => {
+        const running = !!(session && typeof session.getToken === "function" && session.getToken());
+        const portalUrl = session && typeof session.getBaseUrl === "function" ? session.getBaseUrl() : null;
+        return { portalUrl, running };
+      },
+    },
+    {
+      name: "add_reading_list_file",
+      description:
+        "Add a local .md file to the Discovery \"Reading list\" so it persists " +
+        "as a reopenable tile. Its folder becomes an approved read root, so " +
+        "open_local_file can then open .md files there. `path` is an absolute " +
+        "path to a readable .md on disk. Launches the portal if it isn't running.",
+      inputSchema: {
+        path: z.string().describe("Absolute path to a readable .md file to add"),
+      },
+      handler: (args) => ensuredPost("/api/v1/custom-files", { path: args.path }),
+    },
+    {
+      name: "remove_reading_list_file",
+      description:
+        "Remove a .md file from the Discovery \"Reading list\" (revoking its " +
+        "folder as an approved read root if it was the last file there). The " +
+        "pinned \"User Manual\" tile cannot be removed. `path` is the absolute " +
+        "file path as it appears in the list.",
+      inputSchema: {
+        path: z.string().describe("Absolute path of the reading-list .md to remove"),
+      },
+      handler: (args) => ensuredDelete("/api/v1/custom-files", { path: args.path }),
+    },
+    {
+      name: "close_tippani",
+      description:
+        "Close Tippani explicitly when the review session is finished: steer the " +
+        "open browser tab to a closed page, then shut down the background " +
+        "review-portal process(es) gracefully and clear their registry entries. " +
+        "A later open_pr / open_branch / discovery call relaunches a fresh portal.",
+      inputSchema: {},
+      handler: async () => {
+        // Best-effort: land the open tab on the terminal /closed page before the
+        // server goes away, so the browser shows a clean closed state rather than
+        // a dead-connection error. Skipped silently if no portal is up.
+        let browserNudged = false;
+        try {
+          await http.post("/api/v1/nav", { path: "/closed" });
+          browserNudged = true;
+          // Wait at least one full NAV_WATCHER poll period (1500ms) so the tab
+          // is guaranteed a poll before the portal dies under it.
+          await new Promise((r) => setTimeout(r, 1700));
+        } catch {}
+        // Tear down every portal this shim owns (graceful: kills the background
+        // process and removes its registry entry).
+        let closed = false;
+        if (session && typeof session.stop === "function") {
+          try { session.stop(); closed = true; } catch {}
+        }
+        return { ok: true, closed, browserNudged };
       },
     },
   ];

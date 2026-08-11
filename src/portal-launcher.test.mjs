@@ -367,6 +367,46 @@ try {
       removed.includes(3847) && removed.includes(3848));
   }
 
+  // --- host token rotation replaces the shim/portal, then reuses the same
+  //     configured base port with the fresh launch token ---
+  {
+    reset();
+    const releasePortal = (port) => {
+      const numericPort = Number(port);
+      registry = registry.filter((entry) => Number(entry.port) !== numericPort);
+      busyPorts.delete(numericPort);
+    };
+
+    const first = newSession({
+      adoToken: "token-a",
+      removeInstanceFn: releasePortal,
+    });
+    await first.ensurePortal({ prId: 777 });
+    const firstSpawn = spawnCalls.at(-1);
+    check("token-restart: first shim uses base port 3847",
+      first.getBaseUrl() === "http://localhost:3847");
+    check("token-restart: first portal receives token A",
+      firstSpawn.opts.env.TIPPANI_ADO_TOKEN === "token-a");
+
+    first.stop();
+    check("token-restart: old portal registry entry removed",
+      !registry.some((entry) => Number(entry.port) === 3847));
+    check("token-restart: old portal releases base port",
+      !busyPorts.has(3847));
+
+    const second = newSession({
+      adoToken: "token-b",
+      removeInstanceFn: releasePortal,
+    });
+    await second.ensurePortal({ prId: 777 });
+    const secondSpawn = spawnCalls.at(-1);
+    check("token-restart: replacement reuses base port 3847",
+      second.getBaseUrl() === "http://localhost:3847");
+    check("token-restart: replacement portal receives token B",
+      secondSpawn.opts.env.TIPPANI_ADO_TOKEN === "token-b");
+    second.stop();
+  }
+
   // --- adopted portals are NOT killed on stop (they belong to others) ---
   {
     reset();

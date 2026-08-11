@@ -79,6 +79,8 @@ async function fakeSetViewed(threadId, commentId) {
   viewedCalls.push({ threadId, commentId });
   return { ok: true, status: 200, body: { ok: true, viewedCommentId: commentId == null ? null : String(commentId) } };
 }
+const customFileAdds = [];
+const customFileRemoves = [];
 const app = express();
 app.use(express.json());
 registerControlApi(app, {
@@ -97,8 +99,12 @@ registerControlApi(app, {
   // Clickstop 2: open_local_file forwards here.
   mcpOpenFile: async ({ path: p } = {}) =>
     p === "/ok/a.md"
-      ? { ok: true, opened: "/open-file-view?path=" + p, realpath: p }
+      ? { ok: true, opened: "/open-file-view?path=" + p, realpath: p, repo: "file:" + p, branch: "", path: p }
       : { ok: false, reason: "outside-root", error: "outside every approved folder" },
+  // Reading list (custom-files) fakes.
+  customFilesList: () => [],
+  customFileAdd: ({ path: p } = {}) => { customFileAdds.push(p); return { ok: true, added: p }; },
+  customFileRemove: ({ path: p } = {}) => { customFileRemoves.push(p); return { ok: true, removed: p }; },
   // Clickstop 2 step 13: remote-authoring write deps (in-memory fakes).
   mcpCreateBranch: async ({ org, project, repo, branch, base }) =>
     (branch && project && repo) ? { ok: true, org: org || "https://dev.azure.com/powerbi", project, repo, branch, branchRef: `refs/heads/${branch}`, base: base || "main", created: true, objectId: "tip1" } : { ok: false, error: "project, repo, branch are required" },
@@ -133,11 +139,14 @@ const ensurePortalCalls = [];
 const openUrlCalls = [];
 const browsePortalCalls = [];
 const activePortalCalls = [];
+let stubToken = null;
 const stubSession = {
-  ensurePortal: async (opts) => { ensurePortalCalls.push(opts); return { reused: false, prId: opts.prId }; },
-  ensureBrowsePortal: async () => { browsePortalCalls.push(1); },
+  ensurePortal: async (opts) => { ensurePortalCalls.push(opts); stubToken = "tok"; return { reused: false, prId: opts.prId, url: "http://localhost:3847" }; },
+  ensureBrowsePortal: async () => { browsePortalCalls.push(1); stubToken = "tok"; },
   ensureActivePortal: async () => { activePortalCalls.push(1); },
   openUrl: async (path) => { openUrlCalls.push(path); },
+  getBaseUrl: () => "http://localhost:3847",
+  getToken: () => stubToken,
 };
 const tools = buildTools(http, stubSession);
 const byName = Object.fromEntries(tools.map((t) => [t.name, t]));
@@ -147,7 +156,7 @@ try {
   const expected = [
     "open_pr",
     "list_threads", "triage_summary", "show_feedback",
-    "open_thread", "open_file", "get_thread", "focus_thread",
+    "open_thread", "open_file", "go_to_line", "get_thread", "focus_thread",
     "stage_draft", "clear_draft", "stage_resolve_thread", "get_spec",
     "get_spec_draft", "clear_spec_edit",
     "edit_spec", "set_view", "set_feedback_filter",
@@ -155,16 +164,34 @@ try {
       "read_annotations", "add_annotation", "edit_annotation",
       "delete_annotation", "resolve_annotation", "reply_annotation", "delete_resolved_annotations",
       "delete_all_annotations", "navigate_annotations", "jump_to_annotation",
-      "show_resolved_annotations", "open_branch", "open_branch_file", "open_local_file", "refresh_spec",
+      "show_resolved_annotations", "open_branch", "open_branch_file", "open_local_file", "open_local_only", "refresh_spec",
     "stage_branch", "stage_spec", "stage_spec_pr", "push_staged_changes",
+    "start_tippani", "get_portal_url",
+    "add_reading_list_file", "remove_reading_list_file",
+    "close_tippani",
   ];
-  check("tools: exactly 40 registered", tools.length === 40);
+  check("tools: exactly 47 registered", tools.length === 47);
   for (const n of expected) {
     check(`tools: includes ${n}`, !!byName[n]);
     check(`tools: ${n} has description`, typeof byName[n].description === "string" && byName[n].description.length > 20);
   }
-  for (const n of ["post_reply", "resolve_thread", "mark_viewed", "stage_spec_edit", "commit_spec", "create_branch", "push_spec", "create_spec_pr"]) {
+  for (const n of ["refresh_ado_token", "post_reply", "resolve_thread", "mark_viewed", "stage_spec_edit", "commit_spec", "create_branch", "push_spec", "create_spec_pr"]) {
     check(`tools: excludes direct/redundant ${n}`, !byName[n]);
+  }
+
+  // --- get_portal_url / start_tippani (lifecycle) ---
+  {
+    stubToken = null; // simulate no portal yet
+    const before = await byName.get_portal_url.handler({});
+    check("get_portal_url: not running before start", before.running === false);
+    check("get_portal_url: still returns the address", before.portalUrl === "http://localhost:3847");
+    const n0 = browsePortalCalls.length;
+    const started = await byName.start_tippani.handler({});
+    check("start_tippani: launches a browse portal", browsePortalCalls.length === n0 + 1);
+    check("start_tippani: returns portalUrl", started.portalUrl === "http://localhost:3847");
+    check("start_tippani: reports running", started.running === true);
+    const after = await byName.get_portal_url.handler({});
+    check("get_portal_url: running after start", after.running === true);
   }
 
   // --- open_pr ---
@@ -208,16 +235,44 @@ try {
     check("open_file: appends ?line when given", r2.opened === "/file/0?line=47" && focus.get().navUrl === "/file/0?line=47");
   }
 
+  // --- go_to_line (same-page scroll of the already-open file) ---
+  {
+    const before = focus.get().lineSeq;
+    const r = await byName.go_to_line.handler({ line: 130 });
+    check("go_to_line: posts the line", r.ok === true && r.line === 130);
+    check("go_to_line: bumps focus line + lineSeq", focus.get().line === 130 && focus.get().lineSeq === before + 1);
+  }
+
   // --- open_local_file (clickstop 2: one-off .md by path, gated to approved roots) ---
   {
     const before = browsePortalCalls.length;
     const r = await byName.open_local_file.handler({ path: "/ok/a.md" });
     check("open_local_file: valid path -> ok + realpath", r.ok === true && r.realpath === "/ok/a.md");
+    check("open_local_file: returns file: annotation addressing", r.repo === "file:/ok/a.md" && r.branch === "" && r.path === "/ok/a.md");
     check("open_local_file: ensured a browse portal", browsePortalCalls.length === before + 1);
     let rejected = false, rejStatus = 0;
     try { await byName.open_local_file.handler({ path: "/etc/passwd.md" }); }
     catch (e) { rejected = true; rejStatus = e.status; }
     check("open_local_file: outside-root rejected (400, not read)", rejected && rejStatus === 400);
+  }
+
+  // --- reading list add/remove (custom-files) ---
+  {
+    const before = activePortalCalls.length;
+    const added = await byName.add_reading_list_file.handler({ path: "/docs/notes.md" });
+    check("add_reading_list_file: ok + path forwarded", added.ok === true && customFileAdds.includes("/docs/notes.md"));
+    check("add_reading_list_file: ensured the active portal", activePortalCalls.length === before + 1);
+    const removed = await byName.remove_reading_list_file.handler({ path: "/docs/notes.md" });
+    check("remove_reading_list_file: ok + path forwarded", removed.ok === true && customFileRemoves.includes("/docs/notes.md"));
+  }
+
+  // --- open_local_only (local mode, no token, no args) ---
+  {
+    const before = browsePortalCalls.length;
+    const r = await byName.open_local_only.handler({});
+    check("open_local_only: returns portalUrl", r.portalUrl === "http://localhost:3847");
+    check("open_local_only: reports running", r.running === true);
+    check("open_local_only: ensured a browse portal (no token needed)", browsePortalCalls.length === before + 1);
   }
 
   // --- Staged-only authoring tools ---
@@ -308,9 +363,29 @@ try {
 
   // --- open_thread (single-tab default) ---
   {
-    const r = await byName.open_thread.handler({ threadId: 14974588 });
-    check("open_thread: steers tab to /goto/thread url", r.ok === true && focus.get().navUrl === "/goto/thread/14974588");
-    check("open_thread: single-tab does NOT open a new browser tab", !openUrlCalls.includes("/goto/thread/14974588"));
+    const r = await byName.open_thread.handler({ threadId: 201 });
+    check("open_thread: returns the selected thread content", r.thread.id === 201 && r.thread.comments[0].content === "Add metric");
+    check("open_thread: steers tab to /goto/thread url", r.ok === true && r.opened === "/goto/thread/201" && focus.get().navUrl === "/goto/thread/201");
+    check("open_thread: single-tab does NOT open a new browser tab", !openUrlCalls.includes("/goto/thread/201"));
+  }
+  {
+    const navFailure = new Error("navigation unavailable");
+    const failingNavHttp = {
+      ...http,
+      post: (requestPath, body) => requestPath === "/api/v1/nav"
+        ? Promise.reject(navFailure)
+        : http.post(requestPath, body),
+    };
+    const failingNavTools = Object.fromEntries(buildTools(failingNavHttp, stubSession).map((t) => [t.name, t]));
+    let surfaced = false;
+    try { await failingNavTools.open_thread.handler({ threadId: 201 }); }
+    catch (e) { surfaced = e === navFailure; }
+    check("open_thread: surfaces navigation failure instead of reporting success", surfaced);
+    // Discovery tools: the fetched data is the PRIMARY result, the browser
+    // steer a courtesy — a failed steer must not discard a successful query.
+    const prsDespiteNav = await failingNavTools.list_prs.handler({});
+    check("list_prs: returns data despite navigation failure", Array.isArray(prsDespiteNav.prs) && prsDespiteNav.prs.length === 1);
+    check("list_prs: reports the failed steer as navError", typeof prsDespiteNav.navError === "string" && prsDespiteNav.navError.includes("navigation unavailable"));
   }
 
   // --- separate-tabs mode: nav tools open a fresh browser tab instead ---
@@ -322,12 +397,25 @@ try {
       separateTabs: true,
     };
     const tabTools = Object.fromEntries(buildTools(http, tabSession).map((t) => [t.name, t]));
-    await tabTools.open_thread.handler({ threadId: 42 });
+    const openedThread = await tabTools.open_thread.handler({ threadId: 202 });
     await tabTools.open_file.handler({ fileIndex: 1 });
     await tabTools.show_feedback.handler({});
-    check("separate-tabs: open_thread opens a new tab", tabUrlCalls.includes("/goto/thread/42"));
+    check("separate-tabs: open_thread returns content and opens a new tab", openedThread.thread.id === 202 && tabUrlCalls.includes("/goto/thread/202"));
     check("separate-tabs: open_file opens a new tab", tabUrlCalls.includes("/file/1"));
     check("separate-tabs: show_feedback opens a new tab", tabUrlCalls.includes("/feedback"));
+  }
+
+  // --- close_tippani: stops owned portals; best-effort browser nudge ---
+  {
+    let stopCalls = 0;
+    const closeSession = { stop: () => { stopCalls++; } };
+    // http whose nav POST fails fast → browserNudged false, no nudge wait.
+    const failHttp = createHttpClient({ baseUrl: BASE, token: TOKEN, clientName: "mcp-test", fetch: async () => { throw new Error("no portal"); } });
+    const closeTools = Object.fromEntries(buildTools(failHttp, closeSession).map((t) => [t.name, t]));
+    const r = await closeTools.close_tippani.handler({});
+    check("close_tippani: returns ok", r.ok === true);
+    check("close_tippani: stops owned portals", stopCalls === 1 && r.closed === true);
+    check("close_tippani: reports browser not nudged when no portal", r.browserNudged === false);
   }
 
   // --- get_spec ---

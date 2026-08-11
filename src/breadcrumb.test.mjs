@@ -68,6 +68,12 @@ check("undefined → ''", renderCrumbs(undefined) === "");
   check("push cache invalidation precedes reload", bar.indexOf("sessionStorage.removeItem('tippani.brCache.remote')") < bar.indexOf("location.reload()"));
   check("push success persists Current view", bar.includes("JSON.stringify({view:'current'})"));
   check("Current view reset precedes reload", bar.indexOf("JSON.stringify({view:'current'})") < bar.indexOf("location.reload()"));
+  // Clickstop: staged hint counts BOTH authoring staging (/api/v1/staged) and
+  // PR-mode review-pending staging (/api/pending) so the top bar shows a count
+  // in PR mode too, not just Branch/authoring mode.
+  check("staged hint: fetches authoring staged count", bar.includes("fetchCount('/api/v1/staged')"));
+  check("staged hint: fetches PR-mode review-pending count", bar.includes("fetchCount('/api/pending')"));
+  check("staged hint: sums both counts", bar.includes("counts[0] + counts[1]"));
 }
 
 console.log(`\nbreadcrumb.test: ${pass} passed, ${fail} failed`);

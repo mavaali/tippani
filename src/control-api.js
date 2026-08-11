@@ -238,6 +238,15 @@ export function registerControlApi(app, deps) {
     catch (e) { res.status(400).json({ error: String(e?.message || e) }); }
   });
 
+  // POST /api/v1/commands/go-to-line { line } — scroll the ONE open file page to
+  // a 1-based source line without reopening the file (go_to_line). Same-page
+  // scroll only; the PR and read-only spec pages poll lineSeq and act once.
+  app.post("/api/v1/commands/go-to-line", requireAuth({ mutation: true }), (req, res) => {
+    const { line } = req.body || {};
+    try { res.json({ ok: true, ...focus.setLine(line) }); }
+    catch (e) { res.status(400).json({ error: String(e?.message || e) }); }
+  });
+
   // POST /api/v1/ado-token { token } — the host pushes a freshly-minted ADO
   // bearer here before the old one expires, so a long-lived portal never makes
   // ADO calls with a stale token. Swaps the connection in place. The token is
@@ -757,17 +766,17 @@ export function registerControlApi(app, deps) {
       res.status(502).json({ error: String(e?.message || e) });
     }
   };
-  app.get("/api/v1/personal-comments/all", requireAuth(), mcpAc(mcpReadPersonalComments, "read personal comments"));
-  app.post("/api/v1/personal-comments/mcp/add", requireAuth({ mutation: true }), mcpAc(mcpAddPersonalComment, "add personal comment"));
-  app.post("/api/v1/personal-comments/mcp/edit", requireAuth({ mutation: true }), mcpAc(mcpEditPersonalComment, "edit personal comment"));
-  app.post("/api/v1/personal-comments/mcp/delete", requireAuth({ mutation: true }), mcpAc(mcpDeletePersonalComment, "delete personal comment"));
-  app.post("/api/v1/personal-comments/mcp/resolve", requireAuth({ mutation: true }), mcpAc(mcpResolvePersonalComment, "resolve personal comment"));
-  app.post("/api/v1/personal-comments/mcp/reply", requireAuth({ mutation: true }), mcpAc(mcpReplyPersonalComment, "reply to personal comment"));
-  app.post("/api/v1/personal-comments/mcp/delete-resolved", requireAuth({ mutation: true }), mcpAc(mcpDeleteResolvedPersonalComments, "delete resolved personal comments"));
-  app.post("/api/v1/personal-comments/mcp/clear", requireAuth({ mutation: true }), mcpAc(mcpClearPersonalComments, "clear personal comments"));
-  app.post("/api/v1/personal-comments/mcp/nav", requireAuth({ mutation: true }), mcpAc(mcpNavPersonalComment, "navigate personal comments"));
-  app.post("/api/v1/personal-comments/mcp/jump", requireAuth({ mutation: true }), mcpAc(mcpJumpPersonalComment, "jump to personal comment"));
-  app.post("/api/v1/personal-comments/mcp/show-resolved", requireAuth({ mutation: true }), mcpAc(mcpSetPcResolvedVisibility, "show/hide resolved personal comments"));
+  app.get("/api/v1/annotations/all", requireAuth(), mcpAc(mcpReadPersonalComments, "read personal comments"));
+  app.post("/api/v1/annotations/mcp/add", requireAuth({ mutation: true }), mcpAc(mcpAddPersonalComment, "add personal comment"));
+  app.post("/api/v1/annotations/mcp/edit", requireAuth({ mutation: true }), mcpAc(mcpEditPersonalComment, "edit personal comment"));
+  app.post("/api/v1/annotations/mcp/delete", requireAuth({ mutation: true }), mcpAc(mcpDeletePersonalComment, "delete personal comment"));
+  app.post("/api/v1/annotations/mcp/resolve", requireAuth({ mutation: true }), mcpAc(mcpResolvePersonalComment, "resolve personal comment"));
+  app.post("/api/v1/annotations/mcp/reply", requireAuth({ mutation: true }), mcpAc(mcpReplyPersonalComment, "reply to personal comment"));
+  app.post("/api/v1/annotations/mcp/delete-resolved", requireAuth({ mutation: true }), mcpAc(mcpDeleteResolvedPersonalComments, "delete resolved personal comments"));
+  app.post("/api/v1/annotations/mcp/clear", requireAuth({ mutation: true }), mcpAc(mcpClearPersonalComments, "clear personal comments"));
+  app.post("/api/v1/annotations/mcp/nav", requireAuth({ mutation: true }), mcpAc(mcpNavPersonalComment, "navigate personal comments"));
+  app.post("/api/v1/annotations/mcp/jump", requireAuth({ mutation: true }), mcpAc(mcpJumpPersonalComment, "jump to personal comment"));
+  app.post("/api/v1/annotations/mcp/show-resolved", requireAuth({ mutation: true }), mcpAc(mcpSetPcResolvedVisibility, "show/hide resolved personal comments"));
 
   // Reviewing surface: refresh the open file (remote push -> visible) and open a
   // branch / spec file for review from MCP.
@@ -866,6 +875,7 @@ export function registerControlApi(app, deps) {
       version: f.version,
       navUrl: f.navUrl,
       navSeq: f.navSeq,
+      navEpoch: f.navEpoch,
       view: f.view,
       viewSeq: f.viewSeq,
       filter: f.filter,
@@ -875,6 +885,8 @@ export function registerControlApi(app, deps) {
       pcCommand: f.pcCommand,
       pcCommandSeq: f.pcCommandSeq,
       pcDataSeq: f.pcDataSeq,
+      line: f.line,
+      lineSeq: f.lineSeq,
     };
     // The heavy draft bodies are only needed when something actually changed;
     // the 1.2s pollers compare seqs/version and re-fetch with ?full=1 on a bump,

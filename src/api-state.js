@@ -16,7 +16,9 @@
 // (per the Phase 1 design decision — "ephemeral, server memory only"), and
 // the LLM re-stages in milliseconds if it loses its slot.
 
-export function createFocusStore() {
+import { randomUUID } from "node:crypto";
+
+export function createFocusStore({ navEpoch = randomUUID() } = {}) {
   let focusedThreadId = null;
   let version = 0;
   // Single-tab navigation: which portal path the LLM wants the user's ONE open
@@ -45,10 +47,16 @@ export function createFocusStore() {
   let pcCommand = null; // { type: 'focus'|'showResolved', id?, show? }
   let pcCommandSeq = 0;
   let pcDataSeq = 0;
+  // Same-page scroll target: the source line the agent (go_to_line) wants the
+  // ONE open file page scrolled to. lineSeq is monotonic so the page scrolls
+  // once per request; the page baselines lineSeq on first poll so a stale
+  // command doesn't yank a freshly opened file.
+  let line = null;
+  let lineSeq = 0;
   const VIEWS = ["current", "diff", "proposed"];
   return {
     get() {
-      return { focusedThreadId, version, navUrl, navSeq, view, viewSeq, filter, filterSeq, pcContext, pcSelectedId, pcCommand, pcCommandSeq, pcDataSeq };
+      return { focusedThreadId, version, navUrl, navSeq, navEpoch, view, viewSeq, filter, filterSeq, pcContext, pcSelectedId, pcCommand, pcCommandSeq, pcDataSeq, line, lineSeq };
     },
     set(threadId) {
       const next = threadId == null ? null : Number(threadId);
@@ -70,7 +78,7 @@ export function createFocusStore() {
       navUrl = url;
       navSeq++;
       version++;
-      return { navUrl, navSeq, version };
+      return { navUrl, navSeq, navEpoch, version };
     },
     // Set the spec view the browser should switch to (item 3). Always bumps so a
     // repeat set to the same view still fires the browser's apply.
@@ -96,6 +104,18 @@ export function createFocusStore() {
     bumpVersion() {
       version++;
       return version;
+    },
+    // Scroll the open file page to a 1-based source line (go_to_line). Always
+    // bumps lineSeq + version so a repeat go-to the same line still fires.
+    setLine(n) {
+      const next = Number(n);
+      if (!Number.isInteger(next) || next < 1) {
+        throw new Error("go-to-line: line must be a positive integer");
+      }
+      line = next;
+      lineSeq++;
+      version++;
+      return { line, lineSeq, version };
     },
     // --- Personal Comments ---
     setPcContext(ctx) {

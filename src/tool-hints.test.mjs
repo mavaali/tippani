@@ -14,6 +14,7 @@ ok("stage_branch -> push", /push_staged_changes/.test(nextStep("stage_branch")))
 ok("stage_spec -> push", /push_staged_changes/.test(nextStep("stage_spec")));
 ok("stage_spec_pr -> push", /push_staged_changes/.test(nextStep("stage_spec_pr")));
 ok("push -> results", /results/i.test(nextStep("push_staged_changes")));
+ok("push -> refresh when browser open", /refresh_spec/.test(nextStep("push_staged_changes")));
 ok("unknown tool -> null", nextStep("nope") === null);
 ok("every write tool is covered", ["stage_branch", "stage_spec", "stage_spec_pr", "push_staged_changes"].every((t) => typeof NEXT_STEP_HINTS[t] === "string"));
 

@@ -1,5 +1,5 @@
 // Tests for the NAV_WATCHER steering guard (single-tab nav).
-import { navSkipsBarePathClobber, navShouldNavigate, navTarget } from "./nav-guard.js";
+import { navCursor, navSkipsBarePathClobber, navShouldNavigate, navTarget } from "./nav-guard.js";
 
 let pass = 0, fail = 0;
 function check(name, cond) { if (cond) pass++; else { fail++; console.error("  FAIL: " + name); } }
@@ -7,6 +7,17 @@ function check(name, cond) { if (cond) pass++; else { fail++; console.error("  F
 const ORIGIN = "http://localhost:3847";
 
 try {
+  check("nav cursor applies the next command in one process",
+    navCursor("epoch-a", 8, "epoch-a", 7).shouldApply === true);
+  check("nav cursor suppresses an already-applied command in one process",
+    navCursor("epoch-a", 7, "epoch-a", 7).shouldApply === false);
+  const restarted = navCursor("epoch-b", 1, "epoch-a", 999);
+  check("nav cursor resets a stale sequence after same-port process restart",
+    restarted.epoch === "epoch-b" && restarted.lastSeq === 0 && restarted.shouldApply === true);
+  const restartedIdle = navCursor("epoch-b", 0, "epoch-a", 999);
+  check("nav cursor records a restart without replaying an empty command",
+    restartedIdle.epoch === "epoch-b" && restartedIdle.lastSeq === 0 && restartedIdle.shouldApply === false);
+
   // The core bug: a bare-path nav target must NOT strip a deliberate ?edit=1.
   check("skips bare-path nav that would only strip ?edit=1",
     navShouldNavigate({ pathname: "/file/0", search: "?edit=1" }, "/file/0", ORIGIN) === false);

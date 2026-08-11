@@ -30,6 +30,8 @@ export function cssVariables() {
   --cp-panel-strong: rgba(255, 255, 255, 0.96);
   --cp-sheen: rgba(255, 255, 255, 0.55);
   --cp-highlight: rgba(177, 31, 75, 0.12);
+  --cp-code-bg: #1e1e1e;
+  --cp-code-fg: #d4d4d4;
 }
 html[data-theme="dark"] {
   color-scheme: dark;
@@ -56,6 +58,8 @@ html[data-theme="dark"] {
   --cp-panel-strong: rgba(41, 41, 41, 0.96);
   --cp-sheen: rgba(255, 255, 255, 0.04);
   --cp-highlight: rgba(253, 142, 161, 0.12);
+  --cp-code-bg: #1b1b1b;
+  --cp-code-fg: #d4d4d4;
 }`;
 }
 
@@ -95,4 +99,18 @@ export function stripMarkdown(s) {
     .replace(/\n{2,}/g, " ")            // collapse newlines
     .replace(/\n/g, " ")
     .trim();
+}
+
+// A themed full-page error, so a failed route matches the design system instead
+// of showing raw text. Pure + escaped; mirrors the pages' dark-mode auto-detect.
+export function errorPage({ title = "Something went wrong", message = "", backHref = "/", backLabel = "Back" } = {}) {
+  return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${escHtml(title)}</title><style>${cssVariables()}
+* { box-sizing: border-box; }
+body { margin: 0; min-height: 100vh; display: flex; align-items: center; justify-content: center; background: var(--cp-bg); color: var(--cp-text); font-family: -apple-system, "Segoe UI", Roboto, sans-serif; padding: 24px; }
+.err-card { max-width: 460px; width: 100%; background: var(--cp-surface); border: 1px solid var(--cp-border); border-radius: 14px; box-shadow: var(--cp-shadow); padding: 28px 32px; text-align: center; }
+.err-badge { width: 44px; height: 44px; border-radius: 50%; background: var(--cp-accent-soft); color: var(--cp-accent); display: inline-flex; align-items: center; justify-content: center; font-size: 22px; font-weight: 700; margin-bottom: 14px; }
+.err-card h1 { font-size: 18px; margin: 0 0 8px; }
+.err-card p { font-size: 13px; color: var(--cp-text-muted); line-height: 1.5; margin: 0 0 18px; overflow-wrap: anywhere; }
+.err-back { display: inline-block; font-size: 13px; font-weight: 600; color: var(--cp-accent-fg); background: var(--cp-accent); padding: 8px 18px; border-radius: 8px; text-decoration: none; }
+</style><script>try{if(window.matchMedia&&window.matchMedia('(prefers-color-scheme: dark)').matches)document.documentElement.dataset.theme='dark';}catch(e){}</script></head><body><div class="err-card"><div class="err-badge">!</div><h1>${escHtml(title)}</h1>${message ? `<p>${escHtml(message)}</p>` : ""}<a class="err-back" href="${escHtml(backHref)}">${escHtml(backLabel)}</a></div></body></html>`;
 }

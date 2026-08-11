@@ -260,14 +260,15 @@ token` works in the MCP server's environment). GitHub and ADO tokens are
 separate; a supplied ADO token still gets its existing fail-fast audience/type
 validation.
 
-**Tools (40):**
+**Tools (47):**
 
-- **Portal & navigation** — `open_pr` (ADO by default; for GitHub pass `provider: "github"`, `owner`, and `repo`), `open_file`, `open_thread`, `show_feedback` (cross-PR triage page), `set_view`, `set_feedback_filter`, `refresh_spec`.
+- **Portal lifecycle** — `start_tippani` (explicit browse-mode start), `get_portal_url`, `open_local_only` (local review, no ADO token), `close_tippani`.
+- **Portal & navigation** — `open_pr` (ADO by default; for GitHub pass `provider: "github"`, `owner`, and `repo`), `open_file`, `go_to_line` (scroll the already-open file to a line, no reopen), `open_thread` (selects a thread, scrolls both panes to its anchor, and returns its content), `show_feedback` (cross-PR triage page), `set_view`, `set_feedback_filter`, `refresh_spec`.
 - **Reading** — `list_threads`, `get_thread`, `get_spec`, `get_spec_draft`, `triage_summary`; focus with `focus_thread`.
 - **Stage-then-push** — stage review work with `stage_draft`, `edit_spec`, and `stage_resolve_thread`; stage authoring work with `stage_branch`, `stage_spec`, and `stage_spec_pr`. Nothing staged by MCP reaches your repository host until one explicit `push_staged_changes` call. Also `clear_draft` and `clear_spec_edit`.
 - **Discovery** — `list_prs` and `search_specs` support ADO or GitHub;
   `search_work_items` is ADO-only; `get_file_commits` reads either host.
-- **Local review (no PR, no host account)** — `open_branch`, `open_branch_file`, `open_local_file`.
+- **Local review (no PR, no host account)** — `open_branch`, `open_branch_file`, `open_local_file`, and the Discovery Reading list (`add_reading_list_file`, `remove_reading_list_file`).
 - **Annotations** — `read_annotations`, `add_annotation`, `edit_annotation`, `delete_annotation`, `reply_annotation`, `resolve_annotation`, plus navigation (`navigate_annotations`, `jump_to_annotation`, `show_resolved_annotations`) and bulk cleanup.
 
 Staged whole-file edits show up in the portal as a side-by-side Current/Proposed diff you can accept-and-refine in the editor before committing.

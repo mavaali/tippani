@@ -21,10 +21,17 @@ Start it as an MCP stdio server:
 tippani-mcp
 ```
 
-It registers **40 tools**. `open_pr` (or a Discovery tool like `list_prs` /
+It registers **47 tools**. `open_pr` (or a Discovery tool like `list_prs` /
 `search_specs`) launches a headless portal and returns a `portalUrl`; every
 other tool then operates on that open session. A parameter marked `*` is
 required.
+
+The server's `initialize.instructions` defines authentication recovery for all
+ADO-backed tools. After HTTP 401, call `close_tippani`, restart the MCP server
+through the host's lifecycle controls (or terminate `tippani-mcp` with an
+approved local script when no restart control exists), and retry the original
+tool exactly once. Never pass access tokens through chat or MCP tool arguments;
+report and stop if the retry also fails.
 
 ### Reviewing a pull request
 
@@ -37,14 +44,20 @@ required.
 | `triage_summary` | Categorized triage of every thread: counts of needs-your-reply / awaiting-reviewer / viewed / FYI / resolved, plus a per-thread list. | — |
 | `show_feedback` | Open the Feedback page — a cross-thread triage list for the whole PR. | — |
 | `set_feedback_filter` | Focus the Feedback page by state(s), reviewer, file, and/or text query. `clear=true` shows all. | `states`, `reviewer`, `file`, `query`, `clear` |
-| `open_thread` | Open one thread in a single-thread view with a reply box (shows any staged draft). | `threadId` |
+| `open_thread` | Select one thread and return its full content plus any staged draft. File threads open in context and scroll both the thread pane and file contents to the anchor; PR-level threads open standalone. Navigation failure is reported as failure. | `threadId` |
 | `focus_thread` | Scroll the browser to a thread and highlight it (`threadId=null` clears focus). | `threadId` |
 | `set_view` | Switch the reading view of a file: `current`, `diff`, or `proposed`. Call after `edit_spec` — the view never auto-flips. | `view`, `fileIndex` |
 | `open_file` | Open a changed file at the file view, optionally scrolled to a line. Read-only. | `fileIndex`, `line` |
+| `go_to_line` | Scroll the file the user ALREADY has open to a 1-based source line, without reopening or switching files. Works on any open surface (PR file, branch file, local file). Read-only same-page scroll. | `line*` |
 | `get_spec` | Read the rendered Markdown of one PR file plus a flat heading list (level, text, 1-based line). | `fileIndex` |
 | `get_file_commits` | Bulk commit history for up to 25 spec files (id, author/committer, message, change counts, url). | `files*`, `top` |
 
 ### Staged review replies and edits
+
+Review reply drafts (`stage_draft`) and PR spec proposals (`edit_spec`) are
+currently tied to the running portal process and are lost when that process
+restarts. Staged resolves use the disk-backed pending queue and survive a
+restart.
 
 | Tool | Purpose | Parameters |
 |---|---|---|
@@ -153,7 +166,7 @@ All routes are prefixed `/api/v1`. Mutating routes (marked ✎) require the bear
 | `GET /triage` | Triage summary of all threads. |
 | `PUT /threads/:id/draft` ✎ · `DELETE /threads/:id/draft` ✎ | Stage / discard a reply draft. |
 | `POST /threads/:id/lock` ✎ | Lock a thread's draft (edit coordination). |
-| `POST /commands/focus` ✎ · `POST /nav` ✎ · `POST /commands/view` ✎ · `POST /commands/filter` ✎ | Drive the browser: focus a thread, navigate, switch view, filter feedback. |
+| `POST /commands/focus` ✎ · `POST /nav` ✎ · `POST /commands/view` ✎ · `POST /commands/filter` ✎ · `POST /commands/go-to-line` ✎ | Drive the browser: focus a thread, navigate, switch view, filter feedback, scroll the open file to a line. |
 | `POST /ado-token` ✎ | Supply / refresh the ADO bearer for the session. |
 
 **Specs, drafts & edits**
