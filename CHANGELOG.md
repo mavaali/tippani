@@ -1,6 +1,15 @@
 # Changelog
 
-## Unreleased
+## 1.8.0 (2026-08-10)
+
+The release that takes Tippani beyond Azure DevOps: GitHub is now a first-class
+review and authoring host behind the same portal, tools, and stage-then-push
+contract, with every host call isolated behind capability providers. The
+post-Clickstop 2 hardening pass makes navigation mean what it says — a
+navigation tool that reports success has actually moved the browser, and a
+portal restart can no longer swallow the next command.
+
+Covers [#74](https://github.com/mavaali/tippani/pull/74)–[#88](https://github.com/mavaali/tippani/pull/88).
 
 ### Added
 
@@ -14,12 +23,50 @@
   different repositories from colliding.
 - `list_prs` and `search_specs` accept an explicit GitHub provider, owner, and
   repository anchor through MCP.
+- **Explicit MCP lifecycle** ([#88](https://github.com/mavaali/tippani/pull/88)):
+  `start_tippani`, `get_portal_url`, `open_local_only` (local review with no ADO
+  token), `close_tippani`, reading-list management (`add_reading_list_file`,
+  `remove_reading_list_file`), and `go_to_line` (same-page scroll of the open
+  file). 47 tools total.
+- **Local review completeness** ([#88](https://github.com/mavaali/tippani/pull/88)):
+  relative images render when they resolve inside an approved root — containment
+  is checked on the real path, so a symlink can't escape the root — and local
+  image responses are `Cache-Control: no-store`. Table-of-contents anchors use
+  the same GitHub slugging as the rendered headings, so punctuated headings jump
+  correctly. Annotations on one-off local files resolve to one store key
+  regardless of how the branch coordinate is spelled.
+- **Review-pane ergonomics** ([#88](https://github.com/mavaali/tippani/pull/88)):
+  a Comments/Annotations toggle on real PR pages, threads ordered by anchor
+  line, per-thread collapse, in-place resolve (no reload), resizable comment
+  panes, theme-aware code blocks, loading feedback, and styled error pages.
 
 ### Changed
 
 - Azure DevOps access is isolated behind six capability providers. GitHub
   Discovery omits ADO-only work-item search and linking rather than presenting
   controls that cannot work.
+- `open_thread` is the authoritative select-and-read operation
+  ([#88](https://github.com/mavaali/tippani/pull/88)): it returns the full
+  thread plus any staged draft, moves both the thread pane and the document to
+  the anchor, and propagates navigation failure instead of reporting success. A
+  per-process `navEpoch` lets a browser tab detect a same-port portal restart
+  and reset its duplicate-suppression cursor. Discovery tools (`list_prs`,
+  `search_specs`, `search_work_items`) keep their fetched results when the
+  courtesy browser steer fails, reporting it as `navError`.
+- Authentication recovery is restart-based
+  ([#88](https://github.com/mavaali/tippani/pull/88)): the credential-passing
+  `refresh_ado_token` tool is removed — tokens never round-trip through
+  model-authored calls. Self-acquired ADO tokens refresh automatically near
+  expiry (with a cooldown after a failed re-mint); host-supplied tokens remain
+  the host's to rotate. Windows `.cmd` credential helpers run through
+  `cmd.exe`.
+
+### Fixed
+
+- Proposed view re-anchors reviewer comment bubbles against its own rendered
+  blocks; the staged counter sums review and authoring staging; the full test
+  suite passes on Windows without weakening POSIX privacy checks
+  ([#88](https://github.com/mavaali/tippani/pull/88)).
 
 ## 1.7.0 (2026-08-09)
 
