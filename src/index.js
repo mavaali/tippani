@@ -16,7 +16,6 @@ import path from "path";
 import { execFile } from "node:child_process";
 import { fileURLToPath } from "url";
 import os from "os";
-import crypto from "crypto";
 import { EDITOR_JS } from "./client/editor.bundle.js";
 import { MERMAID_JS } from "./client/mermaid.bundle.js";
 import { MERMAID_VIEW_JS } from "./client/mermaid-view.bundle.js";
@@ -49,6 +48,11 @@ import { createCustomFiles } from "./custom-files.js";
 import { buildReadingList, isPinnedManual, manualRoot } from "./reading-list.js";
 import { fileReviewContext } from "./comment-key.js";
 import { isAllowedHost } from "./host-guard.js";
+import { createLocalClientAuth } from "./local-client-auth.js";
+import {
+  createAppSessionRotation,
+  ROTATION_INTERVAL_MS,
+} from "./app-session-rotation.js";
 import { planStagedPushes } from "./staged-push-plan.js";
 import { adoCall } from "./ado-call.js";
 import { resolveBaseBranch, normalizeBranchRef } from "./ado-refs.js";
@@ -7176,10 +7180,6 @@ async function listBranchFolders({ project, repo, branch, scope } = {}) {
 }
 
 
-// Session token authorises external (non-browser-same-origin) mutations.
-// Generated fresh per process and printed to stdout at startup.
-const _sessionToken = crypto.randomBytes(24).toString("base64url");
-
 // --- Express server ---
 async function main() {
   // Parse PR ID (first non-flag argument)
@@ -7296,6 +7296,13 @@ async function main() {
   const portVal = portArg ? parseInt(portArg.split("=")[1], 10) : parseInt(process.env.TIPPANI_PORT || "", 10);
   if (Number.isFinite(portVal) && portVal > 0) PORT = portVal;
   const headless = args.includes("--headless") || process.env.TIPPANI_HEADLESS === "1";
+  const externalClientName =
+    String(process.env.TIPPANI_CLIENT_NAME || "tippani-external").trim() ||
+    "tippani-external";
+  const localClientAuth = createLocalClientAuth({ port: PORT });
+  const appBearer = localClientAuth.createBearerSession({
+    clientName: externalClientName,
+  });
   const adoToken = (args.find(a => a.startsWith("--ado-token="))?.split("=").slice(1).join("=")) || process.env.TIPPANI_ADO_TOKEN || null;
   let githubToken = null;
   if (_hostKind === "github" && !_isOffline) {
@@ -7534,21 +7541,9 @@ async function main() {
     next();
   });
 
-  // CSRF protection: reject cross-origin mutations
-  app.use((req, res, next) => {
-    // The token-gated control API (/api/v1/*) does its own bearer-token auth
-    // in requireAuth(), so external (non-browser) clients like the MCP shim —
-    // which send Authorization + X-Tippani-Client but no browser Origin — must
-    // be allowed past this browser-origin CSRF gate.
-    if (req.path.startsWith("/api/v1/")) return next();
-    if (req.method !== "GET" && req.method !== "HEAD") {
-      const origin = req.headers.origin || req.headers.referer || "";
-      if (!origin.startsWith(`http://localhost:${PORT}`) && !origin.startsWith(`http://127.0.0.1:${PORT}`)) {
-        return res.status(403).json({ error: "Forbidden: cross-origin request" });
-      }
-    }
-    next();
-  });
+  // One boundary covers current and legacy browser routes. Control API routes
+  // use the same manager for browser cookies or scoped headless bearers.
+  localClientAuth.mount(app);
 
   // Phase 119: serve the vendored Mermaid runtime (embedded string) for the
   // spec page's lazy diagram rendering. Offline-safe; long-cache immutable.
@@ -9559,8 +9554,7 @@ if ($path) { [Console]::Out.Write($path) }
   // clients send `Authorization: Bearer <token>` + `X-Tippani-Client: <name>`
   // for mutations, just `X-Tippani-Client` for reads.
   registerControlApi(app, {
-    port: PORT,
-    sessionToken: _sessionToken,
+    clientAuth: localClientAuth,
     setAdoToken: applyAdoToken,
     focus: _focus,
     drafts: _drafts,
@@ -9697,7 +9691,6 @@ if ($path) { [Console]::Out.Write($path) }
 
   const server = app.listen(PORT, "127.0.0.1", () => {
     const base = `http://localhost:${PORT}`;
-    const url = openIndex !== null ? `${base}/file/${openIndex}` : base;
     // Persist the session token ONLY after we own the port, so an instance
     // that fails to bind (EADDRINUSE) never deletes the running server's
     // token on exit. 0600 perms; overwritten on each successful startup.
@@ -9708,21 +9701,37 @@ if ($path) { [Console]::Out.Write($path) }
     try {
       fs.mkdirSync(CONFIG_DIR, { recursive: true, mode: 0o700 });
       const tokenPath = path.join(CONFIG_DIR, `session-token-${PORT}`);
-      fs.writeFileSync(tokenPath, _sessionToken + "\n", { mode: 0o600 });
-      // Register this portal so MCP clients can discover it by PR/port and
-      // adopt it instead of colliding on the port (multi-PR parallelism).
-      writeInstance({
-        port: PORT,
-        prId: _prId,
-        provider: _hostKind,
-        owner: _githubOwner,
-        repo: _githubRepo,
-        token: _sessionToken,
-        pid: process.pid,
-        url: base,
-        shimPid: Number(process.env.TIPPANI_SHIM_PID) || null,
+      const persistAppSession = (session) => {
+        const registered = writeInstance({
+          port: PORT,
+          prId: _prId,
+          provider: _hostKind,
+          owner: _githubOwner,
+          repo: _githubRepo,
+          token: session.token,
+          tokenExpiresAt: session.expiresAt,
+          clientName: externalClientName,
+          pid: process.pid,
+          url: base,
+          shimPid: Number(process.env.TIPPANI_SHIM_PID) || null,
+        });
+        if (!registered) throw new Error("could not update the portal registry");
+        fs.writeFileSync(tokenPath, session.token + "\n", { mode: 0o600 });
+      };
+      persistAppSession(appBearer);
+      const rotation = createAppSessionRotation({
+        session: appBearer,
+        createSession: () =>
+          localClientAuth.createBearerSession({ clientName: externalClientName }),
+        revokeSession: (token) => localClientAuth.revokeBearerSession(token),
+        persist: persistAppSession,
+        onWarn: (message) => console.warn(`  Warning: ${message}`),
       });
+      const rotationTimer = setInterval(() => rotation.rotateIfDue(), ROTATION_INTERVAL_MS);
+      rotationTimer.unref?.();
       const cleanup = () => {
+        clearInterval(rotationTimer);
+        rotation.revokeCurrent();
         try { fs.unlinkSync(tokenPath); } catch {}
         removeInstance(PORT);
       };
@@ -9739,10 +9748,14 @@ if ($path) { [Console]::Out.Write($path) }
       console.warn(`  Warning: could not persist session token: ${e.message}`);
     }
     console.log(`\n  Tippani running at ${base}`);
-    console.log(`  Control API token: ${_sessionToken}`);
-    console.log(`  Token file: ${path.join(CONFIG_DIR, `session-token-${PORT}`)}`);
-    console.log(`  External clients: set Authorization: Bearer <token> and X-Tippani-Client: <name>\n`);
-    if (!headless) open(url);
+    console.log(`  App session file: ${path.join(CONFIG_DIR, `session-token-${PORT}`)}`);
+    console.log(`  External client name: ${externalClientName}\n`);
+    if (!headless) {
+      const bootstrap = localClientAuth.createBrowserBootstrap({
+        returnTo: openIndex !== null ? `/file/${openIndex}` : "/",
+      });
+      open(bootstrap.url);
+    }
   });
   server.on("error", (err) => {
     if (err.code === "EADDRINUSE") {

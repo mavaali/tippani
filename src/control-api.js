@@ -9,8 +9,7 @@ import { applyEdits, SpecEditError } from "./spec-edit.js";
 
 export function registerControlApi(app, deps) {
   const {
-    port,
-    sessionToken,
+    clientAuth,
     setAdoToken,        // (token) => bool — swap the live ADO bearer (host token push, optional)
     focus,
     drafts,
@@ -60,44 +59,10 @@ export function registerControlApi(app, deps) {
     stageBranch, listStagedBranches, pushStagedBranches, stageSpecPr, unstageBranch, unstageSpecPr, stagePrPublish, unstagePrPublish, stageFile, unstageFile, updateStagedFileContent, listBranchFolders, createStagedFolder, deleteStagedFolder, renameStagedFolder, renderMarkdown, saveExistingEdit, // clickstop 2: staged (pre-push) branches
   } = deps;
 
-  const ALLOWED_ORIGINS = new Set([
-    `http://localhost:${port}`,
-    `http://127.0.0.1:${port}`,
-  ]);
-
-  // Same-origin means the request's Origin (or Referer) resolves to EXACTLY one
-  // of this portal's origins. Compare parsed origins, never string prefixes: a
-  // `startsWith` check let `http://localhost:${port}0` (a different port),
-  // `http://localhost:${port}.evil.com`, and `http://localhost:${port}@evil.com`
-  // all pass — and same-origin skips the session-token requirement on mutations.
-  function isSameOrigin(req) {
-    const header = req.headers.origin || req.headers.referer || "";
-    if (!header) return false;
-    let origin;
-    try {
-      origin = new URL(header).origin;
-    } catch {
-      return false;
-    }
-    return ALLOWED_ORIGINS.has(origin);
+  if (!clientAuth || typeof clientAuth.requireControlAuth !== "function") {
+    throw new TypeError("clientAuth is required");
   }
-
-  function requireAuth(opts = { mutation: false }) {
-    return (req, res, next) => {
-      const sameOrigin = isSameOrigin(req);
-      if (!sameOrigin && !req.headers["x-tippani-client"]) {
-        return res.status(403).json({ error: "missing X-Tippani-Client header" });
-      }
-      if (opts.mutation && !sameOrigin) {
-        const auth = req.headers.authorization || "";
-        const m = auth.match(/^Bearer\s+(.+)$/);
-        if (!m || m[1] !== sessionToken) {
-          return res.status(401).json({ error: "invalid or missing session token" });
-        }
-      }
-      next();
-    };
-  }
+  const requireAuth = (opts = {}) => clientAuth.requireControlAuth(opts);
 
   function summarizeThread(t) {
     return {
@@ -247,22 +212,45 @@ export function registerControlApi(app, deps) {
     catch (e) { res.status(400).json({ error: String(e?.message || e) }); }
   });
 
+  app.post(
+    "/api/v1/auth/browser-bootstrap",
+    requireAuth({
+      mutation: true,
+      capability: "browser:bootstrap",
+      allowBrowser: false,
+    }),
+    (req, res) => {
+      const result = clientAuth.createBrowserBootstrap({
+        returnTo: req.body?.returnTo || "/",
+      });
+      res.json({ ok: true, url: result.url, expiresAt: result.expiresAt });
+    },
+  );
+
   // POST /api/v1/ado-token { token } — the host pushes a freshly-minted ADO
   // bearer here before the old one expires, so a long-lived portal never makes
   // ADO calls with a stale token. Swaps the connection in place. The token is
   // never echoed back.
-  app.post("/api/v1/ado-token", requireAuth({ mutation: true }), (req, res) => {
-    const { token } = req.body || {};
-    if (typeof token !== "string" || !token) {
-      return res.status(400).json({ error: "token (non-empty string) required" });
-    }
-    if (typeof setAdoToken !== "function") {
-      return res.status(501).json({ error: "ado-token swap not wired in this deployment" });
-    }
-    const ok = setAdoToken(token);
-    if (!ok) return res.status(400).json({ error: "token rejected" });
-    res.json({ ok: true });
-  });
+  app.post(
+    "/api/v1/ado-token",
+    requireAuth({
+      mutation: true,
+      capability: "provider:credential",
+      allowBrowser: false,
+    }),
+    (req, res) => {
+      const { token } = req.body || {};
+      if (typeof token !== "string" || !token) {
+        return res.status(400).json({ error: "token (non-empty string) required" });
+      }
+      if (typeof setAdoToken !== "function") {
+        return res.status(501).json({ error: "ado-token swap not wired in this deployment" });
+      }
+      const ok = setAdoToken(token);
+      if (!ok) return res.status(400).json({ error: "token rejected" });
+      res.json({ ok: true });
+    },
+  );
 
   // ---- Remote (pre-PR) spec authoring (clickstop 2, step 11) ----
   // A whole-file markdown draft is STAGED durably keyed by (project,repo,branch,

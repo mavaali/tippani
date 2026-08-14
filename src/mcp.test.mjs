@@ -16,6 +16,7 @@ import {
 } from "./api-state.js";
 import { registerControlApi } from "./control-api.js";
 import { buildTools, createHttpClient, loadSessionToken } from "./mcp-tools.js";
+import { createLocalClientAuth } from "./local-client-auth.js";
 
 let pass = 0, fail = 0;
 function check(name, cond) {
@@ -23,7 +24,9 @@ function check(name, cond) {
   else { fail++; console.error("  FAIL: " + name); }
 }
 
-const TOKEN = "mcp-test-token";
+const clientAuth = createLocalClientAuth({ port: 3847 });
+const appSession = clientAuth.createBearerSession({ clientName: "mcp-test" });
+const TOKEN = appSession.token;
 
 // --- Fake tippani backend ---
 const threads = [
@@ -84,8 +87,7 @@ const customFileRemoves = [];
 const app = express();
 app.use(express.json());
 registerControlApi(app, {
-  port: 0,
-  sessionToken: TOKEN,
+  clientAuth,
   focus, drafts, locks,
   getThreads: () => threads,
   getChangedFiles: () => changedFiles,

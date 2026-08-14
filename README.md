@@ -275,6 +275,13 @@ Staged whole-file edits show up in the portal as a side-by-side Current/Proposed
 
 The portal can also run standalone with `--headless` (assistant-only, no browser), `--port=<n>` (run several at once), and `--ado-token=<t>` (token-based sign-in, skipping the interactive login). The underlying HTTP control API is directly usable for scripts and IDE extensions — see `src/control-api.js`.
 
+Browser access starts through a short-lived, one-time bootstrap URL and then uses
+an HttpOnly, SameSite app-session cookie. Every browser mutation also requires
+an exact `localhost` or `127.0.0.1` Origin match. Headless clients use a
+separate expiring app-session bearer from
+`~/.tippani/session-token-<port>` plus the configured
+`TIPPANI_CLIENT_NAME`; bearer values are never printed to stdout.
+
 ## License
 
 MIT — see [LICENSE](LICENSE)

@@ -11,6 +11,7 @@ import {
   createKeyedLockStore,
 } from "./api-state.js";
 import { registerControlApi } from "./control-api.js";
+import { BROWSER_SESSION_COOKIE, createLocalClientAuth } from "./local-client-auth.js";
 
 let pass = 0, fail = 0;
 function check(name, cond) {
@@ -18,8 +19,9 @@ function check(name, cond) {
   else { fail++; console.error("  FAIL: " + name); }
 }
 
-const SESSION_TOKEN = "test-token-abc";
 const PORT_FOR_PREFIXES = 65535;  // doesn't matter; tests use 127.0.0.1:<ephemeral>
+const clientAuth = createLocalClientAuth({ port: PORT_FOR_PREFIXES });
+const appSession = clientAuth.createBearerSession({ clientName: "test" });
 
 // Fixture threads — minimal ADO shape.
 const threads = [
@@ -116,8 +118,7 @@ const stageFile = ({ repo, branch, title, folder, path } = {}) => {
 };
 
 registerControlApi(app, {
-  port: PORT_FOR_PREFIXES,
-  sessionToken: SESSION_TOKEN,
+  clientAuth,
   setAdoToken: (t) => { lastAdoToken = t; return t !== "reject-me"; },
   focus, drafts, locks,
   getThreads: () => threads,
@@ -167,7 +168,11 @@ const { port } = server.address();
 const BASE = `http://127.0.0.1:${port}`;
 
 async function call(path, opts = {}) {
-  const headers = { "X-Tippani-Client": "test", ...(opts.headers || {}) };
+  const headers = {
+    "X-Tippani-Client": "test",
+    Authorization: `Bearer ${appSession.token}`,
+    ...(opts.headers || {}),
+  };
   if (opts.body && typeof opts.body !== "string") {
     headers["Content-Type"] = "application/json";
     opts.body = JSON.stringify(opts.body);
@@ -177,9 +182,20 @@ async function call(path, opts = {}) {
   try { body = await r.json(); } catch {}
   return { status: r.status, body };
 }
-const authHeaders = { Authorization: `Bearer ${SESSION_TOKEN}` };
+const authHeaders = { Authorization: `Bearer ${appSession.token}` };
 
 try {
+  // The control API must never fall back to an unauthenticated mode.
+  for (const [label, deps] of [
+    ["no deps", {}],
+    ["null clientAuth", { clientAuth: null }],
+    ["clientAuth without requireControlAuth", { clientAuth: {} }],
+  ]) {
+    let threw = false;
+    try { registerControlApi(express(), deps); } catch { threw = true; }
+    check(`auth: registration refused with ${label}`, threw);
+  }
+
   // --- POST /api/v1/pr/stage ---
   {
     const body = { org: "https://dev.azure.com/o", project: "P", repo: "R", title: "Review", sourceBranch: "spec/x", targetBranch: "main" };
@@ -226,15 +242,28 @@ try {
     });
     check("auth: wrong bearer -> 401", r.status === 401);
   }
-  // Same-origin bypass: include Origin header that matches LOCAL_PREFIXES for `port`
-  // configured at registration time (PORT_FOR_PREFIXES). It's not 127.0.0.1:<this server>,
-  // but per the auth design, same-origin means matching the configured base. We just
-  // need to verify that the bypass *exists* — sending matching Origin omits both guards.
+  // Browser control requests require both an app-session cookie and exact Origin.
   {
+    const bootstrap = clientAuth.createBrowserBootstrap();
+    const browser = clientAuth.exchangeBrowserBootstrap(bootstrap.token);
     const r = await fetch(BASE + "/api/v1/threads", {
-      headers: { Origin: `http://localhost:${PORT_FOR_PREFIXES}` },
+      headers: {
+        Cookie: `${BROWSER_SESSION_COOKIE}=${browser.token}`,
+        Origin: `http://localhost:${PORT_FOR_PREFIXES}`,
+      },
     });
-    check("auth: same-origin bypass (no X-Tippani-Client needed)", r.status === 200);
+    check("auth: browser session plus exact Origin accepted", r.status === 200);
+  }
+  {
+    const r = await fetch(BASE + "/api/v1/commands/focus", {
+      method: "POST",
+      headers: {
+        Origin: `http://localhost:${PORT_FOR_PREFIXES}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ threadId: 101 }),
+    });
+    check("auth: exact Origin alone is not authority", r.status === 403);
   }
 
   // --- GET /api/v1/specs/:fileIndex/diff (now behind requireAuth) ---
@@ -349,7 +378,15 @@ try {
     check("nav: missing path -> 400", r.status === 400);
   }
   {
-    const r = await call("/api/v1/nav", { method: "POST", body: { path: "/feedback" } });
+    const response = await fetch(BASE + "/api/v1/nav", {
+      method: "POST",
+      headers: {
+        "X-Tippani-Client": "test",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ path: "/feedback" }),
+    });
+    const r = { status: response.status };
     check("nav: requires auth -> 401", r.status === 401);
   }
   // Reject nav targets that would steer the tab OFF-origin or into a scheme.
@@ -381,7 +418,14 @@ try {
     check("ado-token: missing token -> 400", r.status === 400);
   }
   {
-    const r = await call("/api/v1/ado-token", { method: "POST", body: { token: "x" } });
+    const r = await fetch(BASE + "/api/v1/ado-token", {
+      method: "POST",
+      headers: {
+        "X-Tippani-Client": "test",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ token: "x" }),
+    });
     check("ado-token: requires auth -> 401", r.status === 401);
   }
   {

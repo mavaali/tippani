@@ -22,9 +22,10 @@ export function registryDir() {
 
 /** Write (or overwrite) this portal's registry entry, keyed by port. */
 export function writeInstance({
-  port, prId, token, pid, url, shimPid,
+  port, prId, token, tokenExpiresAt = null, clientName = null, pid, url, shimPid,
   provider = "ado", owner = null, repo = null,
 }) {
+  let temporary = null;
   try {
     fs.mkdirSync(REG_DIR, { recursive: true, mode: 0o700 });
     const entry = {
@@ -34,6 +35,8 @@ export function writeInstance({
       owner,
       repo,
       token,
+      tokenExpiresAt: tokenExpiresAt == null ? null : Number(tokenExpiresAt),
+      clientName,
       pid: pid ?? process.pid,
       // The shim process that spawned this portal, if any. Startup reaping kills
       // a live portal whose spawning shim is gone (see reapInstances).
@@ -41,9 +44,15 @@ export function writeInstance({
       url: url || `http://localhost:${port}`,
       startedAt: Date.now(),
     };
-    fs.writeFileSync(path.join(REG_DIR, `${Number(port)}.json`), JSON.stringify(entry), { mode: 0o600 });
+    const target = path.join(REG_DIR, `${Number(port)}.json`);
+    temporary = `${target}.${process.pid}.tmp`;
+    fs.writeFileSync(temporary, JSON.stringify(entry), { mode: 0o600 });
+    fs.renameSync(temporary, target);
+    return true;
   } catch {
-    /* best effort */
+    // A half-written entry must not linger in the registry directory.
+    if (temporary) { try { fs.unlinkSync(temporary); } catch {} }
+    return false;
   }
 }
 

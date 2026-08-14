@@ -26,6 +26,8 @@ import rehypeSanitize, { defaultSchema } from "rehype-sanitize";
 
 // Shared with the real portal — the demo must not drift from what ships.
 import { cssVariables, changeTypeBadge, escHtml, stripMarkdown } from "./html-util.js";
+import { isAllowedHost } from "./host-guard.js";
+import { createLocalClientAuth } from "./local-client-auth.js";
 import { voteForReviewType, voteLabel } from "./review-vote.js";
 import { pathToFileURL } from "url";
 import path from "path";
@@ -885,6 +887,14 @@ export async function startDemo({ port = DEFAULT_PORT, headless = false } = {}) 
 
   const app = express();
   app.use(express.json());
+  app.use((req, res, next) => {
+    if (!isAllowedHost(req.headers.host)) {
+      return res.status(403).json({ error: "Forbidden: host not allowed" });
+    }
+    next();
+  });
+  const localClientAuth = createLocalClientAuth({ port });
+  localClientAuth.mount(app);
 
   // File picker
   app.get("/", (_req, res) => {
@@ -933,9 +943,11 @@ export async function startDemo({ port = DEFAULT_PORT, headless = false } = {}) 
 
   const server = app.listen(port, "127.0.0.1", () => {
     const url = `http://localhost:${port}`;
+    const bootstrap = localClientAuth.createBrowserBootstrap();
     console.log(`\n  tippani demo running at ${url}`);
+    console.log(`  Open: ${bootstrap.url}`);
     console.log(`  Sample spec, sample comments. Nothing is sent anywhere.\n`);
-    if (!headless) open(url);
+    if (!headless) open(bootstrap.url);
   });
   server.on("error", (err) => {
     if (err.code === "EADDRINUSE") {

@@ -116,6 +116,44 @@ export function createPortalSession({
     }
   }
 
+  function refreshActiveAppSession() {
+    if (!active?.port) return;
+    const current = listInstancesFn().find((item) =>
+      Number(item.port) === Number(active.port));
+    if (!current?.token) return;
+    if (current.clientName && current.clientName !== clientName) return;
+    active.token = current.token;
+    active.tokenExpiresAt = current.tokenExpiresAt || null;
+  }
+
+  async function createBrowserBootstrap(returnTo = "/") {
+    refreshActiveAppSession();
+    if (!active?.url || !active?.token) {
+      throw new Error("No authenticated tippani portal is active.");
+    }
+    const response = await fetchImpl(active.url + "/api/v1/auth/browser-bootstrap", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${active.token}`,
+        "X-Tippani-Client": clientName,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ returnTo }),
+    });
+    let body = null;
+    try { body = await response.json(); } catch {}
+    if (!response.ok || !body?.url) {
+      throw new Error(body?.error || "Could not create a browser bootstrap session.");
+    }
+    return body.url;
+  }
+
+  async function exposePortal(result, { headless, returnTo = "/" } = {}) {
+    const url = await createBrowserBootstrap(returnTo);
+    if (!headless) await maybeOpenBrowser(url);
+    return { ...result, url };
+  }
+
   // A live portal already open for this PR (any process), or null.
   function sameTarget(inst, {
     prId, provider = "ado", owner = null, repo = null,
@@ -195,15 +233,14 @@ export function createPortalSession({
     // user) open it — no browser is popped on the host. Only when the caller
     // opts in with `open_pr { headless: false }` does tippani open the portal in
     // the OS default browser itself.
-    if (!headless) await maybeOpenBrowser();
-    return result;
+    return exposePortal(result, { headless });
   }
 
   // Open the browser to the active portal once per binding.
-  async function maybeOpenBrowser() {
+  async function maybeOpenBrowser(url) {
     if (active && active.url && active.url !== lastOpenedUrl) {
       lastOpenedUrl = active.url;
-      try { await openBrowserFn(active.url); } catch { /* best effort */ }
+      try { await openBrowserFn(url); } catch { /* best effort */ }
     }
   }
 
@@ -235,8 +272,7 @@ export function createPortalSession({
     // replacing the review session with a second PR-less portal.
     if (active && activeMatchesProvider &&
         (await healthyAt(active.url, active.token))) {
-      if (!headless) await maybeOpenBrowser();
-      return { reused: true, url: active.url };
+      return exposePortal({ reused: true }, { headless });
     }
     for (const inst of listInstancesFn()) {
       if (!sameTarget(inst, target)) continue;
@@ -252,8 +288,7 @@ export function createPortalSession({
           repo: target.repo,
           owned: false,
         };
-        if (!headless) await maybeOpenBrowser();
-        return { reused: true, adopted: true, url };
+        return exposePortal({ reused: true, adopted: true }, { headless });
       }
     }
     active = await launchNew({
@@ -262,16 +297,14 @@ export function createPortalSession({
       owner: target.owner,
       repo: target.repo,
     });
-    if (!headless) await maybeOpenBrowser();
-    return { reused: false, url: active.url };
+    return exposePortal({ reused: false }, { headless });
   }
 
   // Mutation tools must stay on the currently selected provider. In particular,
   // authoring after GitHub open_pr must not switch to an ADO browse portal.
   async function ensureActivePortal({ headless = true } = {}) {
     if (active && (await healthyAt(active.url, active.token))) {
-      if (!headless) await maybeOpenBrowser();
-      return { reused: true, url: active.url };
+      return exposePortal({ reused: true }, { headless });
     }
     if (active?.provider === "github" && active.owner && active.repo) {
       if (active.prId) {
@@ -365,6 +398,7 @@ export function createPortalSession({
     const env = { ...process.env };
     if (adoToken) env.TIPPANI_ADO_TOKEN = adoToken;
     if (githubToken) env.TIPPANI_GH_TOKEN = githubToken;
+    env.TIPPANI_CLIENT_NAME = clientName;
     // Tell the portal who spawned it so startup reaping can detect orphans.
     env.TIPPANI_SHIM_PID = String(process.pid);
 
@@ -414,7 +448,10 @@ export function createPortalSession({
     });
   }
 
-  function getToken() { return active?.token ?? null; }
+  function getToken() {
+    refreshActiveAppSession();
+    return active?.token ?? null;
+  }
   function getBaseUrl() { return active?.url ?? `http://localhost:${basePort}`; }
 
   function stop() {
@@ -442,11 +479,14 @@ export function createPortalSession({
     // Navigation mode (see createPortalSession options). Read by the nav tools.
     separateTabs: !!separateTabs,
     // Open a specific portal path in the user's browser (e.g. "/thread/123").
-    openUrl: (path) => {
-      const base = (getBaseUrl() || "").replace(/\/+$/, "");
+    openUrl: async (path) => {
       const p = String(path || "/").startsWith("/") ? path : "/" + path;
-      try { return Promise.resolve(openBrowserFn(base + p)).catch(() => {}); }
-      catch { return Promise.resolve(); }
+      try {
+        const url = await createBrowserBootstrap(p);
+        return Promise.resolve(openBrowserFn(url)).catch(() => {});
+      } catch {
+        return Promise.resolve();
+      }
     },
     get clientName() { return clientName; },
   };
