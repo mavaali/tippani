@@ -546,6 +546,33 @@ try {
     });
     check("open: uses the OS default browser (openFn)", res.via === "open" && openedUrl === "http://localhost:3847/prs");
   }
+
+  // --- createBrowserSessionUrl: the public link-minting surface -------------
+  {
+    reset();
+    const session = newSession();
+    await session.ensureBrowsePortal();
+    const first = await session.createBrowserSessionUrl("/feedback");
+    check("createBrowserSessionUrl: returns a bootstrap link, not the base URL",
+      /\/auth\/bootstrap\?token=/.test(first));
+    check("createBrowserSessionUrl: forwards the requested page",
+      bootstrapCalls.at(-1).returnTo === "/feedback");
+    const second = await session.createBrowserSessionUrl();
+    check("createBrowserSessionUrl: every call mints a new link", second !== first);
+    check("createBrowserSessionUrl: defaults to the portal root",
+      bootstrapCalls.at(-1).returnTo === "/");
+    check("createBrowserSessionUrl: authenticates with the registered session",
+      bootstrapCalls.every((c) => c.ok));
+  }
+
+  {
+    // No portal bound yet: fail loudly rather than hand back an unusable address.
+    reset();
+    const session = newSession();
+    let threw = false;
+    try { await session.createBrowserSessionUrl(); } catch { threw = true; }
+    check("createBrowserSessionUrl: refuses when no portal is active", threw);
+  }
 } catch (e) {
   // A thrown block used to be masked by the bare try/finally + process.exit(0),
   // silently skipping every later check. Count it as a failure so it surfaces.

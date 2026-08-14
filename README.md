@@ -138,7 +138,49 @@ npx tippani <PR_ID> --refresh
 
 # Review a local git clone — no PR needed
 npx tippani --local-repo=/path/to/clone
+
+# Reconnect a browser to a portal that is ALREADY running
+tippani open
 ```
+
+### Opening the portal in a browser
+
+The portal will not accept an unauthenticated browser, so its plain address
+(`http://localhost:3847`) never opens a session on its own. A browser gets in by
+following a **one-time sign-in link**, which the running portal mints. Tippani
+opens one for you automatically at startup — unless you started it with
+`--headless`.
+
+Run `tippani open` whenever you need a new one:
+
+```bash
+# Mint a fresh sign-in link for the running portal and open it
+tippani open
+
+# Print the link instead of opening a browser
+tippani open --headless
+
+# Choose one of several running portals
+tippani open --port=3848
+
+# Land on a specific page
+tippani open --path=/feedback
+```
+
+Use it when:
+
+- you started the portal with `--headless` and now want to look at it yourself;
+- your browser session expired (sessions last 8 hours, or 30 minutes idle);
+- you closed the tab or cleared cookies and lost the session;
+- someone else's link was already used — each link works exactly once.
+
+`tippani open` **adopts the portal that is already running**, so your review
+state survives. You do not have to stop the server and restart it without
+`--headless`. If nothing is running, it tells you so; if several portals are
+running, it lists their ports and asks you to pick one with `--port=<n>`.
+
+`--demo` is self-contained and prints its own link at startup, so `tippani open`
+does not apply to it.
 
 ### All flags
 
@@ -153,7 +195,7 @@ npx tippani --local-repo=/path/to/clone
 | `--refresh` | Fetch fresh data, ignoring the cache. | — |
 | `--save-config` | Remember `--org/--project/--repo` in `~/.tippani/config.json`. | — |
 | `--port=<n>` | Serve on a specific port (default `3847`). | `TIPPANI_PORT` |
-| `--headless` | Don't open a browser — for assistant-only sessions. | `TIPPANI_HEADLESS` |
+| `--headless` | Don't open a browser — for assistant-only sessions. Use `tippani open` later to sign a browser in. | `TIPPANI_HEADLESS` |
 | `--ado-token=<t>` | Sign in with an access token instead of an interactive login. | `TIPPANI_ADO_TOKEN` |
 | `--github=<owner/repo>` | Select GitHub; pair with a PR number or `--browse`. | `TIPPANI_GITHUB_REPO` / `TIPPANI_GH_REPO` |
 | `--gh-token=<t>` | GitHub token (otherwise uses env, then `gh auth token`). | `TIPPANI_GH_TOKEN` / `GITHUB_TOKEN` |
@@ -262,7 +304,7 @@ validation.
 
 **Tools (47):**
 
-- **Portal lifecycle** — `start_tippani` (explicit browse-mode start), `get_portal_url`, `open_local_only` (local review, no ADO token), `close_tippani`.
+- **Portal lifecycle** — `start_tippani` (explicit browse-mode start), `get_portal_url` (mint a fresh sign-in link / reconnect), `open_local_only` (local review, no ADO token), `close_tippani`.
 - **Portal & navigation** — `open_pr` (ADO by default; for GitHub pass `provider: "github"`, `owner`, and `repo`), `open_file`, `go_to_line` (scroll the already-open file to a line, no reopen), `open_thread` (selects a thread, scrolls both panes to its anchor, and returns its content), `show_feedback` (cross-PR triage page), `set_view`, `set_feedback_filter`, `refresh_spec`.
 - **Reading** — `list_threads`, `get_thread`, `get_spec`, `get_spec_draft`, `triage_summary`; focus with `focus_thread`.
 - **Stage-then-push** — stage review work with `stage_draft`, `edit_spec`, and `stage_resolve_thread`; stage authoring work with `stage_branch`, `stage_spec`, and `stage_spec_pr`. Nothing staged by MCP reaches your repository host until one explicit `push_staged_changes` call. Also `clear_draft` and `clear_spec_edit`.
@@ -272,6 +314,13 @@ validation.
 - **Annotations** — `read_annotations`, `add_annotation`, `edit_annotation`, `delete_annotation`, `reply_annotation`, `resolve_annotation`, plus navigation (`navigate_annotations`, `jump_to_annotation`, `show_resolved_annotations`) and bulk cleanup.
 
 Staged whole-file edits show up in the portal as a side-by-side Current/Proposed diff you can accept-and-refine in the editor before committing.
+
+**Every `portalUrl` an MCP tool returns is a one-time sign-in link.** The portal
+rejects an unauthenticated browser, so a plain `http://localhost:<port>` address
+is never usable, and a link stops working once it has been opened or after it
+expires. Assistants should show the link as a clickable link and call
+`get_portal_url` again for a new one rather than resending an old one. You can
+also mint one yourself at any time with `tippani open`.
 
 The portal can also run standalone with `--headless` (assistant-only, no browser), `--port=<n>` (run several at once), and `--ado-token=<t>` (token-based sign-in, skipping the interactive login). The underlying HTTP control API is directly usable for scripts and IDE extensions — see `src/control-api.js`.
 

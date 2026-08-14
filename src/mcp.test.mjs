@@ -141,6 +141,8 @@ const ensurePortalCalls = [];
 const openUrlCalls = [];
 const browsePortalCalls = [];
 const activePortalCalls = [];
+const bootstrapCalls = [];
+let bootstrapSerial = 0;
 let stubToken = null;
 const stubSession = {
   ensurePortal: async (opts) => { ensurePortalCalls.push(opts); stubToken = "tok"; return { reused: false, prId: opts.prId, url: "http://localhost:3847" }; },
@@ -149,6 +151,11 @@ const stubSession = {
   openUrl: async (path) => { openUrlCalls.push(path); },
   getBaseUrl: () => "http://localhost:3847",
   getToken: () => stubToken,
+  createBrowserSessionUrl: async (returnTo) => {
+    bootstrapCalls.push(returnTo);
+    bootstrapSerial += 1;
+    return `http://localhost:3847/auth/bootstrap?token=one-time-${bootstrapSerial}`;
+  },
 };
 const tools = buildTools(http, stubSession);
 const byName = Object.fromEntries(tools.map((t) => [t.name, t]));
@@ -186,14 +193,34 @@ try {
     stubToken = null; // simulate no portal yet
     const before = await byName.get_portal_url.handler({});
     check("get_portal_url: not running before start", before.running === false);
-    check("get_portal_url: still returns the address", before.portalUrl === "http://localhost:3847");
+    // The portal refuses an unauthenticated browser, so a bare address would be
+    // a dead link — there is nothing usable to hand out until it is running.
+    check("get_portal_url: offers no link before start", before.portalUrl === null);
+    check("get_portal_url: says how to start", /start_tippani/.test(before.note));
     const n0 = browsePortalCalls.length;
     const started = await byName.start_tippani.handler({});
     check("start_tippani: launches a browse portal", browsePortalCalls.length === n0 + 1);
-    check("start_tippani: returns portalUrl", started.portalUrl === "http://localhost:3847");
+    check("start_tippani: returns a sign-in link, not the bare address",
+      /\/auth\/bootstrap\?token=/.test(started.portalUrl));
+    check("start_tippani: marks the link single use", started.singleUse === true);
     check("start_tippani: reports running", started.running === true);
     const after = await byName.get_portal_url.handler({});
     check("get_portal_url: running after start", after.running === true);
+    check("get_portal_url: returns a sign-in link when running",
+      /\/auth\/bootstrap\?token=/.test(after.portalUrl));
+    // Reusing a consumed link is the exact failure this replaces, so every call
+    // must mint a new one rather than echo a cached URL.
+    check("get_portal_url: mints a fresh link each call",
+      after.portalUrl !== started.portalUrl);
+    const again = await byName.get_portal_url.handler({});
+    check("get_portal_url: repeated calls keep minting", again.portalUrl !== after.portalUrl);
+    const local = await byName.open_local_only.handler({});
+    check("open_local_only: returns a sign-in link",
+      /\/auth\/bootstrap\?token=/.test(local.portalUrl) && local.singleUse === true);
+    for (const name of ["start_tippani", "get_portal_url", "open_local_only"]) {
+      check(`${name}: description warns the link is single use`,
+        /SINGLE-USE|single-use|one-time/.test(byName[name].description));
+    }
   }
 
   // --- open_pr ---
@@ -272,7 +299,8 @@ try {
   {
     const before = browsePortalCalls.length;
     const r = await byName.open_local_only.handler({});
-    check("open_local_only: returns portalUrl", r.portalUrl === "http://localhost:3847");
+    check("open_local_only: returns a single-use sign-in link",
+      /\/auth\/bootstrap\?token=/.test(r.portalUrl) && r.singleUse === true);
     check("open_local_only: reports running", r.running === true);
     check("open_local_only: ensured a browse portal (no token needed)", browsePortalCalls.length === before + 1);
   }

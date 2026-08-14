@@ -26,6 +26,25 @@ It registers **47 tools**. `open_pr` (or a Discovery tool like `list_prs` /
 other tool then operates on that open session. A parameter marked `*` is
 required.
 
+**A `portalUrl` is a one-time sign-in link, not an address.** The portal refuses
+an unauthenticated browser, so a plain `http://localhost:<port>` will not open
+it, and a link stops working once it has been followed or after it expires
+(about two minutes). Show the returned link to the user as a clickable link, and
+call `get_portal_url` for a fresh one instead of resending a link you already
+gave out. Users can mint their own at any time with `tippani open`.
+
+### Portal lifecycle
+
+| Tool | Purpose | Parameters |
+|---|---|---|
+| `start_tippani` | Start the portal in browse mode without opening a PR. Adopts a running portal. Returns a fresh single-use `portalUrl`. | — |
+| `get_portal_url` | Mint a fresh single-use `portalUrl` for the running portal — use this to reconnect a user whose link was used or expired. Does not start the portal: when `running` is false, `portalUrl` is `null`. | — |
+| `open_local_only` | Start the portal in local-only mode (no ADO token). Returns a fresh single-use `portalUrl`. | — |
+| `close_tippani` | Steer the open tab to a closed page, then shut the portal down and clear its registry entry. | — |
+
+All three link-returning tools also set `singleUse: true` and a `note`
+restating that the link works once.
+
 The server's `initialize.instructions` defines authentication recovery for all
 ADO-backed tools. After HTTP 401, call `close_tippani`, restart the MCP server
 through the host's lifecycle controls (or terminate `tippani-mcp` with an

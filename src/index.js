@@ -7198,6 +7198,14 @@ async function main() {
     return;
   }
 
+  // `tippani open` / `tippani reopen` — reconnect a browser to a portal that is
+  // already running. Handled before any target parsing because it never starts
+  // a server: the running portal mints a fresh one-time sign-in link instead.
+  if (positional[0] === "open" || positional[0] === "reopen") {
+    const { runReopenCommand } = await import("./portal-reopen.js");
+    process.exit(await runReopenCommand({ args }));
+  }
+
   const githubTarget = parseGitHubTarget(args, process.env);
   if (githubTarget.error) {
     console.error(`Error: ${githubTarget.error}`);
@@ -7226,6 +7234,11 @@ async function main() {
     console.log("");
     console.log("Try it with no setup:");
     console.log("  tippani --demo    Open the portal on a sample spec (no ADO, no login)");
+    console.log("");
+    console.log("Reconnect a browser to a portal that is already running:");
+    console.log("  tippani open      Mint a fresh one-time sign-in link and open it");
+    console.log("                    (--headless prints the link instead; --port=<n>");
+    console.log("                    picks one of several running portals)");
     console.log("");
     console.log("Options:");
     console.log("  --org=<url>       ADO org URL (e.g. https://dev.azure.com/myorg)");
@@ -9755,11 +9768,14 @@ if ($path) { [Console]::Out.Write($path) }
         returnTo: openIndex !== null ? `/file/${openIndex}` : "/",
       });
       open(bootstrap.url);
+    } else {
+      console.log("  Headless: run `tippani open` to sign a browser in to this portal.\n");
     }
   });
   server.on("error", (err) => {
     if (err.code === "EADDRINUSE") {
-      console.error(`\n  Error: Port ${PORT} is already in use. Is another tippani instance running?\n`);
+      console.error(`\n  Error: Port ${PORT} is already in use. Is another tippani instance running?`);
+      console.error("  To reconnect a browser to it, run: tippani open\n");
     } else {
       console.error(`\n  Error starting server: ${err.message}\n`);
     }

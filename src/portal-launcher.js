@@ -476,6 +476,10 @@ export function createPortalSession({
     getToken,
     getBaseUrl,
     stop,
+    // Mint a single-use browser sign-in link for the active portal. The bare
+    // base URL is refused as unauthenticated, so anything that hands a URL to a
+    // user must go through here.
+    createBrowserSessionUrl: (returnTo = "/") => createBrowserBootstrap(returnTo),
     // Navigation mode (see createPortalSession options). Read by the nav tools.
     separateTabs: !!separateTabs,
     // Open a specific portal path in the user's browser (e.g. "/thread/123").
