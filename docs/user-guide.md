@@ -44,6 +44,49 @@ The portal serves from `http://localhost:3847` by default (override with
 `--port`). Everything runs locally — Tippani connects to your repositories on
 your behalf and renders the UI in your browser.
 
+### Signing your browser in
+
+Tippani will not serve its pages to an unauthenticated browser, so typing
+`http://localhost:3847` into the address bar gets you an "Authentication
+required" page rather than the portal. A browser gets a session by following a
+**one-time sign-in link**, which only the running portal can create. Tippani
+opens one for you automatically when it starts — unless you passed `--headless`.
+
+Each link works exactly once and expires after a couple of minutes. The session
+it creates lasts up to 8 hours, and ends after 30 minutes of inactivity.
+
+When you need a new link — you started headless, your session expired, or you
+closed the tab — run:
+
+```bash
+# Mint a fresh sign-in link for the portal that is already running, and open it
+tippani open
+
+# Just print the link
+tippani open --headless
+
+# Pick one of several running portals
+tippani open --port=3848
+
+# Land on a particular page
+tippani open --path=/feedback
+```
+
+`tippani open` attaches to the portal that is **already running**, so nothing is
+lost: your loaded pull request, staged edits, and drafts all survive. You never
+have to stop the server and start it again just to get back in. (`tippani
+reopen` does the same thing.)
+
+If no portal is running, Tippani says so and suggests how to start one. If more
+than one is running, it lists the ports and asks you to choose with `--port=<n>`.
+
+A second `tippani <PR_ID>` on a port that is already serving will not start a
+rival server — it reports that the port is in use and points you at `tippani
+open`.
+
+`--demo` runs a self-contained sample portal that prints its own link when it
+starts, so `tippani open` does not apply to it.
+
 The top bar is consistent everywhere: a **breadcrumb** on the left (`Home ›
 …`) and the Tippani wordmark with the current mode (`· discovery`, `· read ·
 annotate · edit`, `· feedback`) on the right.

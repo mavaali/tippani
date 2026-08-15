@@ -21,13 +21,27 @@ try {
   check("registryDir under home", registryDir().startsWith(tmpHome));
   check("empty registry lists nothing", listInstances().length === 0);
 
-  writeInstance({ port: 3847, prId: 111, token: "t1", pid: 1001 });
+  check("write succeeds", writeInstance({ port: 3847, prId: 111, token: "t1", tokenExpiresAt: 1234, clientName: "mcp", pid: 1001 }) === true);
   writeInstance({ port: 3848, prId: 222, token: "t2", pid: 1002 });
 
   const all = listInstances();
   check("lists both instances", all.length === 2);
   const a = all.find((i) => i.port === 3847);
   check("entry has prId/token/url", a.prId === 111 && a.token === "t1" && a.url === "http://localhost:3847");
+  check("entry has app-session metadata", a.tokenExpiresAt === 1234 && a.clientName === "mcp");
+
+  // index.js treats a false return as fatal (it must not publish a token the
+  // registry never accepted), so the failure signal has to be real. A directory
+  // where the entry file belongs makes the final rename fail.
+  {
+    const blocked = path.join(registryDir(), "3999.json");
+    fs.mkdirSync(blocked, { recursive: true });
+    check("write reports failure instead of throwing",
+      writeInstance({ port: 3999, prId: 1, token: "t", pid: 1 }) === false);
+    check("failed write leaves no temp file behind",
+      !fs.readdirSync(registryDir()).some((f) => f.includes(".tmp")));
+    fs.rmSync(blocked, { recursive: true, force: true });
+  }
 
   // Overwrite same port → updates, not duplicates.
   writeInstance({ port: 3847, prId: 999, token: "t1b", pid: 1001 });

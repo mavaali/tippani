@@ -37,14 +37,35 @@ function tokenFor(port) {
   const p = join(homedir(), ".tippani", `session-token-${port}`);
   return existsSync(p) ? readFileSync(p, "utf8").trim() : "";
 }
+// Browser-session cookie for page GETs — pages sit behind the browser-session
+// gate, so the script signs in the way a real browser does: mint a single-use
+// bootstrap link over the app bearer, consume it, keep the HttpOnly cookie.
+let COOKIE = "";
+async function establishBrowserSession() {
+  const minted = await fetch(BASE + "/api/v1/auth/browser-bootstrap", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${tokenFor(PORT)}`,
+      "X-Tippani-Client": CLIENT,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ returnTo: "/" }),
+  });
+  const body = await minted.json();
+  if (!minted.ok || !body?.url) throw new Error("could not mint browser bootstrap: " + JSON.stringify(body));
+  const exchange = await fetch(body.url, { redirect: "manual" });
+  COOKIE = (exchange.headers.get("set-cookie") || "").split(";")[0];
+  if (!COOKIE) throw new Error("bootstrap exchange did not set a session cookie");
+}
 async function getPage(path) {
-  const res = await fetch(BASE + path, { headers: { "X-Tippani-Client": CLIENT } });
+  const res = await fetch(BASE + path, { headers: { "X-Tippani-Client": CLIENT, Cookie: COOKIE } });
   const html = await res.text();
   return { status: res.status, html };
 }
 async function api(method, path, body) {
-  const headers = { "X-Tippani-Client": CLIENT };
-  if (method !== "GET") { headers["Authorization"] = `Bearer ${tokenFor(PORT)}`; headers["Content-Type"] = "application/json"; }
+  // Reads require the app bearer too under the authenticated client boundary.
+  const headers = { "X-Tippani-Client": CLIENT, "Authorization": `Bearer ${tokenFor(PORT)}` };
+  if (method !== "GET") { headers["Content-Type"] = "application/json"; }
   const res = await fetch(BASE + path, { method, headers, body: body ? JSON.stringify(body) : undefined });
   let json = null; try { json = await res.json(); } catch {}
   return { status: res.status, json };
@@ -52,7 +73,12 @@ async function api(method, path, body) {
 async function waitReady(timeoutMs = 25000) {
   const t0 = Date.now();
   while (Date.now() - t0 < timeoutMs) {
-    try { const r = await fetch(BASE + "/api/v1/state", { headers: { "X-Tippani-Client": CLIENT } }); if (r.ok) return true; } catch {}
+    try {
+      const r = await fetch(BASE + "/api/v1/state", {
+        headers: { "X-Tippani-Client": CLIENT, Authorization: `Bearer ${tokenFor(PORT)}` },
+      });
+      if (r.ok) return true;
+    } catch {}
     await sleep(400);
   }
   return false;
@@ -64,6 +90,8 @@ async function main() {
 
   const child = spawn(process.execPath, [join(ROOT, "src", "index.js"), PR, `--port=${PORT}`, "--offline", "--headless"], {
     cwd: ROOT, stdio: ["ignore", "ignore", "inherit"],
+    // The app bearer is bound to the exact client name this script sends.
+    env: { ...process.env, TIPPANI_CLIENT_NAME: CLIENT },
   });
   let exited = false; child.on("exit", () => { exited = true; });
 
@@ -71,6 +99,7 @@ async function main() {
     const ready = await waitReady();
     check("portal boots offline and serves pages", ready);
     if (!ready) throw new Error("portal did not become ready");
+    await establishBrowserSession();
 
     // ---- /file/0 : editor + view controls ----
     const file = await getPage("/file/0");
@@ -161,7 +190,7 @@ async function main() {
       check("/discovery shows a filter bar", /pr-filter|filter/i.test(disc.html));
     }
     // /prs is a backward-compatible alias that redirects to /discovery.
-    const prsRedirect = await fetch(BASE + "/prs", { headers: { "X-Tippani-Client": CLIENT }, redirect: "manual" });
+    const prsRedirect = await fetch(BASE + "/prs", { headers: { "X-Tippani-Client": CLIENT, Cookie: COOKIE }, redirect: "manual" });
     check("/prs redirects to /discovery", prsRedirect.status >= 300 && prsRedirect.status < 400 && (prsRedirect.headers.get("location") || "").startsWith("/discovery"), `status=${prsRedirect.status} loc=${prsRedirect.headers.get("location")}`);
 
     // ---- purely staged new file: empty Current, populated Proposed buffer ----

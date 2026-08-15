@@ -21,13 +21,43 @@ let registry = [];
 let busyPorts = new Set();
 let spawnCalls = [];
 let openedUrls = [];
+let bootstrapCalls = [];
 
 const listInstancesFn = () => registry.map((r) => ({ ...r }));
 
 // healthy iff the base URL matches a live registry entry.
-const fetchImpl = async (url) => {
+const fetchImpl = async (url, options = {}) => {
+  if (url.endsWith("/api/v1/auth/browser-bootstrap")) {
+    const base = url.replace("/api/v1/auth/browser-bootstrap", "");
+    const instance = registry.find((i) =>
+      (i.url || `http://localhost:${i.port}`) === base);
+    const authorization = options.headers?.Authorization || "";
+    const token = authorization.replace(/^Bearer\s+/, "");
+    const clientName = options.headers?.["X-Tippani-Client"];
+    const ok = !!instance &&
+      token === instance.token &&
+      (!instance.clientName || instance.clientName === clientName);
+    const returnTo = JSON.parse(options.body || "{}").returnTo || "/";
+    bootstrapCalls.push({ base, returnTo, ok });
+    return {
+      ok,
+      status: ok ? 200 : 401,
+      json: async () => ok
+        ? { ok: true, url: `${base}/auth/bootstrap?token=bootstrap-${bootstrapCalls.length}` }
+        : { error: "invalid app session" },
+    };
+  }
   const base = url.replace("/api/v1/threads", "");
-  const ok = registry.some((i) => (i.url || `http://localhost:${i.port}`) === base);
+  const instance = registry.find((i) =>
+    (i.url || `http://localhost:${i.port}`) === base);
+  // Mirror the real portal: a bearer only works with the exact client name it
+  // was minted for, so health probes with a mismatched token or name 401.
+  const authorization = options.headers?.Authorization || "";
+  const token = authorization.replace(/^Bearer\s+/, "");
+  const clientName = options.headers?.["X-Tippani-Client"];
+  const ok = !!instance &&
+    token === instance.token &&
+    (!instance.clientName || instance.clientName === clientName);
   return { ok, json: async () => ({ threads: [] }) };
 };
 
@@ -53,6 +83,7 @@ function fakeSpawn(bin, args, opts) {
       owner: github?.owner || null,
       repo: github?.repo || null,
       token: `tok-${port}`,
+      clientName: opts.env.TIPPANI_CLIENT_NAME,
       url: `http://localhost:${port}`,
     });
     busyPorts.add(port); // a launched portal now holds its port (mirror reality)
@@ -79,7 +110,13 @@ function newSession(overrides = {}) {
   });
 }
 
-function reset() { registry = []; busyPorts = new Set(); spawnCalls = []; openedUrls = []; }
+function reset() {
+  registry = [];
+  busyPorts = new Set();
+  spawnCalls = [];
+  openedUrls = [];
+  bootstrapCalls = [];
+}
 
 try {
   // --- adopt an existing portal already open for this PR ---
@@ -92,7 +129,87 @@ try {
     check("adopt: no spawn", spawnCalls.length === 0);
     check("adopt: bound to existing url", s.getBaseUrl() === "http://localhost:3847");
     check("adopt: uses existing token", s.getToken() === "existing");
-    check("adopt: opened browser to adopted portal (headless:false)", openedUrls.includes("http://localhost:3847"));
+    check("adopt: opened one-time browser bootstrap", openedUrls[0]?.startsWith("http://localhost:3847/auth/bootstrap?token="));
+    s.stop();
+  }
+
+  // --- the portal rotates its app session; the shim must follow the registry ---
+  {
+    reset();
+    registry.push({
+      port: 3847, prId: 952607, token: "first",
+      clientName: "tippani-mcp-test", url: "http://localhost:3847",
+    });
+    const s = newSession();
+    await s.ensurePortal({ prId: 952607 });
+    check("rotation: starts on the published token", s.getToken() === "first");
+    registry[0].token = "second";
+    check("rotation: shim follows the rotated app session", s.getToken() === "second");
+    check("rotation: bootstrap uses the rotated token", (await (async () => {
+      await s.openUrl("/thread/9");
+      return bootstrapCalls.at(-1)?.ok === true;
+    })()));
+    check("rotation: bootstrap carries the requested path",
+      bootstrapCalls.at(-1)?.returnTo === "/thread/9");
+    s.stop();
+  }
+
+  // --- the registry is the source of truth for the portal's bearer AND the
+  //     client name it is bound to; the shim follows both, so a portal
+  //     registered by another client stays usable after adoption ---
+  {
+    reset();
+    registry.push({
+      port: 3847, prId: 952607, token: "ours",
+      clientName: "tippani-mcp-test", url: "http://localhost:3847",
+    });
+    const s = newSession();
+    await s.ensurePortal({ prId: 952607 });
+    registry[0] = { ...registry[0], token: "someone-elses", clientName: "other-client" };
+    check("rotation: follows the registry token and its bound client",
+      s.getToken() === "someone-elses");
+    // The mint must present the BOUND client name, not the shim's own — the
+    // fake backend 401s a name mismatch, so ok:true proves it.
+    await s.openUrl("/x");
+    check("rotation: bootstrap presents the bound client name",
+      bootstrapCalls.at(-1)?.ok === true);
+    s.stop();
+  }
+
+  // --- adopt a CLI-started portal whose bearer is bound to ITS client name
+  //     ("tippani-external"), not the shim's — the regression here spawned a
+  //     duplicate portal because every probe 401ed ---
+  {
+    reset();
+    registry.push({
+      port: 3847, prId: 952607, token: "cli-token",
+      clientName: "tippani-external", url: "http://localhost:3847",
+    });
+    const s = newSession();
+    const r = await s.ensurePortal({ prId: 952607 });
+    check("cli adopt: adopted instead of spawning a duplicate",
+      r.reused === true && r.adopted === true && spawnCalls.length === 0);
+    check("cli adopt: uses the portal's token", s.getToken() === "cli-token");
+    s.stop();
+  }
+
+  // --- bootstrap refusal must not throw out of openUrl ---
+  {
+    reset();
+    registry.push({
+      port: 3847, prId: 952607, token: "stale",
+      clientName: "tippani-mcp-test", url: "http://localhost:3847",
+    });
+    const s = newSession();
+    await s.ensurePortal({ prId: 952607 });
+    registry[0] = { ...registry[0], token: "rotated-away" };
+    // The session now holds a token the portal has revoked; the fake backend
+    // 401s the bootstrap request.
+    s.getToken();
+    registry[0] = { ...registry[0], token: "different-again" };
+    let threw = false;
+    try { await s.openUrl("/feedback"); } catch { threw = true; }
+    check("bootstrap refusal: openUrl resolves instead of throwing", !threw);
     s.stop();
   }
 
@@ -111,7 +228,8 @@ try {
       spawnCalls[0].args.includes("--repo=R"));
     check("launch: injects ADO token env", spawnCalls[0].opts.env.TIPPANI_ADO_TOKEN === "ado-test-token");
     check("launch: portal headless (shim owns browser)", spawnCalls[0].args.includes("--headless"));
-    check("launch: opened browser once to portal (headless:false)", openedUrls.length === 1 && openedUrls[0] === "http://localhost:3847");
+    check("launch: opened browser once with bootstrap", openedUrls.length === 1 && openedUrls[0].startsWith("http://localhost:3847/auth/bootstrap?token="));
+    check("launch: binds child app session to MCP client", spawnCalls[0].opts.env.TIPPANI_CLIENT_NAME === "tippani-mcp-test");
     s.stop();
   }
 
@@ -120,9 +238,12 @@ try {
     reset();
     const s = newSession();
     const r = await s.ensurePortal({ prId: 4242, org: "https://dev.azure.com/o", project: "P", repo: "R" });
-    check("headless default: launched + returns url", r.reused === false && r.url === "http://localhost:3847");
+    check("headless default: returns the base url without minting a sign-in link",
+      r.reused === false && r.url === "http://localhost:3847" && bootstrapCalls.length === 0);
     check("headless default: spawned the portal", spawnCalls.length === 1);
     check("headless default: opened NO browser", openedUrls.length === 0);
+    check("headless default: explicit mint still hands out a one-time link",
+      (await s.createBrowserSessionUrl("/")).startsWith("http://localhost:3847/auth/bootstrap?token="));
     s.stop();
   }
 
@@ -460,6 +581,33 @@ try {
       openFn: (u) => { openedUrl = u; },
     });
     check("open: uses the OS default browser (openFn)", res.via === "open" && openedUrl === "http://localhost:3847/prs");
+  }
+
+  // --- createBrowserSessionUrl: the public link-minting surface -------------
+  {
+    reset();
+    const session = newSession();
+    await session.ensureBrowsePortal();
+    const first = await session.createBrowserSessionUrl("/feedback");
+    check("createBrowserSessionUrl: returns a bootstrap link, not the base URL",
+      /\/auth\/bootstrap\?token=/.test(first));
+    check("createBrowserSessionUrl: forwards the requested page",
+      bootstrapCalls.at(-1).returnTo === "/feedback");
+    const second = await session.createBrowserSessionUrl();
+    check("createBrowserSessionUrl: every call mints a new link", second !== first);
+    check("createBrowserSessionUrl: defaults to the portal root",
+      bootstrapCalls.at(-1).returnTo === "/");
+    check("createBrowserSessionUrl: authenticates with the registered session",
+      bootstrapCalls.every((c) => c.ok));
+  }
+
+  {
+    // No portal bound yet: fail loudly rather than hand back an unusable address.
+    reset();
+    const session = newSession();
+    let threw = false;
+    try { await session.createBrowserSessionUrl(); } catch { threw = true; }
+    check("createBrowserSessionUrl: refuses when no portal is active", threw);
   }
 } catch (e) {
   // A thrown block used to be masked by the bare try/finally + process.exit(0),

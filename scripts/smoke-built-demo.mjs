@@ -48,7 +48,10 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 async function waitReady(timeoutMs = 20000) {
   const t0 = Date.now();
   while (Date.now() - t0 < timeoutMs) {
-    try { const r = await fetch(BASE + "/"); if (r.ok) return true; } catch {}
+    try {
+      const r = await fetch(BASE + "/");
+      if (r.ok || r.status === 401) return true;
+    } catch {}
     await sleep(300);
   }
   return false;
@@ -91,8 +94,18 @@ async function main() {
 
   try {
     const ready = await waitReady();
-    check("bundled --demo boots and serves the home page", ready);
+    check("bundled --demo boots behind the browser-session gate", ready);
     if (!ready) throw new Error("bundled demo did not become ready — stdout: " + stdout);
+
+    const match = stdout.match(/Open:\s+(http:\/\/localhost:\d+\/auth\/bootstrap\?token=\S+)/);
+    check("bundled demo prints a one-time bootstrap URL", !!match);
+    let browserCookie = "";
+    if (match) {
+      const exchange = await fetch(match[1], { redirect: "manual" });
+      browserCookie = (exchange.headers.get("set-cookie") || "").split(";")[0];
+      const home = await fetch(BASE + "/", { headers: { Cookie: browserCookie } });
+      check("bundled demo bootstrap unlocks the home page", exchange.status === 303 && home.ok);
+    }
 
     // The actual regression: exactly one process should be listening, not two
     // racing for the port and one dying with EADDRINUSE. (This check is
@@ -108,23 +121,35 @@ async function main() {
     check("child process has not exited (would have if it lost an EADDRINUSE race)", !exited, `exitCode=${exitCode}`);
     check("stdout did not print the 'port already in use' error", !/already in use/i.test(stdout), stdout);
 
-    const home = await fetch(BASE + "/");
+    const home = await fetch(BASE + "/", { headers: { Cookie: browserCookie } });
     check("GET / -> 200", home.status === 200, `status=${home.status}`);
 
-    const spec = await fetch(BASE + "/file/0");
+    const spec = await fetch(BASE + "/file/0", { headers: { Cookie: browserCookie } });
     check("GET /file/0 -> 200", spec.status === 200, `status=${spec.status}`);
 
     // The demo's /api/review stub should share the SAME vote contract as the
     // real route (both built from review-vote.js) — proves the bundle didn't
     // silently drop that shared module.
     const review = await fetch(BASE + "/api/review", {
-      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ type: "approve" }),
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Cookie: browserCookie,
+        Origin: `http://localhost:${PORT}`,
+      },
+      body: JSON.stringify({ type: "approve" }),
     });
     const reviewJson = await review.json();
     check("POST /api/review approve -> 200, vote 10", review.status === 200 && reviewJson.ok === true && reviewJson.vote === 10, JSON.stringify(reviewJson));
 
     const badReview = await fetch(BASE + "/api/review", {
-      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ type: "not-a-real-type" }),
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Cookie: browserCookie,
+        Origin: `http://localhost:${PORT}`,
+      },
+      body: JSON.stringify({ type: "not-a-real-type" }),
     });
     check("POST /api/review bad type -> 400", badReview.status === 400, `status=${badReview.status}`);
   } finally {

@@ -16,7 +16,6 @@ import path from "path";
 import { execFile } from "node:child_process";
 import { fileURLToPath } from "url";
 import os from "os";
-import crypto from "crypto";
 import { EDITOR_JS } from "./client/editor.bundle.js";
 import { MERMAID_JS } from "./client/mermaid.bundle.js";
 import { MERMAID_VIEW_JS } from "./client/mermaid-view.bundle.js";
@@ -49,6 +48,11 @@ import { createCustomFiles } from "./custom-files.js";
 import { buildReadingList, isPinnedManual, manualRoot } from "./reading-list.js";
 import { fileReviewContext } from "./comment-key.js";
 import { isAllowedHost } from "./host-guard.js";
+import { createLocalClientAuth } from "./local-client-auth.js";
+import {
+  createAppSessionRotation,
+  ROTATION_INTERVAL_MS,
+} from "./app-session-rotation.js";
 import { planStagedPushes } from "./staged-push-plan.js";
 import { adoCall } from "./ado-call.js";
 import { resolveBaseBranch, normalizeBranchRef } from "./ado-refs.js";
@@ -7176,10 +7180,6 @@ async function listBranchFolders({ project, repo, branch, scope } = {}) {
 }
 
 
-// Session token authorises external (non-browser-same-origin) mutations.
-// Generated fresh per process and printed to stdout at startup.
-const _sessionToken = crypto.randomBytes(24).toString("base64url");
-
 // --- Express server ---
 async function main() {
   // Parse PR ID (first non-flag argument)
@@ -7196,6 +7196,14 @@ async function main() {
       headless: args.includes("--headless"),
     });
     return;
+  }
+
+  // `tippani open` / `tippani reopen` — reconnect a browser to a portal that is
+  // already running. Handled before any target parsing because it never starts
+  // a server: the running portal mints a fresh one-time sign-in link instead.
+  if (positional[0] === "open" || positional[0] === "reopen") {
+    const { runReopenCommand } = await import("./portal-reopen.js");
+    process.exit(await runReopenCommand({ args }));
   }
 
   const githubTarget = parseGitHubTarget(args, process.env);
@@ -7226,6 +7234,11 @@ async function main() {
     console.log("");
     console.log("Try it with no setup:");
     console.log("  tippani --demo    Open the portal on a sample spec (no ADO, no login)");
+    console.log("");
+    console.log("Reconnect a browser to a portal that is already running:");
+    console.log("  tippani open      Mint a fresh one-time sign-in link and open it");
+    console.log("                    (--headless prints the link instead; --port=<n>");
+    console.log("                    picks one of several running portals)");
     console.log("");
     console.log("Options:");
     console.log("  --org=<url>       ADO org URL (e.g. https://dev.azure.com/myorg)");
@@ -7296,6 +7309,13 @@ async function main() {
   const portVal = portArg ? parseInt(portArg.split("=")[1], 10) : parseInt(process.env.TIPPANI_PORT || "", 10);
   if (Number.isFinite(portVal) && portVal > 0) PORT = portVal;
   const headless = args.includes("--headless") || process.env.TIPPANI_HEADLESS === "1";
+  const externalClientName =
+    String(process.env.TIPPANI_CLIENT_NAME || "tippani-external").trim() ||
+    "tippani-external";
+  const localClientAuth = createLocalClientAuth({ port: PORT });
+  const appBearer = localClientAuth.createBearerSession({
+    clientName: externalClientName,
+  });
   const adoToken = (args.find(a => a.startsWith("--ado-token="))?.split("=").slice(1).join("=")) || process.env.TIPPANI_ADO_TOKEN || null;
   let githubToken = null;
   if (_hostKind === "github" && !_isOffline) {
@@ -7534,21 +7554,9 @@ async function main() {
     next();
   });
 
-  // CSRF protection: reject cross-origin mutations
-  app.use((req, res, next) => {
-    // The token-gated control API (/api/v1/*) does its own bearer-token auth
-    // in requireAuth(), so external (non-browser) clients like the MCP shim —
-    // which send Authorization + X-Tippani-Client but no browser Origin — must
-    // be allowed past this browser-origin CSRF gate.
-    if (req.path.startsWith("/api/v1/")) return next();
-    if (req.method !== "GET" && req.method !== "HEAD") {
-      const origin = req.headers.origin || req.headers.referer || "";
-      if (!origin.startsWith(`http://localhost:${PORT}`) && !origin.startsWith(`http://127.0.0.1:${PORT}`)) {
-        return res.status(403).json({ error: "Forbidden: cross-origin request" });
-      }
-    }
-    next();
-  });
+  // One boundary covers current and legacy browser routes. Control API routes
+  // use the same manager for browser cookies or scoped headless bearers.
+  localClientAuth.mount(app);
 
   // Phase 119: serve the vendored Mermaid runtime (embedded string) for the
   // spec page's lazy diagram rendering. Offline-safe; long-cache immutable.
@@ -9559,8 +9567,7 @@ if ($path) { [Console]::Out.Write($path) }
   // clients send `Authorization: Bearer <token>` + `X-Tippani-Client: <name>`
   // for mutations, just `X-Tippani-Client` for reads.
   registerControlApi(app, {
-    port: PORT,
-    sessionToken: _sessionToken,
+    clientAuth: localClientAuth,
     setAdoToken: applyAdoToken,
     focus: _focus,
     drafts: _drafts,
@@ -9697,7 +9704,6 @@ if ($path) { [Console]::Out.Write($path) }
 
   const server = app.listen(PORT, "127.0.0.1", () => {
     const base = `http://localhost:${PORT}`;
-    const url = openIndex !== null ? `${base}/file/${openIndex}` : base;
     // Persist the session token ONLY after we own the port, so an instance
     // that fails to bind (EADDRINUSE) never deletes the running server's
     // token on exit. 0600 perms; overwritten on each successful startup.
@@ -9705,48 +9711,88 @@ if ($path) { [Console]::Out.Write($path) }
     // and unlink'd out from under a still-running one under the multi-portal
     // model. The MCP shim discovers tokens via the per-port registry, not this
     // file; this file is the external-client affordance.
-    try {
+    const tokenPath = path.join(CONFIG_DIR, `session-token-${PORT}`);
+    const persistAppSession = (session) => {
       fs.mkdirSync(CONFIG_DIR, { recursive: true, mode: 0o700 });
-      const tokenPath = path.join(CONFIG_DIR, `session-token-${PORT}`);
-      fs.writeFileSync(tokenPath, _sessionToken + "\n", { mode: 0o600 });
-      // Register this portal so MCP clients can discover it by PR/port and
-      // adopt it instead of colliding on the port (multi-PR parallelism).
-      writeInstance({
+      // Token file FIRST, registry entry LAST. The registry is what the shim
+      // and `tippani open` follow, so it must never end up advertising a
+      // session that the rotation policy revokes because a later write in
+      // this callback failed. On a failed registry write the rotation policy
+      // re-persists the previous session, rolling the token file back too.
+      fs.writeFileSync(tokenPath, session.token + "\n", { mode: 0o600 });
+      const registered = writeInstance({
         port: PORT,
         prId: _prId,
         provider: _hostKind,
         owner: _githubOwner,
         repo: _githubRepo,
-        token: _sessionToken,
+        token: session.token,
+        tokenExpiresAt: session.expiresAt,
+        clientName: externalClientName,
         pid: process.pid,
         url: base,
         shimPid: Number(process.env.TIPPANI_SHIM_PID) || null,
       });
-      const cleanup = () => {
-        try { fs.unlinkSync(tokenPath); } catch {}
-        removeInstance(PORT);
-      };
-      process.on("exit", cleanup);
-      process.on("SIGINT", () => { cleanup(); process.exit(0); });
-      process.on("SIGTERM", () => { cleanup(); process.exit(0); });
-      // Spawned by the shim over an IPC pipe (stdio ipc). When the shim dies for
-      // ANY reason, the OS closes the pipe and this fires — so a portal never
-      // outlives the shim that owns it. No timer, no polling.
-      if (process.channel) {
-        process.on("disconnect", () => { cleanup(); process.exit(0); });
-      }
+      if (!registered) throw new Error("could not update the portal registry");
+    };
+    const rotation = createAppSessionRotation({
+      session: appBearer,
+      createSession: () =>
+        localClientAuth.createBearerSession({ clientName: externalClientName }),
+      revokeSession: (token) => localClientAuth.revokeBearerSession(token),
+      persist: persistAppSession,
+      onWarn: (message) => console.warn(`  Warning: ${message}`),
+    });
+    const rotationTimer = setInterval(() => rotation.rotateIfDue(), ROTATION_INTERVAL_MS);
+    rotationTimer.unref?.();
+    const cleanup = () => {
+      clearInterval(rotationTimer);
+      rotation.revokeCurrent();
+      try { fs.unlinkSync(tokenPath); } catch {}
+      removeInstance(PORT);
+    };
+    // Lifecycle handlers are registered UNCONDITIONALLY — even when persisting
+    // the session fails, the portal must still tear down on exit/signals, and
+    // a shim-spawned portal must never outlive its shim just because the
+    // registry directory was unwritable.
+    process.on("exit", cleanup);
+    process.on("SIGINT", () => { cleanup(); process.exit(0); });
+    process.on("SIGTERM", () => { cleanup(); process.exit(0); });
+    // Spawned by the shim over an IPC pipe (stdio ipc). When the shim dies for
+    // ANY reason, the OS closes the pipe and this fires — so a portal never
+    // outlives the shim that owns it. No timer, no polling.
+    if (process.channel) {
+      process.on("disconnect", () => { cleanup(); process.exit(0); });
+    }
+    try {
+      persistAppSession(appBearer);
     } catch (e) {
       console.warn(`  Warning: could not persist session token: ${e.message}`);
     }
     console.log(`\n  Tippani running at ${base}`);
-    console.log(`  Control API token: ${_sessionToken}`);
-    console.log(`  Token file: ${path.join(CONFIG_DIR, `session-token-${PORT}`)}`);
-    console.log(`  External clients: set Authorization: Bearer <token> and X-Tippani-Client: <name>\n`);
-    if (!headless) open(url);
+    console.log(`  App session file: ${path.join(CONFIG_DIR, `session-token-${PORT}`)}`);
+    console.log(`  External client name: ${externalClientName}\n`);
+    if (!headless) {
+      const returnTo = openIndex !== null ? `/file/${openIndex}` : "/";
+      const bootstrap = localClientAuth.createBrowserBootstrap({ returnTo });
+      Promise.resolve(open(bootstrap.url)).catch(() => { /* handled below */ });
+      // The link handed to open() is single-use — consumed the moment the
+      // browser follows it — and open() fails silently over SSH/WSL or when
+      // no handler is registered. Print a SEPARATE single-use link so the
+      // user always has a working way in from the terminal (the bare base
+      // URL above is refused as unauthenticated).
+      const printed = localClientAuth.createBrowserBootstrap({ returnTo });
+      console.log("  If no browser window opened, sign in with this single-use link");
+      console.log(`  (expires in 2 minutes): ${printed.url}\n`);
+      console.log("  Any time later: run `tippani open` to sign a browser in to this portal.\n");
+    } else {
+      console.log("  Headless: run `tippani open` to sign a browser in to this portal.\n");
+    }
   });
   server.on("error", (err) => {
     if (err.code === "EADDRINUSE") {
-      console.error(`\n  Error: Port ${PORT} is already in use. Is another tippani instance running?\n`);
+      console.error(`\n  Error: Port ${PORT} is already in use. Is another tippani instance running?`);
+      console.error("  To reconnect a browser to it, run: tippani open\n");
     } else {
       console.error(`\n  Error starting server: ${err.message}\n`);
     }
