@@ -9711,52 +9711,61 @@ if ($path) { [Console]::Out.Write($path) }
     // and unlink'd out from under a still-running one under the multi-portal
     // model. The MCP shim discovers tokens via the per-port registry, not this
     // file; this file is the external-client affordance.
-    try {
+    const tokenPath = path.join(CONFIG_DIR, `session-token-${PORT}`);
+    const persistAppSession = (session) => {
       fs.mkdirSync(CONFIG_DIR, { recursive: true, mode: 0o700 });
-      const tokenPath = path.join(CONFIG_DIR, `session-token-${PORT}`);
-      const persistAppSession = (session) => {
-        const registered = writeInstance({
-          port: PORT,
-          prId: _prId,
-          provider: _hostKind,
-          owner: _githubOwner,
-          repo: _githubRepo,
-          token: session.token,
-          tokenExpiresAt: session.expiresAt,
-          clientName: externalClientName,
-          pid: process.pid,
-          url: base,
-          shimPid: Number(process.env.TIPPANI_SHIM_PID) || null,
-        });
-        if (!registered) throw new Error("could not update the portal registry");
-        fs.writeFileSync(tokenPath, session.token + "\n", { mode: 0o600 });
-      };
-      persistAppSession(appBearer);
-      const rotation = createAppSessionRotation({
-        session: appBearer,
-        createSession: () =>
-          localClientAuth.createBearerSession({ clientName: externalClientName }),
-        revokeSession: (token) => localClientAuth.revokeBearerSession(token),
-        persist: persistAppSession,
-        onWarn: (message) => console.warn(`  Warning: ${message}`),
+      // Token file FIRST, registry entry LAST. The registry is what the shim
+      // and `tippani open` follow, so it must never end up advertising a
+      // session that the rotation policy revokes because a later write in
+      // this callback failed. On a failed registry write the rotation policy
+      // re-persists the previous session, rolling the token file back too.
+      fs.writeFileSync(tokenPath, session.token + "\n", { mode: 0o600 });
+      const registered = writeInstance({
+        port: PORT,
+        prId: _prId,
+        provider: _hostKind,
+        owner: _githubOwner,
+        repo: _githubRepo,
+        token: session.token,
+        tokenExpiresAt: session.expiresAt,
+        clientName: externalClientName,
+        pid: process.pid,
+        url: base,
+        shimPid: Number(process.env.TIPPANI_SHIM_PID) || null,
       });
-      const rotationTimer = setInterval(() => rotation.rotateIfDue(), ROTATION_INTERVAL_MS);
-      rotationTimer.unref?.();
-      const cleanup = () => {
-        clearInterval(rotationTimer);
-        rotation.revokeCurrent();
-        try { fs.unlinkSync(tokenPath); } catch {}
-        removeInstance(PORT);
-      };
-      process.on("exit", cleanup);
-      process.on("SIGINT", () => { cleanup(); process.exit(0); });
-      process.on("SIGTERM", () => { cleanup(); process.exit(0); });
-      // Spawned by the shim over an IPC pipe (stdio ipc). When the shim dies for
-      // ANY reason, the OS closes the pipe and this fires — so a portal never
-      // outlives the shim that owns it. No timer, no polling.
-      if (process.channel) {
-        process.on("disconnect", () => { cleanup(); process.exit(0); });
-      }
+      if (!registered) throw new Error("could not update the portal registry");
+    };
+    const rotation = createAppSessionRotation({
+      session: appBearer,
+      createSession: () =>
+        localClientAuth.createBearerSession({ clientName: externalClientName }),
+      revokeSession: (token) => localClientAuth.revokeBearerSession(token),
+      persist: persistAppSession,
+      onWarn: (message) => console.warn(`  Warning: ${message}`),
+    });
+    const rotationTimer = setInterval(() => rotation.rotateIfDue(), ROTATION_INTERVAL_MS);
+    rotationTimer.unref?.();
+    const cleanup = () => {
+      clearInterval(rotationTimer);
+      rotation.revokeCurrent();
+      try { fs.unlinkSync(tokenPath); } catch {}
+      removeInstance(PORT);
+    };
+    // Lifecycle handlers are registered UNCONDITIONALLY — even when persisting
+    // the session fails, the portal must still tear down on exit/signals, and
+    // a shim-spawned portal must never outlive its shim just because the
+    // registry directory was unwritable.
+    process.on("exit", cleanup);
+    process.on("SIGINT", () => { cleanup(); process.exit(0); });
+    process.on("SIGTERM", () => { cleanup(); process.exit(0); });
+    // Spawned by the shim over an IPC pipe (stdio ipc). When the shim dies for
+    // ANY reason, the OS closes the pipe and this fires — so a portal never
+    // outlives the shim that owns it. No timer, no polling.
+    if (process.channel) {
+      process.on("disconnect", () => { cleanup(); process.exit(0); });
+    }
+    try {
+      persistAppSession(appBearer);
     } catch (e) {
       console.warn(`  Warning: could not persist session token: ${e.message}`);
     }
@@ -9764,10 +9773,18 @@ if ($path) { [Console]::Out.Write($path) }
     console.log(`  App session file: ${path.join(CONFIG_DIR, `session-token-${PORT}`)}`);
     console.log(`  External client name: ${externalClientName}\n`);
     if (!headless) {
-      const bootstrap = localClientAuth.createBrowserBootstrap({
-        returnTo: openIndex !== null ? `/file/${openIndex}` : "/",
-      });
-      open(bootstrap.url);
+      const returnTo = openIndex !== null ? `/file/${openIndex}` : "/";
+      const bootstrap = localClientAuth.createBrowserBootstrap({ returnTo });
+      Promise.resolve(open(bootstrap.url)).catch(() => { /* handled below */ });
+      // The link handed to open() is single-use — consumed the moment the
+      // browser follows it — and open() fails silently over SSH/WSL or when
+      // no handler is registered. Print a SEPARATE single-use link so the
+      // user always has a working way in from the terminal (the bare base
+      // URL above is refused as unauthenticated).
+      const printed = localClientAuth.createBrowserBootstrap({ returnTo });
+      console.log("  If no browser window opened, sign in with this single-use link");
+      console.log(`  (expires in 2 minutes): ${printed.url}\n`);
+      console.log("  Any time later: run `tippani open` to sign a browser in to this portal.\n");
     } else {
       console.log("  Headless: run `tippani open` to sign a browser in to this portal.\n");
     }

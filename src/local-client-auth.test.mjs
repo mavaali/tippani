@@ -55,6 +55,12 @@ for (const hostile of [
   "////evil.com",
   "javascript:alert(1)",
   "file:///etc/passwd",
+  // Dot-segment resolution must not reintroduce a protocol-relative "//host":
+  // these pass a raw-prefix check but resolve to pathname "//evil.com".
+  "/..//evil.com",
+  "/./..//evil.com",
+  "/x/../..//attacker.example/path",
+  "/\\evil.com",
 ]) {
   const attempt = auth.createBrowserBootstrap({ returnTo: hostile });
   const result = auth.exchangeBrowserBootstrap(attempt.token);

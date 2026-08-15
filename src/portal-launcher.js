@@ -99,16 +99,19 @@ export function createPortalSession({
   // A single `child` var lost the handle to earlier portals across a multi-PR
   // session (open PR A then B), leaking A's process and its held port.
   const ownedChildren = new Map(); // port -> child process
-  // The portal URL we last opened a browser to — so repeated open_pr calls in
-  // one session don't spam browser tabs, but every NEW binding (launch or
-  // adopt) does bring the review portal up for the user.
-  let lastOpenedUrl = null;
 
-  async function healthyAt(url, token) {
+  // A bearer only works with the exact client name it was minted for, and a
+  // portal started by another process (CLI, another shim) binds its bearer to
+  // ITS client name — not ours. Every probe therefore presents the name the
+  // token is bound to, defaulting to our own for portals we launched.
+  async function healthyAt(url, token, tokenClientName = clientName) {
     if (!url || !token) return false;
     try {
       const r = await fetchImpl(url + "/api/v1/threads", {
-        headers: { Authorization: `Bearer ${token}`, "X-Tippani-Client": clientName },
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "X-Tippani-Client": tokenClientName,
+        },
       });
       return r.ok;
     } catch {
@@ -121,9 +124,13 @@ export function createPortalSession({
     const current = listInstancesFn().find((item) =>
       Number(item.port) === Number(active.port));
     if (!current?.token) return;
-    if (current.clientName && current.clientName !== clientName) return;
+    // The registry is the source of truth for the portal's current bearer AND
+    // the client name it is bound to. Adopting only the token while keeping a
+    // mismatched name would leave every request 401ing after adoption of a
+    // portal registered by another client.
     active.token = current.token;
     active.tokenExpiresAt = current.tokenExpiresAt || null;
+    if (current.clientName) active.clientName = current.clientName;
   }
 
   async function createBrowserBootstrap(returnTo = "/") {
@@ -135,7 +142,7 @@ export function createPortalSession({
       method: "POST",
       headers: {
         Authorization: `Bearer ${active.token}`,
-        "X-Tippani-Client": clientName,
+        "X-Tippani-Client": active.clientName || clientName,
         "Content-Type": "application/json",
       },
       body: JSON.stringify({ returnTo }),
@@ -149,9 +156,22 @@ export function createPortalSession({
   }
 
   async function exposePortal(result, { headless, returnTo = "/" } = {}) {
-    const url = await createBrowserBootstrap(returnTo);
-    if (!headless) await maybeOpenBrowser(url);
-    return { ...result, url };
+    // Headless ensure* calls run before every MCP request. Minting a one-time
+    // sign-in link there would burn a token per tool call, flood the audit
+    // ring with bootstrap_created events, and fail healthy mutations whenever
+    // the mint fails. Mint only when a browser is actually being opened;
+    // tools that need a user-facing link mint one via createBrowserSessionUrl.
+    if (headless) return { ...result, url: active?.url ?? null, opened: false };
+    let url = null;
+    let opened = false;
+    try {
+      url = await createBrowserBootstrap(returnTo);
+      opened = await maybeOpenBrowser(url);
+    } catch {
+      // The portal itself is healthy — browser exposure is best-effort, and
+      // the caller can still mint a link explicitly to hand to the user.
+    }
+    return { ...result, url, opened };
   }
 
   // A live portal already open for this PR (any process), or null.
@@ -172,11 +192,12 @@ export function createPortalSession({
     for (const inst of listInstancesFn()) {
       if (!sameTarget(inst, target)) continue;
       const url = inst.url || `http://localhost:${inst.port}`;
-      if (await healthyAt(url, inst.token)) {
+      if (await healthyAt(url, inst.token, inst.clientName || clientName)) {
         return {
           port: Number(inst.port),
           url,
           token: inst.token,
+          clientName: inst.clientName || clientName,
           ...target,
           owned: false,
         };
@@ -203,9 +224,13 @@ export function createPortalSession({
     };
 
     let result;
-    // 1. Already bound to a live portal for this PR.
+    // 1. Already bound to a live portal for this PR. Refresh the cached bearer
+    //    from the registry first: rotation revokes the previous token with no
+    //    grace period, so a stale cache would misread a healthy portal as dead
+    //    and spawn a duplicate.
+    refreshActiveAppSession();
     if (active && sameTarget(active, target) &&
-        (await healthyAt(active.url, active.token))) {
+        (await healthyAt(active.url, active.token, active.clientName || clientName))) {
       result = { reused: true, prId: id, url: active.url };
     } else {
       // 2. Adopt another process's live portal already open for this PR — don't
@@ -236,11 +261,19 @@ export function createPortalSession({
     return exposePortal(result, { headless });
   }
 
-  // Open the browser to the active portal once per binding.
+  // Open the browser to a freshly minted sign-in link. Every link is one-time
+  // now, so there is nothing to dedupe on: a caller that reaches here passed
+  // headless:false explicitly, which is a request to open the browser — even
+  // when the same portal was opened before (e.g. after the previous browser
+  // session idle-expired). Returns whether the browser was actually opened so
+  // callers can report truthfully.
   async function maybeOpenBrowser(url) {
-    if (active && active.url && active.url !== lastOpenedUrl) {
-      lastOpenedUrl = active.url;
-      try { await openBrowserFn(url); } catch { /* best effort */ }
+    if (!url) return false;
+    try {
+      await openBrowserFn(url);
+      return true;
+    } catch {
+      return false;
     }
   }
 
@@ -269,19 +302,24 @@ export function createPortalSession({
         (activeGitHub.owner === github.owner &&
           activeGitHub.repo === github.repo));
     // A PR-bound portal serves Discovery too. Keep it active instead of
-    // replacing the review session with a second PR-less portal.
+    // replacing the review session with a second PR-less portal. Refresh the
+    // cached bearer first — rotation revokes the old token with no grace
+    // period, and misreading the live review portal as dead here would spawn
+    // a duplicate browse portal and silently move the agent off it.
+    refreshActiveAppSession();
     if (active && activeMatchesProvider &&
-        (await healthyAt(active.url, active.token))) {
+        (await healthyAt(active.url, active.token, active.clientName || clientName))) {
       return exposePortal({ reused: true }, { headless });
     }
     for (const inst of listInstancesFn()) {
       if (!sameTarget(inst, target)) continue;
       const url = inst.url || `http://localhost:${inst.port}`;
-      if (await healthyAt(url, inst.token)) {
+      if (await healthyAt(url, inst.token, inst.clientName || clientName)) {
         active = {
           port: Number(inst.port),
           url,
           token: inst.token,
+          clientName: inst.clientName || clientName,
           prId: 0,
           provider,
           owner: target.owner,
@@ -303,7 +341,9 @@ export function createPortalSession({
   // Mutation tools must stay on the currently selected provider. In particular,
   // authoring after GitHub open_pr must not switch to an ADO browse portal.
   async function ensureActivePortal({ headless = true } = {}) {
-    if (active && (await healthyAt(active.url, active.token))) {
+    refreshActiveAppSession();
+    if (active &&
+        (await healthyAt(active.url, active.token, active.clientName || clientName))) {
       return exposePortal({ reused: true }, { headless });
     }
     if (active?.provider === "github" && active.owner && active.repo) {
@@ -349,6 +389,8 @@ export function createPortalSession({
           port,
           url: `http://localhost:${port}`,
           token: res.token,
+          // Portals we spawn inherit our client name via TIPPANI_CLIENT_NAME.
+          clientName,
           prId: browse ? 0 : prId,
           provider,
           owner: provider === "github" ? owner : null,
@@ -433,7 +475,7 @@ export function createPortalSession({
             prId, provider, owner: provider === "github" ? owner : null,
             repo: provider === "github" ? repo : null,
           }));
-        if (inst && (await healthyAt(inst.url || `http://localhost:${port}`, inst.token))) {
+        if (inst && (await healthyAt(inst.url || `http://localhost:${port}`, inst.token, inst.clientName || clientName))) {
           resolve({ ok: true, token: inst.token, child: proc });
           return;
         }

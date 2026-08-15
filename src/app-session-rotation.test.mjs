@@ -63,6 +63,41 @@ check("interval stays under the refresh window", ROTATION_INTERVAL_MS < ROTATION
 }
 
 {
+  // A persist that HALF-published before throwing (token file written, registry
+  // write failed) must be rolled back: the previous session is re-persisted so
+  // no store is left advertising the revoked replacement.
+  const state = { clock: 0, minted: 0, persisted: [], revoked: [], warnings: [] };
+  const session = { token: "session-0", expiresAt: 8 * HOUR };
+  let failNext = true;
+  const rotation = createAppSessionRotation({
+    session,
+    createSession: () => {
+      state.minted += 1;
+      return { token: `session-${state.minted}`, expiresAt: state.clock + 8 * HOUR };
+    },
+    revokeSession: (token) => state.revoked.push(token),
+    persist: (value) => {
+      if (failNext && value.token !== "session-0") {
+        failNext = false;
+        // Simulate the half-publish: the value reached one store...
+        state.persisted.push(value.token);
+        // ...but the second write failed.
+        throw new Error("could not update the portal registry");
+      }
+      state.persisted.push(value.token);
+    },
+    now: () => state.clock,
+    onWarn: (message) => state.warnings.push(message),
+  });
+  state.clock += 8 * HOUR;
+  check("half-published rotation reports failure", rotation.rotateIfDue() === "failed");
+  check("half-published rotation re-persists the previous session",
+    state.persisted.at(-1) === "session-0");
+  check("half-published rotation keeps the old session current",
+    rotation.current.token === "session-0");
+}
+
+{
   const { state, rotation } = harness();
   rotation.revokeCurrent();
   check("revokeCurrent revokes the live token", state.revoked.at(-1) === "session-0");

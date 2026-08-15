@@ -34,9 +34,13 @@ export function createAppSessionRotation({
     try {
       persist(replacement);
     } catch (error) {
-      // The replacement never reached the registry or token file, so no client
-      // can hold it. Drop it and keep serving the still-published session.
+      // Drop the unpublished replacement and keep serving the old session.
       revokeSession(replacement.token);
+      // persist may have HALF-published the replacement before throwing (e.g.
+      // the token file was written but the registry write failed). Re-persist
+      // the still-valid previous session best-effort so no store is left
+      // advertising the token we just revoked.
+      try { persist(previous); } catch { /* stores unavailable; keep serving */ }
       onWarn(`could not rotate app session: ${error.message}`);
       return "failed";
     }

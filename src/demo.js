@@ -28,6 +28,7 @@ import rehypeSanitize, { defaultSchema } from "rehype-sanitize";
 import { cssVariables, changeTypeBadge, escHtml, stripMarkdown } from "./html-util.js";
 import { isAllowedHost } from "./host-guard.js";
 import { createLocalClientAuth } from "./local-client-auth.js";
+import { writeInstance, removeInstance } from "./portal-registry.js";
 import { voteForReviewType, voteLabel } from "./review-vote.js";
 import { pathToFileURL } from "url";
 import path from "path";
@@ -896,6 +897,25 @@ export async function startDemo({ port = DEFAULT_PORT, headless = false } = {}) 
   const localClientAuth = createLocalClientAuth({ port });
   localClientAuth.mount(app);
 
+  // Same mint route the real portal serves, so `tippani open` can hand out a
+  // fresh sign-in link for the demo too. Without it, a consumed or expired
+  // bootstrap link (or an idle-expired cookie) left restarting the process as
+  // the only way back into the demo.
+  app.post(
+    "/api/v1/auth/browser-bootstrap",
+    localClientAuth.requireControlAuth({
+      mutation: true,
+      capability: "browser:bootstrap",
+      allowBrowser: false,
+    }),
+    (req, res) => {
+      const result = localClientAuth.createBrowserBootstrap({
+        returnTo: req.body?.returnTo || "/",
+      });
+      res.json({ ok: true, url: result.url, expiresAt: result.expiresAt });
+    },
+  );
+
   // File picker
   app.get("/", (_req, res) => {
     res.type("html").send(buildPickerPage(mockPr, mockFiles));
@@ -943,11 +963,50 @@ export async function startDemo({ port = DEFAULT_PORT, headless = false } = {}) 
 
   const server = app.listen(port, "127.0.0.1", () => {
     const url = `http://localhost:${port}`;
+    // Register the demo with a least-capability bearer so `tippani open` can
+    // mint fresh sign-in links for it. provider "demo" never matches a shim's
+    // ado/github target, so the MCP shim will not adopt this portal.
+    const demoBearer = localClientAuth.createBearerSession({
+      clientName: "tippani-demo",
+      capabilities: ["read", "browser:bootstrap"],
+    });
+    const registered = writeInstance({
+      port,
+      prId: 0,
+      provider: "demo",
+      token: demoBearer.token,
+      tokenExpiresAt: demoBearer.expiresAt,
+      clientName: "tippani-demo",
+      pid: process.pid,
+      url,
+      shimPid: null,
+    });
+    if (!registered) {
+      console.warn("  Warning: could not register the demo portal; `tippani open` will not see it.");
+    }
+    const cleanup = () => { removeInstance(port); };
+    process.on("exit", cleanup);
+    process.on("SIGINT", () => { cleanup(); process.exit(0); });
+    process.on("SIGTERM", () => { cleanup(); process.exit(0); });
+
     const bootstrap = localClientAuth.createBrowserBootstrap();
     console.log(`\n  tippani demo running at ${url}`);
-    console.log(`  Open: ${bootstrap.url}`);
+    if (!headless) {
+      Promise.resolve(open(bootstrap.url)).catch(() => { /* link below covers it */ });
+      // The auto-opened link is single-use and already consumed if the browser
+      // followed it — print a SEPARATE link so the terminal always shows a
+      // working way in.
+      const printed = localClientAuth.createBrowserBootstrap();
+      console.log("  If no browser window opened, sign in with this single-use link");
+      console.log(`  (expires in 2 minutes): ${printed.url}`);
+    } else {
+      // Keep the exact `Open: <url>` shape — scripts/smoke-built-demo.mjs
+      // extracts the bootstrap link from this line.
+      console.log(`  Open: ${bootstrap.url}`);
+      console.log("  The link works once and expires in 2 minutes.");
+    }
+    console.log("  Locked out later? Run `tippani open` for a fresh link.");
     console.log(`  Sample spec, sample comments. Nothing is sent anywhere.\n`);
-    if (!headless) open(bootstrap.url);
   });
   server.on("error", (err) => {
     if (err.code === "EADDRINUSE") {

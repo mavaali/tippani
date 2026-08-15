@@ -48,7 +48,16 @@ const fetchImpl = async (url, options = {}) => {
     };
   }
   const base = url.replace("/api/v1/threads", "");
-  const ok = registry.some((i) => (i.url || `http://localhost:${i.port}`) === base);
+  const instance = registry.find((i) =>
+    (i.url || `http://localhost:${i.port}`) === base);
+  // Mirror the real portal: a bearer only works with the exact client name it
+  // was minted for, so health probes with a mismatched token or name 401.
+  const authorization = options.headers?.Authorization || "";
+  const token = authorization.replace(/^Bearer\s+/, "");
+  const clientName = options.headers?.["X-Tippani-Client"];
+  const ok = !!instance &&
+    token === instance.token &&
+    (!instance.clientName || instance.clientName === clientName);
   return { ok, json: async () => ({ threads: [] }) };
 };
 
@@ -145,7 +154,9 @@ try {
     s.stop();
   }
 
-  // --- a registry entry owned by a different client is not adopted as ours ---
+  // --- the registry is the source of truth for the portal's bearer AND the
+  //     client name it is bound to; the shim follows both, so a portal
+  //     registered by another client stays usable after adoption ---
   {
     reset();
     registry.push({
@@ -155,7 +166,30 @@ try {
     const s = newSession();
     await s.ensurePortal({ prId: 952607 });
     registry[0] = { ...registry[0], token: "someone-elses", clientName: "other-client" };
-    check("rotation: ignores a token bound to another client", s.getToken() === "ours");
+    check("rotation: follows the registry token and its bound client",
+      s.getToken() === "someone-elses");
+    // The mint must present the BOUND client name, not the shim's own — the
+    // fake backend 401s a name mismatch, so ok:true proves it.
+    await s.openUrl("/x");
+    check("rotation: bootstrap presents the bound client name",
+      bootstrapCalls.at(-1)?.ok === true);
+    s.stop();
+  }
+
+  // --- adopt a CLI-started portal whose bearer is bound to ITS client name
+  //     ("tippani-external"), not the shim's — the regression here spawned a
+  //     duplicate portal because every probe 401ed ---
+  {
+    reset();
+    registry.push({
+      port: 3847, prId: 952607, token: "cli-token",
+      clientName: "tippani-external", url: "http://localhost:3847",
+    });
+    const s = newSession();
+    const r = await s.ensurePortal({ prId: 952607 });
+    check("cli adopt: adopted instead of spawning a duplicate",
+      r.reused === true && r.adopted === true && spawnCalls.length === 0);
+    check("cli adopt: uses the portal's token", s.getToken() === "cli-token");
     s.stop();
   }
 
@@ -204,10 +238,12 @@ try {
     reset();
     const s = newSession();
     const r = await s.ensurePortal({ prId: 4242, org: "https://dev.azure.com/o", project: "P", repo: "R" });
-    check("headless default: returns one-time bootstrap url",
-      r.reused === false && r.url.startsWith("http://localhost:3847/auth/bootstrap?token="));
+    check("headless default: returns the base url without minting a sign-in link",
+      r.reused === false && r.url === "http://localhost:3847" && bootstrapCalls.length === 0);
     check("headless default: spawned the portal", spawnCalls.length === 1);
     check("headless default: opened NO browser", openedUrls.length === 0);
+    check("headless default: explicit mint still hands out a one-time link",
+      (await s.createBrowserSessionUrl("/")).startsWith("http://localhost:3847/auth/bootstrap?token="));
     s.stop();
   }
 
@@ -232,7 +268,7 @@ try {
     });
     check("github: doesn't adopt same-number ADO portal",
       !r.adopted && r.reused === false);
-    check("github: launches on next free port", r.url.startsWith("http://localhost:3848/auth/bootstrap?token="));
+    check("github: launches on next free port", r.url === "http://localhost:3848");
     check("github: passes shorthand target",
       spawnCalls[0].args.includes("github:mavaali/tippani#77"));
     check("github: injects token env",

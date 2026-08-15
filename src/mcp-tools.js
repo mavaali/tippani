@@ -168,9 +168,16 @@ export function buildTools(http, session) {
         const threads = (data && data.threads) || [];
         const openThreads = threads.filter((t) => !t.resolved);
         const isHeadless = headless !== false;
+        // ensure* no longer mints a sign-in link on the headless path (it runs
+        // before every MCP request), and a link opened in the browser is
+        // already consumed. Mint a fresh single-use link here so portalUrl is
+        // always a working way in for the user.
+        let portalUrl = null;
+        try { portalUrl = await browserSessionUrl("/"); } catch {}
+        const browserOpened = !isHeadless && !!(bind && bind.opened);
         return {
           prId: Number(prId),
-          portalUrl: bind && bind.url,
+          portalUrl,
           headless: isHeadless,
           note: isHeadless
             ? "The review portal is running HEADLESS in the background — it is NOT open on the " +
@@ -178,8 +185,11 @@ export function buildTools(http, session) {
               "'opened', or that a window/browser is up. Give the user the portalUrl as a " +
               "clickable link so they can open it themselves if they want to watch, e.g. \"PR #" +
               Number(prId) + " is loaded and ready in Tippani (running in the background) — open " +
-              "it to review: " + (bind && bind.url) + "\"."
-            : "Opened the portal in the user's default browser; you may also share the portalUrl.",
+              "it to review: " + portalUrl + "\"."
+            : browserOpened
+              ? "Opened the portal in the user's default browser; you may also share the portalUrl."
+              : "Could not open the user's default browser automatically — give the user the " +
+                "portalUrl as a clickable link instead.",
           openThreadCount: openThreads.length,
           threads,
         };

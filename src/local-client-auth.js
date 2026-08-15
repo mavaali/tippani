@@ -31,7 +31,12 @@ function normalizeReturnTo(value) {
   try {
     const parsed = new URL(input, "http://tippani.local");
     if (parsed.origin !== "http://tippani.local") return "/";
-    return parsed.pathname + parsed.search + parsed.hash;
+    const resolved = parsed.pathname + parsed.search + parsed.hash;
+    // Re-check the RESOLVED path: dot-segment resolution can turn a value that
+    // passed the raw-input guards into a protocol-relative "//host" redirect
+    // (e.g. "/..//evil.com" resolves to pathname "//evil.com").
+    if (!resolved.startsWith("/") || resolved.startsWith("//")) return "/";
+    return resolved;
   } catch {
     return "/";
   }
