@@ -179,8 +179,9 @@ state survives. You do not have to stop the server and restart it without
 `--headless`. If nothing is running, it tells you so; if several portals are
 running, it lists their ports and asks you to pick one with `--port=<n>`.
 
-`--demo` is self-contained and prints its own link at startup, so `tippani open`
-does not apply to it.
+`tippani open` covers `--demo` too: the demo registers itself like any other
+portal, so a consumed or expired demo link is one `tippani open` away from a
+fresh one.
 
 ### All flags
 
@@ -258,7 +259,7 @@ npm run build
 ```
 
 Produces:
-- `dist/bin/tippani` — macOS standalone (68MB, no Node.js required)
+- `dist/bin/tippani` — macOS standalone (~123MB, no Node.js required)
 - `dist/cli.cjs` + `dist/tippani.bat` — Windows (requires Node.js 18+)
 - `dist/tippani.sh` — Linux/macOS shell wrapper
 

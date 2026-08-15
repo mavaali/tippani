@@ -84,8 +84,9 @@ A second `tippani <PR_ID>` on a port that is already serving will not start a
 rival server — it reports that the port is in use and points you at `tippani
 open`.
 
-`--demo` runs a self-contained sample portal that prints its own link when it
-starts, so `tippani open` does not apply to it.
+`--demo` runs a sample portal that prints its own link when it starts, and it
+registers itself like any other portal — if the link is consumed or expires,
+`tippani open` mints a fresh one for it too.
 
 The top bar is consistent everywhere: a **breadcrumb** on the left (`Home ›
 …`) and the Tippani wordmark with the current mode (`· discovery`, `· read ·
