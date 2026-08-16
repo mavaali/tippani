@@ -2,3 +2,4 @@ node_modules/
 dist/
 *.blob
 .DS_Store
+spikes/s0-persistence/results/
