@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import { assertPreflight } from "./preflight.mjs";
 import { runHarness } from "./runner.mjs";
 import { SCENARIOS } from "./scenario-catalog.mjs";
+import { buildPreflightSheet, renderPreflightSheet } from "./provider-preflight-sheet.mjs";
 
 const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const args = process.argv.slice(2);
@@ -42,6 +43,12 @@ if (args.includes("--dry-run")) {
     preflight,
     scenarios: scenarioIds,
   }, null, 2));
+  process.exit(0);
+}
+
+if (args.includes("--preflight-sheet")) {
+  const sheet = await buildPreflightSheet(config);
+  console.log(args.includes("--json") ? JSON.stringify(sheet, null, 2) : renderPreflightSheet(sheet));
   process.exit(0);
 }
 

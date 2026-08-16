@@ -17,6 +17,18 @@ The spike compares and may select a mapping rather than one universal engine:
 
 The decision must be based on measured local and provider-backed behavior, not implementation preference. Every selected implementation must preserve exact workspace state, detect stale writers, fail closed when state cannot be trusted, and support later R1-R3 workspace, staging, and publication-journal requirements.
 
+## Provider architecture direction
+
+S0 commits to a **provider architecture**, not a local-only store. A single `IWorkspaceStore` contract is fronted by one backing-path facade, and **every** backing path goes through it — the local filesystem is a backing path like any other, never a special case that bypasses the abstraction. This is a deliberate flexibility decision: it keeps today's private/local workspace and tomorrow's shared, collaborative workspace behind the same contract so future collaboration can be added without reworking the local path.
+
+Under this architecture:
+
+- The facade records the backing-path operation it issues (connect, `put-workspace` with an `if-none-match`/`if-match` generation precondition, `get-workspace`, history export, restore) and delegates the actual persistence to an engine. Local, OneDrive, ADO, and GitHub differ only in the transport behind that one operation model.
+- **Local** backing delegates to a durable engine (generation-CAS envelope or SQLite) and executes every operation as private authority; no sandbox is required.
+- **Provider** backing (OneDrive/ADO/GitHub) is preflight-gated. Until an approved sandbox exists it makes **zero** network calls: it dry-runs by recording the exact operation manifest it would issue, and refuses any live call with a typed, fail-closed error. Adding real collaboration is implementing the transport behind the already-proven contract.
+
+S0's job is therefore twofold: prove the local backing path now on Windows/NTFS, and land the provider architecture — the shared contract, the preflight/ownership/synthetic-data safeguards, and a dry-run provider path — so the collaboration backing paths in the matrix below can be executed unchanged the moment their sandboxes are supplied. The provider-backed collaboration gates remain `Blocked` (with the precise prerequisite each waits on) rather than unowned, because the architecture is ready and only the live sandbox is missing.
+
 ## Supported configuration matrix
 
 The spike separates three dimensions that may vary independently:

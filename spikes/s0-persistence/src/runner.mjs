@@ -5,6 +5,7 @@ import { performance } from "node:perf_hooks";
 import { createStore as createAdapterStore, isDurable } from "./adapters/registry.mjs";
 import { assertPreflight } from "./preflight.mjs";
 import { SCENARIO_IMPLEMENTATIONS, PENDING_REASONS } from "./scenario-implementations.mjs";
+import { BLOCKED_REASONS } from "./provider-gates.mjs";
 import {
   SCENARIOS,
   scenarioById,
@@ -113,11 +114,13 @@ export async function runHarness({
         continue;
       }
       if (!implementation) {
+        const blockedReason = BLOCKED_REASONS[scenarioId];
         results.push({
           ...base,
-          status: "Incomplete",
+          status: blockedReason ? "Blocked" : "Incomplete",
           durationMs: 0,
-          reason: PENDING_REASONS[scenarioId] ||
+          reason: blockedReason ||
+            PENDING_REASONS[scenarioId] ||
             "Scenario implementation is not available for this harness stage",
         });
         continue;

@@ -14,13 +14,18 @@ The harness provides:
 - Named fault injection for commit and restore boundaries.
 - Three adapters: a reference in-memory store (harness validation only) plus the
   two local candidates, `local-cas` and `local-sqlite`.
+- A preflight-gated provider adapter scaffold (`onedrive`/`ado`/`github`) that
+  fails closed on any live call and records intended operations in dry-run.
 - Real cross-process evidence: writers run as separate OS processes released
-  from a common barrier, and kill tests hard-exit a child mid-commit.
+  from a common barrier, and kill tests hard-exit a child mid-commit, mid
+  alias-update, mid atomic-replace, and mid-restore.
 - Sandbox preflight checks that reject embedded credentials, corporate-account
   fallback, mismatched ownership markers, and incomplete provider safeguards.
 - An ownership-checked cleanup manifest.
 - Raw JSON results, a redacted preflight record, a Markdown outcome report that
-  discloses unexecuted catalog coverage, and a candidate comparison report.
+  discloses unexecuted catalog coverage, a candidate comparison report, and a
+  non-secret provider preflight sheet listing the dry-run operation manifest and
+  the prerequisites required before any live provider run.
 
 ## Candidates
 
@@ -29,12 +34,20 @@ The harness provides:
 | `local-cas` | One atomic generation-CAS envelope per workspace (temp file + fsync + rename) with a per-workspace lock and a rebuildable alias index. The envelope is the only authority, so a crash between an envelope write and an index update cannot strand an alias. |
 | `local-sqlite` | `node:sqlite` (built in, no native build step) in WAL mode. Workspace and alias rows are updated inside one `BEGIN IMMEDIATE` transaction. |
 
+The `onedrive`/`ado`/`github` provider adapter is a scaffold, not a candidate:
+it has no live sandbox, so it fails closed on every provider call and only
+records its intended operations in dry-run. The provider-backed absolute gates
+(`COL-002..006`, `BCK-002..006`, `BKP-003/004`, `REC-003/004`, `MIG-004`,
+`PER-004`) are published as `Blocked` with the precise prerequisite each waits on
+until an approved sandbox is supplied.
+
 ## Commands
 
 ```powershell
-npm run spike:s0:test        # harness, detection-power, and durable-detection suites
+npm run spike:s0:test        # harness, detection-power, durable-detection, provider-dryrun suites
 npm run spike:s0:selftest    # reference adapter self-test
-npm run spike:s0:compare     # run both candidates and emit the comparison report
+npm run spike:s0:compare     # run both local candidates and emit the comparison report
+npm run spike:s0:preflight   # emit the provider preflight sheet + dry-run manifest
 node spikes\s0-persistence\src\cli.mjs --list
 node spikes\s0-persistence\src\cli.mjs --config spikes\s0-persistence\config\local-cas.json --dry-run
 ```

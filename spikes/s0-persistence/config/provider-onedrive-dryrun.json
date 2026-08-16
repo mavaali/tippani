@@ -1,0 +1,55 @@
+{
+  "configurationId": "CFG-PROVIDER-ONEDRIVE-DRYRUN",
+  "adapter": "onedrive",
+  "backingPath": "onedrive",
+  "platform": "windows-ntfs",
+  "scale": "small",
+  "runId": "s0-provider-onedrive-dryrun",
+  "syntheticDataOnly": true,
+  "dryRun": true,
+  "budgets": {
+    "maxOperations": 100,
+    "maxDurationMs": 300000,
+    "maxObjects": 10000,
+    "maxBytes": 104857600
+  },
+  "sandbox": {
+    "kind": "provider-template",
+    "approved": true,
+    "allowListed": true,
+    "identityLabel": "Synthetic Sandbox Identity (template - replace before live run)",
+    "identityVerified": true,
+    "corporateFallbackDisabled": true,
+    "defaultBranchExcluded": true,
+    "ownershipMarker": "tippani-s0:s0-provider-onedrive-dryrun",
+    "namespace": "tippani-s0/s0-provider-onedrive-dryrun",
+    "coordinates": {
+      "driveId": "supplied at runtime via S0_ONEDRIVE_DRIVE_ID",
+      "folder": "supplied at runtime via S0_ONEDRIVE_FOLDER"
+    },
+    "dryRunOperations": [
+      "ensure-folder",
+      "put-content",
+      "get-content",
+      "list-children",
+      "export-history",
+      "delete-folder"
+    ],
+    "cleanup": {
+      "manifestId": "syn-cleanup-s0-provider-onedrive-dryrun",
+      "expiresAt": "2000-01-02T00:00:00.000Z"
+    }
+  },
+  "scenarioIds": [
+    "S0-BCK-002",
+    "S0-BCK-005",
+    "S0-COL-004",
+    "S0-COL-005",
+    "S0-REC-003",
+    "S0-REC-004",
+    "S0-MIG-004",
+    "S0-BKP-003",
+    "S0-BKP-004",
+    "S0-PER-004"
+  ]
+}
