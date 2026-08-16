@@ -12,10 +12,14 @@ The harness provides:
 - A common Draft Workspace store contract with generation-CAS semantics.
 - Deterministic, synthetic-only workspace fixtures at small, medium, and stress scales.
 - Named fault injection for commit and restore boundaries.
-- Three adapters: a reference in-memory store (harness validation only) plus the
-  two local candidates, `local-cas` and `local-sqlite`.
-- A preflight-gated provider adapter scaffold (`onedrive`/`ado`/`github`) that
-  fails closed on any live call and records intended operations in dry-run.
+- Five adapters: a reference in-memory store (harness validation only), the two
+  local candidates `local-cas` and `local-sqlite`, and three provider transports
+  `onedrive`, `ado`, and `github`.
+- The provider transports run two modes on one code path: a preflight-gated
+  dry-run that makes zero network calls and records the intended operation
+  manifest, and a live mode (env-supplied identity and coordinates) that issues
+  real provider-native CAS. Without an approved sandbox they still fail closed on
+  any live call.
 - Real cross-process evidence: writers run as separate OS processes released
   from a common barrier, and kill tests hard-exit a child mid-commit, mid
   alias-update, mid atomic-replace, and mid-restore.
@@ -34,17 +38,52 @@ The harness provides:
 | `local-cas` | One atomic generation-CAS envelope per workspace (temp file + fsync + rename) with a per-workspace lock and a rebuildable alias index. The envelope is the only authority, so a crash between an envelope write and an index update cannot strand an alias. |
 | `local-sqlite` | `node:sqlite` (built in, no native build step) in WAL mode. Workspace and alias rows are updated inside one `BEGIN IMMEDIATE` transaction. |
 
-The `onedrive`/`ado`/`github` provider adapter is a scaffold, not a candidate:
-it has no live sandbox, so it fails closed on every provider call and only
-records its intended operations in dry-run. The provider-backed absolute gates
-(`COL-002..006`, `BCK-002..006`, `BKP-003/004`, `REC-003/004`, `MIG-004`,
-`PER-004`) are published as `Blocked` with the precise prerequisite each waits on
-until an approved sandbox is supplied.
+The `onedrive`/`ado`/`github` transports are implemented behind the same
+`IWorkspaceStore` contract, each using provider-native concurrency (OneDrive
+version/ETag, ADO object/ref preconditions, GitHub Contents blob-sha) on a
+per-run branch/namespace that never touches a default or protected branch. They
+are transports, not local-store candidates: without an approved sandbox they
+still fail closed and only dry-run. The nine single-identity provider gates now
+pass live (see below). The two-user collaboration gates (`COL-002/003/006`), the
+synced-folder probe (`BCK-006`), and provider performance (`PER-004`) remain
+`Blocked`/deferred pending a second identity and a performance pass.
+
+## Provider live results
+
+Each provider transport was executed live against an approved, synthetic-only
+sandbox (coordinates redacted here per the spec's synthetic-data and secret
+rules). The nine single-identity provider gates passed on every provider:
+
+| Gate | Invariant |
+|---|---|
+| `BCK-002/003/004` | Provider-native precondition rejects a stale writer and preserves one auditable generation (OneDrive ETag / ADO object-ref / GitHub blob-sha) |
+| `BCK-005` | Outage, throttling, auth expiry, quota, or permission loss never produces success-shaped state |
+| `COL-004` | A remote success with a lost response reconciles without a duplicate generation or false failure |
+| `COL-005` | Offline work stays pending until authoritative CAS confirmation and reconciles without silent overwrite |
+| `REC-003` | Outage/auth/throttle/lost-response recovery reconciles authoritative state |
+| `REC-004` | A local offline cache reconciles against newer authority without silent overwrite |
+| `MIG-004` | Local-to-provider rehome preserves `WorkspaceId` and establishes one authority only after receipt |
+| `BKP-003` | History/export recovers a known generation without rewriting newer valid history |
+| `BKP-004` | A restored shared workspace establishes one explicit authoritative head |
+
+| Provider | Result | Notes |
+|---|---|---|
+| OneDrive (Graph) | 9/9 | Version/ETag `If-Match` CAS on drive items; per-run folder cleaned up |
+| Azure DevOps | 9/9 | Push `oldObjectId` ref precondition; per-run branch; default branch untouched, zero leftover branches |
+| GitHub | 9/9 | Contents blob-sha CAS; per-run branch; deterministic across two runs; branch cleaned up, default branch untouched |
+
+GitHub's live run also surfaced two provider-specific issues the strongly
+consistent providers had masked: read-after-write replication lag (handled with
+monotonic observed-generation reads and treating a `409` blob-sha precondition
+failure as the authoritative conflict signal), and a latent `workspaceId`
+slug-truncation collision in the shared gate seeds (the distinguishing tag now
+leads the seed). Raw per-run outcomes are written under `results/CFG-*-LIVE/` and
+are Git-ignored.
 
 ## Commands
 
 ```powershell
-npm run spike:s0:test        # harness, detection-power, durable-detection, provider-dryrun suites
+npm run spike:s0:test        # harness, detection-power, durable-detection, provider-dryrun, onedrive, and provider-gate (onedrive/ado/github) suites
 npm run spike:s0:selftest    # reference adapter self-test
 npm run spike:s0:compare     # run both local candidates and emit the comparison report
 npm run spike:s0:preflight   # emit the provider preflight sheet + dry-run manifest

@@ -24,10 +24,10 @@ S0 commits to a **provider architecture**, not a local-only store. A single `IWo
 Under this architecture:
 
 - The facade records the backing-path operation it issues (connect, `put-workspace` with an `if-none-match`/`if-match` generation precondition, `get-workspace`, history export, restore) and delegates the actual persistence to an engine. Local, OneDrive, ADO, and GitHub differ only in the transport behind that one operation model.
-- **Local** backing delegates to a durable engine (generation-CAS envelope or SQLite) and executes every operation as private authority; no sandbox is required.
-- **Provider** backing (OneDrive/ADO/GitHub) is preflight-gated. Until an approved sandbox exists it makes **zero** network calls: it dry-runs by recording the exact operation manifest it would issue, and refuses any live call with a typed, fail-closed error. Adding real collaboration is implementing the transport behind the already-proven contract.
+- **Local** backing runs through the same backing-path facade as every provider — it is not a bypass or a special case. The facade delegates to a durable local engine (generation-CAS envelope or SQLite) and executes every operation as private authority; no sandbox is required.
+- **Provider** backing (OneDrive/ADO/GitHub) runs the same facade over a provider-native transport (OneDrive version/ETag, ADO object/ref, GitHub Contents blob-sha). It is preflight-gated: without an approved sandbox it makes **zero** network calls, dry-running by recording the exact operation manifest it would issue and refusing any live call with a typed, fail-closed error. With an approved synthetic-only sandbox it issues real provider CAS.
 
-S0's job is therefore twofold: prove the local backing path now on Windows/NTFS, and land the provider architecture — the shared contract, the preflight/ownership/synthetic-data safeguards, and a dry-run provider path — so the collaboration backing paths in the matrix below can be executed unchanged the moment their sandboxes are supplied. The provider-backed collaboration gates remain `Blocked` (with the precise prerequisite each waits on) rather than unowned, because the architecture is ready and only the live sandbox is missing.
+S0's job is therefore twofold: prove the local backing path now on Windows/NTFS, and land the provider architecture behind the same contract. Both are done — the local candidates run through the facade, and all three provider transports are implemented and executed live: the nine single-identity provider gates pass on OneDrive, ADO, and GitHub against approved synthetic-only sandboxes. The provider-backed gates that still need a second identity or a performance pass — two-user collaboration (`COL-002/003/006`), synced-folder (`BCK-006`), and provider performance (`PER-004`) — remain `Blocked` with the precise prerequisite each waits on, rather than unowned.
 
 ## Supported configuration matrix
 
@@ -43,7 +43,7 @@ ADO and GitHub may be both content providers and authoritative shared-workspace 
 
 | Backing path | Required behavior |
 |---|---|
-| Local filesystem | Private local authority with multiple independent clients and writers: user actions through the portal, Copilot/MCP commands, headless automation, and external file/Git processes. Requires atomic transactions, optimistic concurrency, change notification, crash recovery, backup, and optional offline cache for a shared workspace |
+| Local filesystem | Private local authority exercised through the same backing-path facade as the providers (not a special case), with multiple independent clients and writers: user actions through the portal, Copilot/MCP commands, headless automation, and external file/Git processes. Requires atomic transactions, optimistic concurrency, change notification, crash recovery, backup, and optional offline cache for a shared workspace |
 | OneDrive | Shared workspace item/folder with provider-native version/ETag CAS, permissions, change discovery, offline/reconnect behavior, and conflict recovery across users and devices |
 | Azure DevOps repository | Shared workspace envelope and index stored at an explicit repository/ref/path, updated through object/ref preconditions, with auditable commits and conflict detection |
 | GitHub repository | Shared workspace envelope and index stored at an explicit repository/ref/path, updated through object/ref preconditions, with auditable commits and conflict detection |
