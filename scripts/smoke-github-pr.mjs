@@ -247,6 +247,9 @@ const child = spawn(process.execPath, [
     ...process.env,
     HOME: home,
     TIPPANI_GITHUB_API_BASE: apiBase,
+    // The app-session bearer is bound to the exact client name, so the portal
+    // must mint it for the name this script sends on every request.
+    TIPPANI_CLIENT_NAME: "smoke-github-pr",
   },
   stdio: ["ignore", "pipe", "pipe"],
 });
@@ -260,11 +263,39 @@ async function waitReady(url = `${base}/file/0`) {
   while (Date.now() - started < 20000) {
     try {
       const response = await fetch(url);
-      if (response.ok) return true;
+      // 401 counts as ready: pages sit behind the browser-session gate now,
+      // and an auth challenge proves the portal is up and serving.
+      if (response.ok || response.status === 401) return true;
     } catch {}
     await sleep(250);
   }
   return false;
+}
+
+// Establish an authenticated browser session the way a real browser does:
+// mint a single-use bootstrap link over the app-session bearer, consume it,
+// and keep the resulting HttpOnly session cookie for page GETs and legacy
+// browser-path mutations.
+async function establishBrowserSession(baseUrl, portNumber) {
+  const tokenPath = path.join(home, ".tippani", `session-token-${portNumber}`);
+  const token = fs.readFileSync(tokenPath, "utf8").trim();
+  const minted = await fetch(`${baseUrl}/api/v1/auth/browser-bootstrap`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "X-Tippani-Client": "smoke-github-pr",
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ returnTo: "/" }),
+  });
+  const mintedBody = await minted.json();
+  if (!minted.ok || !mintedBody?.url) {
+    throw new Error(`could not mint browser bootstrap: ${JSON.stringify(mintedBody)}`);
+  }
+  const exchange = await fetch(mintedBody.url, { redirect: "manual" });
+  const cookie = (exchange.headers.get("set-cookie") || "").split(";")[0];
+  if (!cookie) throw new Error("bootstrap exchange did not set a session cookie");
+  return { token, cookie };
 }
 
 let browseChild = null;
@@ -272,7 +303,11 @@ try {
   const ready = await waitReady();
   check("GitHub portal boots to rendered spec", ready, stderr || stdout);
   if (ready) {
-    const page = await (await fetch(`${base}/file/0`)).text();
+    const { token: sessionToken, cookie: browserCookie } =
+      await establishBrowserSession(base, portalPort);
+    const page = await (await fetch(`${base}/file/0`, {
+      headers: { Cookie: browserCookie },
+    })).text();
     check("rendered page contains GitHub spec", page.includes("GitHub Spec"));
 
     const comment = await fetch(`${base}/api/comment`, {
@@ -280,6 +315,7 @@ try {
       headers: {
         "Content-Type": "application/json",
         Origin: `http://localhost:${portalPort}`,
+        Cookie: browserCookie,
       },
       body: JSON.stringify({
         filePath: "/docs/spec.md",
@@ -302,13 +338,9 @@ try {
     // as a normal sync/reload does, so the control API can resolve handle 101.
     await fetch(`${base}/api/sync`, {
       method: "POST",
-      headers: { Origin: `http://localhost:${portalPort}` },
+      headers: { Origin: `http://localhost:${portalPort}`, Cookie: browserCookie },
     });
 
-    const tokenPath = path.join(
-      home, ".tippani", `session-token-${portalPort}`,
-    );
-    const sessionToken = fs.readFileSync(tokenPath, "utf8").trim();
     const discovery = await fetch(`${base}/api/v1/prs`, {
       headers: {
         Authorization: `Bearer ${sessionToken}`,
@@ -327,6 +359,7 @@ try {
       method: "POST",
       headers: {
         Origin: `http://localhost:${portalPort}`,
+        Authorization: `Bearer ${sessionToken}`,
         "X-Tippani-Client": "smoke-github-pr",
         "Content-Type": "application/json",
       },
@@ -339,13 +372,16 @@ try {
       specsResult.specs?.[0]?.path === "/docs/spec.md",
       JSON.stringify(specsResult));
 
-    const discoveryPage = await (await fetch(`${base}/discovery`)).text();
+    const discoveryPage = await (await fetch(`${base}/discovery`, {
+      headers: { Cookie: browserCookie },
+    })).text();
     check("GitHub Discovery hides unsupported work items",
       discoveryPage.includes("GitHub repositories") &&
       !discoveryPage.includes('data-tab="workitems"'));
 
     const searchedSpec = await fetch(
       `${base}/spec?repo=o%2Fr&path=%2Fdocs%2Fspec.md&repoName=r&project=o&branch=main`,
+      { headers: { Cookie: browserCookie } },
     );
     const searchedSpecPage = await searchedSpec.text();
     check("GitHub search result opens read-only in Tippani",
@@ -443,6 +479,7 @@ try {
       headers: {
         "Content-Type": "application/json",
         Origin: `http://localhost:${portalPort}`,
+        Cookie: browserCookie,
       },
       body: JSON.stringify({ type: "approve" }),
     });
@@ -479,6 +516,7 @@ try {
         ...process.env,
         HOME: home,
         TIPPANI_GITHUB_API_BASE: apiBase,
+        TIPPANI_CLIENT_NAME: "smoke-github-pr",
       },
       stdio: ["ignore", "pipe", "pipe"],
     });
@@ -489,7 +527,10 @@ try {
     check("GitHub --browse portal boots end to end",
       browseReady, browseErr);
     if (browseReady) {
-      const browsePage = await (await fetch(`${browseBase}/discovery`)).text();
+      const browseSession = await establishBrowserSession(browseBase, browsePort);
+      const browsePage = await (await fetch(`${browseBase}/discovery`, {
+        headers: { Cookie: browseSession.cookie },
+      })).text();
       check("GitHub browse home includes review results",
         browsePage.includes("GitHub spec") &&
         browsePage.includes("/open/7?owner=o&amp;repo=r"));

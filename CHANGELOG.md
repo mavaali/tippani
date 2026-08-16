@@ -1,5 +1,71 @@
 # Changelog
 
+## 1.8.1 (2026-08-14)
+
+The local client boundary is now authenticated end to end: every browser page
+and mutation requires a real session, every MCP and headless client presents a
+capability-scoped bearer bound to its exact client name, and reconnecting a
+browser to a running portal is a supported operation instead of a restart.
+
+Covers [#89](https://github.com/mavaali/tippani/pull/89).
+
+### Added
+
+- **Authenticated local client boundary (R0)**: browser access starts at a
+  high-entropy, single-use, short-lived bootstrap link that exchanges for an
+  HttpOnly, SameSite session cookie; every browser mutation requires both the
+  authenticated session and an exact normalized scheme/host/port Origin —
+  prefix-matched and lookalike origins are rejected. MCP and headless clients
+  receive ephemeral, least-capability app-session bearers instead of browser
+  cookies, with expiry, rotation, revocation, replay rejection, and audit
+  coverage. Provider credentials stay behind the credential-broker boundary —
+  never in bootstrap URLs, cookies, MCP arguments, model context, or logs.
+- **`tippani open`** reconnects a browser to an already-running portal
+  (expired session, closed tab, headless start) by minting a fresh one-time
+  sign-in link over the registered app session — no restart, no lost review
+  state. `--port=<n>` disambiguates several running portals; `--path=` picks
+  the landing page. The `--demo` portal registers itself with a
+  least-capability bearer and serves the same mint route, so a locked-out
+  demo recovers the same way.
+- **App-session rotation** (`src/app-session-rotation.js`): portal bearers
+  rotate inside a refresh window on a timer; the MCP shim follows rotated
+  sessions through the portal registry.
+
+### Changed
+
+- Portal registry entry writes are atomic (temp file plus rename) and report
+  failure. A rotating portal publishes the token file before the registry
+  entry, and a failed publish re-persists the previous session — no store is
+  ever left advertising a revoked bearer.
+- Bearer values are no longer printed to stdout; external clients read
+  `~/.tippani/session-token-<port>` and send their configured
+  `TIPPANI_CLIENT_NAME`.
+- Startup prints a working single-use sign-in link — and the `tippani open`
+  recovery hint — even when the automatic browser open fails (SSH, WSL, no
+  handler), because the bare base URL is now refused as unauthenticated.
+- The smoke scripts authenticate the way real clients do: a client-name-bound
+  bearer for API calls and a bootstrap-exchange browser session for pages.
+
+### Fixed
+
+- **Open redirect** in the bootstrap `returnTo`: dot-segment resolution could
+  turn a value that passed the raw-input guards (`/..//evil.com`) into a
+  protocol-relative redirect off localhost immediately after the session
+  cookie was set. The resolved path is re-validated before use.
+- The MCP shim adopts CLI-started portals again: health probes and bootstrap
+  mints present the client name the bearer is bound to (from the registry
+  entry) rather than the shim's own, and cached bearers refresh from the
+  registry before probing — an app-session rotation no longer makes the shim
+  misread a healthy portal as dead and spawn a duplicate.
+- Portal lifecycle handlers (exit, signals, shim-disconnect teardown) and the
+  rotation timer register even when the registry directory is unwritable, so
+  a portal can no longer outlive its shim invisibly while holding its port.
+- Headless MCP calls no longer mint — and immediately discard — a browser
+  sign-in token per tool call, which also kept `bootstrap_created` noise from
+  evicting real rejections out of the audit ring. `open_pr` always returns a
+  working single-use `portalUrl` and reports truthfully whether a browser was
+  actually opened; an explicit `headless: false` always opens one.
+
 ## 1.8.0 (2026-08-10)
 
 The release that takes Tippani beyond Azure DevOps: GitHub is now a first-class

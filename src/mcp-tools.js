@@ -98,6 +98,12 @@ export function buildTools(http, session) {
     if (session && typeof session.ensureBrowsePortal === "function") await session.ensureBrowsePortal();
     return http.delete(path, body || {});
   }
+  // A user-facing portal link must be a single-use sign-in URL: the portal
+  // refuses an unauthenticated browser, so the bare base URL is never usable.
+  async function browserSessionUrl(returnTo = "/") {
+    if (!session || typeof session.createBrowserSessionUrl !== "function") return null;
+    return session.createBrowserSessionUrl(returnTo);
+  }
   return [
     {
       name: "open_pr",
@@ -162,9 +168,16 @@ export function buildTools(http, session) {
         const threads = (data && data.threads) || [];
         const openThreads = threads.filter((t) => !t.resolved);
         const isHeadless = headless !== false;
+        // ensure* no longer mints a sign-in link on the headless path (it runs
+        // before every MCP request), and a link opened in the browser is
+        // already consumed. Mint a fresh single-use link here so portalUrl is
+        // always a working way in for the user.
+        let portalUrl = null;
+        try { portalUrl = await browserSessionUrl("/"); } catch {}
+        const browserOpened = !isHeadless && !!(bind && bind.opened);
         return {
           prId: Number(prId),
-          portalUrl: bind && bind.url,
+          portalUrl,
           headless: isHeadless,
           note: isHeadless
             ? "The review portal is running HEADLESS in the background — it is NOT open on the " +
@@ -172,8 +185,11 @@ export function buildTools(http, session) {
               "'opened', or that a window/browser is up. Give the user the portalUrl as a " +
               "clickable link so they can open it themselves if they want to watch, e.g. \"PR #" +
               Number(prId) + " is loaded and ready in Tippani (running in the background) — open " +
-              "it to review: " + (bind && bind.url) + "\"."
-            : "Opened the portal in the user's default browser; you may also share the portalUrl.",
+              "it to review: " + portalUrl + "\"."
+            : browserOpened
+              ? "Opened the portal in the user's default browser; you may also share the portalUrl."
+              : "Could not open the user's default browser automatically — give the user the " +
+                "portalUrl as a clickable link instead.",
           openThreadCount: openThreads.length,
           threads,
         };
@@ -748,10 +764,12 @@ export function buildTools(http, session) {
       description:
         "Start Tippani in local-only mode on the Discovery page — no Azure DevOps " +
         "and NO token required, and no arguments. Brings the portal up (reusing a " +
-        "running one) and returns its `portalUrl`; SHOW that as a clickable link. " +
-        "Use this to open Tippani for local review (open_branch / open_branch_file / " +
-        "open_local_file) without signing in to ADO. The ADO discovery tools " +
-        "(list_prs / open_pr) still need a token.",
+        "running one) and returns a `portalUrl`; SHOW that as a clickable link. It " +
+        "is a SINGLE-USE sign-in link — the portal refuses an unauthenticated " +
+        "browser, so it works once and then expires; use get_portal_url for a new " +
+        "one. Use this to open Tippani for local review (open_branch / " +
+        "open_branch_file / open_local_file) without signing in to ADO. The ADO " +
+        "discovery tools (list_prs / open_pr) still need a token.",
       inputSchema: {},
       handler: async () => {
         if (!session || typeof session.ensureBrowsePortal !== "function") {
@@ -759,9 +777,10 @@ export function buildTools(http, session) {
         }
         await session.ensureBrowsePortal();
         return {
-          portalUrl: typeof session.getBaseUrl === "function" ? session.getBaseUrl() : null,
+          portalUrl: await browserSessionUrl(),
           running: !!(typeof session.getToken === "function" && session.getToken()),
-          note: "Local-only mode — no ADO token required.",
+          singleUse: true,
+          note: "Local-only mode — no ADO token required. The portalUrl is a one-time sign-in link.",
         };
       },
     },
@@ -859,39 +878,61 @@ export function buildTools(http, session) {
       name: "start_tippani",
       description:
         "Start the Tippani portal (browse mode) without opening a specific PR and " +
-        "return its `portalUrl`. Use this to bring Tippani up on demand; the portal " +
-        "runs in the background, so SHOW the returned portalUrl to the user as a " +
-        "clickable link. The entry tools (open_pr, list_prs, search_specs, " +
+        "return a `portalUrl`. That URL is a SINGLE-USE sign-in link: the portal " +
+        "refuses an unauthenticated browser, so the bare address will not work and " +
+        "the link stops working once opened or after it expires. SHOW it to the " +
+        "user as a clickable link, never a plain address, and call this again for " +
+        "a fresh one rather than reusing an old link. The portal runs in the " +
+        "background. The entry tools (open_pr, list_prs, search_specs, " +
         "open_branch, …) also start the portal themselves — this is the explicit " +
-        "start. Safe to call when already running (returns the existing portalUrl).",
+        "start. Safe to call when already running (adopts it and mints a new link).",
       inputSchema: {},
       handler: async () => {
         if (!session || typeof session.ensureBrowsePortal !== "function") {
           throw new Error("Portal launcher unavailable in this context.");
         }
         await session.ensureBrowsePortal();
-        const portalUrl = typeof session.getBaseUrl === "function" ? session.getBaseUrl() : null;
+        const portalUrl = await browserSessionUrl();
         return {
           portalUrl,
           running: !!(typeof session.getToken === "function" && session.getToken()),
+          singleUse: true,
           note:
-            "Tippani is running in the background — share the portalUrl as a " +
-            "clickable link so the user can open the review UI.",
+            "Tippani is running in the background. The portalUrl is a one-time " +
+            "sign-in link — share it as a clickable link; it works once and then " +
+            "expires. Call start_tippani (or get_portal_url) again for a new one.",
         };
       },
     },
     {
       name: "get_portal_url",
       description:
-        "Return the Tippani portal `portalUrl` and whether it is currently " +
-        "`running`. This does NOT start the portal — use start_tippani (or an " +
-        "entry tool like open_pr) to launch it. When not running, `running` is " +
-        "false and portalUrl is the address the portal will use once started.",
+        "Return a fresh SINGLE-USE Tippani sign-in `portalUrl` and whether the " +
+        "portal is currently `running`. Use this to reconnect a user whose link " +
+        "was already used, expired, or whose browser session ended — the portal " +
+        "rejects an unauthenticated browser, so there is no reusable address to " +
+        "hand out and an old link cannot be resent. This does NOT start the " +
+        "portal: when `running` is false, `portalUrl` is null and you must call " +
+        "start_tippani (or an entry tool like open_pr) first.",
       inputSchema: {},
       handler: async () => {
         const running = !!(session && typeof session.getToken === "function" && session.getToken());
-        const portalUrl = session && typeof session.getBaseUrl === "function" ? session.getBaseUrl() : null;
-        return { portalUrl, running };
+        if (!running) {
+          return {
+            portalUrl: null,
+            running: false,
+            singleUse: true,
+            note: "Tippani is not running — call start_tippani to launch it and get a sign-in link.",
+          };
+        }
+        return {
+          portalUrl: await browserSessionUrl(),
+          running: true,
+          singleUse: true,
+          note:
+            "One-time sign-in link — share it as a clickable link. It works once " +
+            "and then expires; call get_portal_url again for a new one.",
+        };
       },
     },
     {

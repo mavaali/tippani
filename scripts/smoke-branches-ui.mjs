@@ -34,13 +34,34 @@ function tokenFor(port) {
   const p = join(homedir(), ".tippani", `session-token-${port}`);
   return existsSync(p) ? readFileSync(p, "utf8").trim() : "";
 }
+// Browser-session cookie for page GETs — pages sit behind the browser-session
+// gate, so the script signs in like a real browser: mint a single-use
+// bootstrap link over the app bearer, consume it, keep the HttpOnly cookie.
+let COOKIE = "";
+async function establishBrowserSession() {
+  const minted = await fetch(BASE + "/api/v1/auth/browser-bootstrap", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${tokenFor(PORT)}`,
+      "X-Tippani-Client": CLIENT,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ returnTo: "/" }),
+  });
+  const body = await minted.json();
+  if (!minted.ok || !body?.url) throw new Error("could not mint browser bootstrap: " + JSON.stringify(body));
+  const exchange = await fetch(body.url, { redirect: "manual" });
+  COOKIE = (exchange.headers.get("set-cookie") || "").split(";")[0];
+  if (!COOKIE) throw new Error("bootstrap exchange did not set a session cookie");
+}
 async function getPage(path) {
-  const res = await fetch(BASE + path, { headers: { "X-Tippani-Client": CLIENT } });
+  const res = await fetch(BASE + path, { headers: { "X-Tippani-Client": CLIENT, Cookie: COOKIE } });
   return { status: res.status, html: await res.text() };
 }
 async function api(method, path, body) {
-  const headers = { "X-Tippani-Client": CLIENT };
-  if (method !== "GET") { headers["Authorization"] = `Bearer ${tokenFor(PORT)}`; headers["Content-Type"] = "application/json"; }
+  // Reads require the app bearer too under the authenticated client boundary.
+  const headers = { "X-Tippani-Client": CLIENT, "Authorization": `Bearer ${tokenFor(PORT)}` };
+  if (method !== "GET") { headers["Content-Type"] = "application/json"; }
   const res = await fetch(BASE + path, { method, headers, body: body ? JSON.stringify(body) : undefined });
   let json = null; try { json = await res.json(); } catch {}
   return { status: res.status, json };
@@ -48,7 +69,12 @@ async function api(method, path, body) {
 async function waitReady(timeoutMs = 25000) {
   const t0 = Date.now();
   while (Date.now() - t0 < timeoutMs) {
-    try { const r = await fetch(BASE + "/api/v1/state", { headers: { "X-Tippani-Client": CLIENT } }); if (r.ok) return true; } catch {}
+    try {
+      const r = await fetch(BASE + "/api/v1/state", {
+        headers: { "X-Tippani-Client": CLIENT, Authorization: `Bearer ${tokenFor(PORT)}` },
+      });
+      if (r.ok) return true;
+    } catch {}
     await sleep(400);
   }
   return false;
@@ -60,6 +86,8 @@ async function main() {
   // mode requires *a* token to build a connection object; offline never uses it.
   const child = spawn(process.execPath, [join(ROOT, "src", "index.js"), "--browse", `--port=${PORT}`, "--offline", "--headless", "--ado-token=smoke.fake.token", "--org=https://dev.azure.com/smoke", "--project=SmokeProject"], {
     cwd: ROOT, stdio: ["ignore", "ignore", "inherit"],
+    // The app bearer is bound to the exact client name this script sends.
+    env: { ...process.env, TIPPANI_CLIENT_NAME: CLIENT },
   });
   let exited = false; child.on("exit", () => { exited = true; });
 
@@ -67,6 +95,7 @@ async function main() {
     const ready = await waitReady();
     check("portal boots offline and serves pages", ready);
     if (!ready) throw new Error("portal did not become ready");
+    await establishBrowserSession();
 
     // ---- /discovery : Branches tab + pane present and wired ----
     const disc = await getPage("/discovery");

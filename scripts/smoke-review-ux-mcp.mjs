@@ -39,9 +39,9 @@ function tokenFor(port) {
 }
 
 async function api(method, path, body) {
-  const headers = { "X-Tippani-Client": CLIENT };
-  const tok = tokenFor(PORT);
-  if (method !== "GET") { headers["Authorization"] = `Bearer ${tok}`; headers["Content-Type"] = "application/json"; }
+  // Reads require the app bearer too under the authenticated client boundary.
+  const headers = { "X-Tippani-Client": CLIENT, "Authorization": `Bearer ${tokenFor(PORT)}` };
+  if (method !== "GET") { headers["Content-Type"] = "application/json"; }
   const res = await fetch(BASE + path, { method, headers, body: body ? JSON.stringify(body) : undefined });
   let json = null;
   try { json = await res.json(); } catch {}
@@ -52,7 +52,9 @@ async function waitReady(timeoutMs = 25000) {
   const t0 = Date.now();
   while (Date.now() - t0 < timeoutMs) {
     try {
-      const r = await fetch(BASE + "/api/v1/state", { headers: { "X-Tippani-Client": CLIENT } });
+      const r = await fetch(BASE + "/api/v1/state", {
+        headers: { "X-Tippani-Client": CLIENT, Authorization: `Bearer ${tokenFor(PORT)}` },
+      });
       if (r.ok) return true;
     } catch {}
     await sleep(400);
@@ -69,6 +71,8 @@ async function main() {
 
   const child = spawn(process.execPath, [join(ROOT, "src", "index.js"), PR, `--port=${PORT}`, "--offline", "--headless"], {
     cwd: ROOT, stdio: ["ignore", "ignore", "inherit"],
+    // The app bearer is bound to the exact client name this script sends.
+    env: { ...process.env, TIPPANI_CLIENT_NAME: CLIENT },
   });
   let exited = false; child.on("exit", () => { exited = true; });
 
