@@ -1,7 +1,7 @@
-// Live single-identity OneDrive gate implementations. Each runs only against a
-// live OneDrive backing path; anywhere else (local, dry-run, or another
-// provider) it reports Blocked with the gate's precise prerequisite, so the
-// same catalog id stays honest across configurations.
+// Live single-identity provider gate implementations (OneDrive, ADO, GitHub).
+// Each runs only against a live provider backing path; anywhere else (local,
+// dry-run) it reports Blocked with the gate's precise prerequisite, so the same
+// catalog id stays honest across configurations.
 
 import assert from "node:assert/strict";
 import fs from "node:fs";
@@ -12,8 +12,10 @@ import { createSyntheticWorkspace } from "./synthetic-fixtures.mjs";
 import { WorkspaceConflictError } from "./workspace-contract.mjs";
 import { BLOCKED_REASONS } from "./provider-gates.mjs";
 
+// A live provider = a real OneDrive/ADO/GitHub backing path, not a dry-run.
 function isLiveOneDrive(context) {
-  return context.config.backingPath === "onedrive" && context.config.dryRun === false;
+  return ["onedrive", "ado", "github"].includes(context.config.backingPath)
+    && context.config.dryRun === false;
 }
 
 function blocked(context) {
@@ -287,6 +289,7 @@ async function restoredOneHead(context) {
 
 export const ONEDRIVE_GATE_IMPLEMENTATIONS = Object.freeze({
   "S0-BCK-002": etagCasStaleWriter,
+  "S0-BCK-003": etagCasStaleWriter,
   "S0-BCK-005": noSuccessShapedOnFailure,
   "S0-COL-004": lostResponseReconcile,
   "S0-COL-005": offlinePendingUntilCas,

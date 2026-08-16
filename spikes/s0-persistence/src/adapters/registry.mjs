@@ -3,6 +3,7 @@ import { LocalCasWorkspaceStore } from "./local-cas-store.mjs";
 import { LocalSqliteWorkspaceStore } from "./local-sqlite-store.mjs";
 import { BackingPathStore, ProviderWorkspaceStore } from "./provider-store.mjs";
 import { OneDriveGraphStore } from "./onedrive-store.mjs";
+import { AdoGitStore } from "./ado-git-store.mjs";
 
 /**
  * Adapters that keep authoritative state on disk. Only these can supply
@@ -48,7 +49,15 @@ const FACTORIES = {
     runId: options.runId,
     configurationId: options.configurationId,
   }),
-  "ado": providerFactory("ado"),
+  // ADO has a real Git-REST transport with oldObjectId ref-precondition CAS.
+  "ado": (options) => new AdoGitStore({
+    dryRun: options.dryRun !== false,
+    org: options.org,
+    project: options.project,
+    repo: options.repo,
+    runId: options.runId,
+    configurationId: options.configurationId,
+  }),
   "github": providerFactory("github"),
 };
 

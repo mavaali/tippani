@@ -7,6 +7,7 @@ import { PreflightError, findEmbeddedSecrets, validatePreflight } from "./prefli
 import { PROVIDER_PREREQUISITES } from "./provider-gates.mjs";
 import { ProviderWorkspaceStore } from "./adapters/provider-store.mjs";
 import { OneDriveGraphStore } from "./adapters/onedrive-store.mjs";
+import { AdoGitStore } from "./adapters/ado-git-store.mjs";
 import { createSyntheticWorkspace } from "./synthetic-fixtures.mjs";
 
 function makeDryRunStore(config) {
@@ -17,6 +18,16 @@ function makeDryRunStore(config) {
       configurationId: config.configurationId,
       driveId: config.sandbox?.coordinates?.driveId,
       folderPath: config.sandbox?.coordinates?.folder,
+    });
+  }
+  if (config.backingPath === "ado") {
+    return new AdoGitStore({
+      dryRun: true,
+      runId: config.runId,
+      configurationId: config.configurationId,
+      org: config.sandbox?.coordinates?.organization,
+      project: config.sandbox?.coordinates?.project,
+      repo: config.sandbox?.coordinates?.repository,
     });
   }
   return new ProviderWorkspaceStore({

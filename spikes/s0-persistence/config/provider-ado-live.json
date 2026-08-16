@@ -1,0 +1,55 @@
+{
+  "configurationId": "CFG-ADO-LIVE",
+  "adapter": "ado",
+  "backingPath": "ado",
+  "platform": "windows-ntfs",
+  "scale": "small",
+  "runId": "s0-ado-live",
+  "syntheticDataOnly": true,
+  "dryRun": false,
+  "budgets": {
+    "maxOperations": 100,
+    "maxDurationMs": 300000,
+    "maxObjects": 10000,
+    "maxBytes": 104857600
+  },
+  "sandbox": {
+    "kind": "provider-live",
+    "approved": true,
+    "allowListed": true,
+    "identityLabel": "Live delegated identity (supplied at runtime)",
+    "identityVerified": true,
+    "corporateFallbackDisabled": true,
+    "defaultBranchExcluded": true,
+    "ownershipMarker": "tippani-s0:s0-ado-live",
+    "namespace": "tippani-s0/s0-ado-live",
+    "coordinates": {
+      "organization": "supplied at runtime via S0_ADO_ORG",
+      "project": "supplied at runtime via S0_ADO_PROJECT",
+      "repository": "supplied at runtime via S0_ADO_REPO"
+    },
+    "dryRunOperations": [
+      "connect",
+      "read-item",
+      "push",
+      "list-items",
+      "list-commits",
+      "delete-ref"
+    ],
+    "cleanup": {
+      "manifestId": "syn-cleanup-s0-ado-live",
+      "expiresAt": "2000-01-02T00:00:00.000Z"
+    }
+  },
+  "scenarioIds": [
+    "S0-BCK-003",
+    "S0-BCK-005",
+    "S0-COL-004",
+    "S0-COL-005",
+    "S0-REC-003",
+    "S0-REC-004",
+    "S0-MIG-004",
+    "S0-BKP-003",
+    "S0-BKP-004"
+  ]
+}

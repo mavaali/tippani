@@ -20,8 +20,10 @@ import { createSyntheticWorkspace } from "../src/synthetic-fixtures.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const spikeRoot = path.dirname(here);
+// GitHub is the remaining generic-scaffold provider (OneDrive and ADO have real
+// transports), so the generic dry-run/fail-closed assertions run against it.
 const providerConfig = JSON.parse(fs.readFileSync(
-  path.join(spikeRoot, "config", "provider-ado-dryrun.json"),
+  path.join(spikeRoot, "config", "provider-github-dryrun.json"),
   "utf8",
 ));
 
