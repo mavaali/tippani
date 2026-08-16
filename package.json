@@ -63,7 +63,7 @@
     "test:toc": "node src/toc.test.mjs",
     "test:localmedia": "node src/local-media.test.mjs",
     "test:tokenrefresh": "node src/token-refresh.test.mjs",
-    "spike:s0:test": "node spikes/s0-persistence/test/harness.test.mjs && node spikes/s0-persistence/test/detection-power.test.mjs && node spikes/s0-persistence/test/durable-detection.test.mjs && node spikes/s0-persistence/test/provider-dryrun.test.mjs && node spikes/s0-persistence/test/onedrive-dryrun.test.mjs",
+    "spike:s0:test": "node spikes/s0-persistence/test/harness.test.mjs && node spikes/s0-persistence/test/detection-power.test.mjs && node spikes/s0-persistence/test/durable-detection.test.mjs && node spikes/s0-persistence/test/provider-dryrun.test.mjs && node spikes/s0-persistence/test/onedrive-dryrun.test.mjs && node spikes/s0-persistence/test/onedrive-gates.test.mjs",
     "spike:s0:selftest": "node spikes/s0-persistence/src/cli.mjs --config spikes/s0-persistence/config/reference-memory.json --output spikes/s0-persistence/results/CFG-REF-MEM",
     "spike:s0:compare": "node spikes/s0-persistence/src/compare.mjs",
     "spike:s0:preflight": "node spikes/s0-persistence/src/cli.mjs --config spikes/s0-persistence/config/provider-ado-dryrun.json --preflight-sheet",

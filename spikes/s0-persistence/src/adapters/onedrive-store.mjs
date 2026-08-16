@@ -57,7 +57,18 @@ export class OneDriveGraphStore {
     this.liveProviderCalls = 0;
     this.model = new ReferenceMemoryWorkspaceStore({ configurationId });
     this.etags = new Map();
+    this._fault = null;
+    this.offline = false;
+    this.pending = [];
     this.initialized = false;
+  }
+
+  // One-shot fault for an upcoming Graph call. Kinds: throttle (429), auth-expiry
+  // (401), outage (network throw), lost-response (the write lands but the client
+  // never sees the acknowledgement). `skip` lets a fault target a later call in a
+  // sequence (e.g. the PUT after the two reads of a compare-and-swap).
+  injectFault(kind, { skip = 0 } = {}) {
+    this._fault = { kind, skip };
   }
 
   record(op, detail = {}) {
@@ -73,6 +84,20 @@ export class OneDriveGraphStore {
     if (!this._getToken) throw new WorkspaceStoreError("No Graph token supplied", "no_token");
     if (!this.driveId || !this.baseFolder) throw new WorkspaceStoreError("driveId and folder are required for a live run", "no_coordinates");
     this.liveProviderCalls++;
+    const fault = this._fault;
+    if (fault && fault.skip > 0) {
+      fault.skip -= 1;
+    } else if (fault) {
+      this._fault = null;
+      if (fault.kind === "throttle") return { ok: false, status: 429, json: async () => ({}), text: async () => "throttled" };
+      if (fault.kind === "auth-expiry") return { ok: false, status: 401, json: async () => ({}), text: async () => "unauthorized" };
+      if (fault.kind === "outage") throw new WorkspaceStoreError("network outage (injected)", "provider_unreachable");
+      if (fault.kind === "lost-response") {
+        const token0 = await this._getToken();
+        await this.fetchImpl(`${GRAPH}${path}`, { method, headers: { Authorization: `Bearer ${token0}`, ...headers }, body });
+        throw new WorkspaceStoreError("response lost (injected)", "provider_response_lost");
+      }
+    }
     const token = await this._getToken();
     const resp = await this.fetchImpl(`${GRAPH}${path}`, {
       method,
@@ -260,7 +285,79 @@ export class OneDriveGraphStore {
     if (!resp.ok && resp.status !== 404) {
       throw new WorkspaceStoreError(`cleanup failed: ${resp.status}`, "provider_error");
     }
+    // Remove the shared tippani-s0 namespace folder too, but only if this was
+    // the last run left in it (never disturbs a concurrent run's subfolder).
+    try {
+      const nsPath = `${this.baseFolder}/tippani-s0`;
+      const list = await this.graph("GET", `/drives/${this.driveId}/root:/${encodePath(nsPath)}:/children?$select=name`);
+      if (list.ok && ((await list.json()).value || []).length === 0) {
+        await this.graph("DELETE", `/drives/${this.driveId}/root:/${encodePath(nsPath)}`);
+      }
+    } catch { /* best effort */ }
     return { deleted: this.subfolder };
+  }
+
+  async deleteWorkspace(workspaceId) {
+    if (this.dryRun) { await this.model.close?.(); return { deleted: workspaceId, dryRun: true }; }
+    const url = `/drives/${this.driveId}/root:/${encodePath(this.itemPath(workspaceId))}`;
+    const resp = await this.graph("DELETE", url);
+    if (!resp.ok && resp.status !== 404) {
+      throw new WorkspaceStoreError(`delete ${workspaceId} failed: ${resp.status}`, "provider_error");
+    }
+    return { deleted: workspaceId };
+  }
+
+  // Recover an earlier generation from the drive item's own version history.
+  async readGeneration(workspaceId, targetGeneration) {
+    this.ensureInitialized();
+    this.record("list-versions", { item: `${workspaceId}.json` });
+    if (this.dryRun) throw new WorkspaceStoreError("version history requires a live drive", "dryrun_no_versions");
+    const metaUrl = `/drives/${this.driveId}/root:/${encodePath(this.itemPath(workspaceId))}?$select=id`;
+    const metaResp = await this.graph("GET", metaUrl);
+    if (metaResp.status === 404) throw new WorkspaceNotFoundError(workspaceId);
+    const { id: itemId } = await metaResp.json();
+    const versResp = await this.graph("GET", `/drives/${this.driveId}/items/${itemId}/versions`);
+    if (!versResp.ok) throw new CorruptWorkspaceStoreError(`versions failed: ${versResp.status}`);
+    const versions = (await versResp.json()).value || [];
+    for (const v of versions) {
+      const contentResp = await this.graph("GET", `/drives/${this.driveId}/items/${itemId}/versions/${v.id}/content`);
+      if (!contentResp.ok) continue;
+      let ws;
+      try { ws = JSON.parse(await contentResp.text()); } catch { continue; }
+      if (ws?.generation === targetGeneration) return validateWorkspaceRecord(ws);
+    }
+    throw new WorkspaceStoreError(`generation ${targetGeneration} not found in history`, "generation_not_in_history");
+  }
+
+  // Offline authoring: a staged write is pending until reconnect confirms it via
+  // CAS. It is never labelled shared and never silently overwrites newer state.
+  goOffline() { this.offline = true; }
+
+  stageOffline(request) {
+    if (!this.offline) throw new WorkspaceStoreError("stageOffline requires offline mode", "not_offline");
+    this.pending.push(request);
+    return { status: "pending", pendingCount: this.pending.length };
+  }
+
+  async reconnect() {
+    this.offline = false;
+    const applied = [];
+    const conflicts = [];
+    const queued = this.pending;
+    this.pending = [];
+    for (const request of queued) {
+      try {
+        const next = await this.compareAndSwap(request);
+        applied.push({ workspaceId: request.workspaceId, generation: next.generation });
+      } catch (error) {
+        if (error instanceof WorkspaceConflictError) {
+          conflicts.push({ workspaceId: request.workspaceId, expected: error.expectedGeneration, actual: error.actualGeneration });
+        } else {
+          throw error;
+        }
+      }
+    }
+    return { applied, conflicts };
   }
 
   providerOperationManifest() {

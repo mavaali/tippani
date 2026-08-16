@@ -135,7 +135,14 @@ export async function runHarness({
       const scenarioStarted = performance.now();
       try {
         const detail = await implementation(context);
-        if (detail?.skip) {
+        if (detail?.blocked) {
+          results.push({
+            ...base,
+            status: "Blocked",
+            durationMs: performance.now() - scenarioStarted,
+            reason: detail.blocked,
+          });
+        } else if (detail?.skip) {
           results.push({
             ...base,
             status: "Incomplete",
@@ -165,6 +172,13 @@ export async function runHarness({
       }
     }
   } finally {
+    // Tear down a live provider run's per-run namespace (best effort).
+    if (config.dryRun === false && ["onedrive", "ado", "github"].includes(config.backingPath)) {
+      try {
+        const teardown = createAdapterStore(config.adapter, { ...config });
+        if (typeof teardown.cleanup === "function") await teardown.cleanup();
+      } catch { /* best effort */ }
+    }
     if (!config.keepStoreArtifacts) {
       try { fs.rmSync(runRoot, { recursive: true, force: true }); } catch { /* best effort */ }
     }

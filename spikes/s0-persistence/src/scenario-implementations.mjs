@@ -11,6 +11,7 @@ import {
 } from "./synthetic-fixtures.mjs";
 import { CleanupManifest } from "./cleanup-manifest.mjs";
 import { findEmbeddedSecrets, validatePreflight } from "./preflight.mjs";
+import { ONEDRIVE_GATE_IMPLEMENTATIONS } from "./onedrive-gates.mjs";
 import {
   CorruptWorkspaceStoreError,
   WorkspaceConflictError,
@@ -1253,6 +1254,7 @@ async function budgetsStopUnsafeRuns(context) {
 }
 
 export const SCENARIO_IMPLEMENTATIONS = Object.freeze({
+  ...ONEDRIVE_GATE_IMPLEMENTATIONS,
   "S0-ATM-001": atomicMutation,
   "S0-ATM-002": atomicAliasTransition,
   "S0-ATM-003": failedMutationIsInvisible,

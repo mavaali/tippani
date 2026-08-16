@@ -29,6 +29,16 @@ const configPath = path.resolve(
   valueOf("--config", path.join(root, "config", "reference-memory.json")),
 );
 const config = JSON.parse(fs.readFileSync(configPath, "utf8"));
+
+// A per-invocation run id keeps each live provider run in its own namespace.
+const runIdOverride = valueOf("--run-id", null);
+if (runIdOverride) {
+  config.runId = runIdOverride;
+  if (config.sandbox) {
+    config.sandbox.ownershipMarker = `tippani-s0:${runIdOverride}`;
+    if (config.sandbox.namespace) config.sandbox.namespace = `tippani-s0/${runIdOverride}`;
+  }
+}
 const selected = args
   .filter((arg) => arg.startsWith("--scenario="))
   .map((arg) => arg.slice("--scenario=".length));
