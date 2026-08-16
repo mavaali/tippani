@@ -51,16 +51,30 @@ await check("refuses live provider operations until a sandbox is wired in", asyn
   assert.equal(store.liveProviderCallCount(), 1, "The refused connect counts as a would-be live call");
 });
 
-await check("dry-run records intended operations and makes zero live calls", async () => {
-  const result = await runProviderDryRun(providerConfig);
-  assert.equal(result.liveProviderCalls, 0);
-  assert.ok(result.operations.length >= 4, "The dry-run must record its intended provider operations");
+await check("generic provider store records intended operations and makes zero live calls", async () => {
+  // All real provider backing paths now have transports, so this exercises the
+  // generic ProviderWorkspaceStore scaffold directly.
+  const store = new ProviderWorkspaceStore({ backingPath: "ado", sandbox: providerConfig.sandbox, dryRun: true });
+  await store.initialize();
+  const workspace = createSyntheticWorkspace({ seed: "provider-ops" });
+  await store.createWorkspace(workspace);
+  await store.compareAndSwap({
+    workspaceId: workspace.workspaceId,
+    expectedGeneration: 0,
+    operation: { auditEvent: { actor: "Synthetic A", action: "x" } },
+  });
+  await store.readWorkspace(workspace.workspaceId);
+  await store.listWorkspaces();
+  await store.backup();
+  const operations = store.providerOperationManifest();
+  assert.equal(store.liveProviderCallCount(), 0);
+  assert.ok(operations.length >= 4, "The dry-run must record its intended provider operations");
   assert.ok(
-    result.operations.some((op) => op.op === "put-workspace" && String(op.precondition).includes("if-none-match")),
+    operations.some((op) => op.op === "put-workspace" && String(op.precondition).includes("if-none-match")),
     "Create must record an if-none-match precondition",
   );
   assert.ok(
-    result.operations.some((op) => String(op.precondition).includes("if-match")),
+    operations.some((op) => String(op.precondition).includes("if-match")),
     "A mutation must record an if-match generation precondition",
   );
 });

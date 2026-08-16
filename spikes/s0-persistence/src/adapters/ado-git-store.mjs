@@ -60,8 +60,8 @@ export class AdoGitStore {
     this.initialized = false;
   }
 
-  injectFault(kind, { skip = 0 } = {}) {
-    this._fault = { kind, skip };
+  injectFault(kind) {
+    this._fault = { kind };
   }
 
   record(op, detail = {}) {
@@ -82,9 +82,7 @@ export class AdoGitStore {
     if (!this.org || !this.project || !this.repo) throw new WorkspaceStoreError("org/project/repo required for a live run", "no_coordinates");
     this.liveProviderCalls++;
     const fault = this._fault;
-    if (fault && fault.skip > 0) {
-      fault.skip -= 1;
-    } else if (fault) {
+    if (fault && method !== "GET") {
       this._fault = null;
       if (fault.kind === "throttle") return { ok: false, status: 429, text: async () => "throttled", json: async () => ({}) };
       if (fault.kind === "auth-expiry") return { ok: false, status: 401, text: async () => "unauthorized", json: async () => ({}) };

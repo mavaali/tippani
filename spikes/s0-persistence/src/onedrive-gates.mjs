@@ -33,7 +33,7 @@ async function etagCasStaleWriter(context) {
   if (!isLiveOneDrive(context)) return blocked(context);
   const store = context.createStore();
   await store.initialize();
-  const workspace = await seedWorkspace(store, `${context.config.runId}-bck002`);
+  const workspace = await seedWorkspace(store, `bck002-${context.config.runId}`);
   try {
     await store.compareAndSwap({
       workspaceId: workspace.workspaceId,
@@ -64,10 +64,10 @@ async function noSuccessShapedOnFailure(context) {
   if (!isLiveOneDrive(context)) return blocked(context);
   const store = context.createStore();
   await store.initialize();
-  const workspace = await seedWorkspace(store, `${context.config.runId}-bck005`);
+  const workspace = await seedWorkspace(store, `bck005-${context.config.runId}`);
   try {
     for (const kind of ["throttle", "auth-expiry", "outage"]) {
-      store.injectFault(kind, { skip: 2 }); // fault the write, not the reads
+      store.injectFault(kind); // faults the compare-and-swap write
       await assert.rejects(
         store.compareAndSwap({
           workspaceId: workspace.workspaceId,
@@ -89,9 +89,9 @@ async function lostResponseReconcile(context) {
   if (!isLiveOneDrive(context)) return blocked(context);
   const store = context.createStore();
   await store.initialize();
-  const workspace = await seedWorkspace(store, `${context.config.runId}-col004`);
+  const workspace = await seedWorkspace(store, `col004-${context.config.runId}`);
   try {
-    store.injectFault("lost-response", { skip: 2 }); // the write lands; the ack is lost
+    store.injectFault("lost-response"); // the write lands; the ack is lost
     await assert.rejects(
       store.compareAndSwap({
         workspaceId: workspace.workspaceId,
@@ -122,7 +122,7 @@ async function offlinePendingUntilCas(context) {
   if (!isLiveOneDrive(context)) return blocked(context);
   const a = context.createStore();
   await a.initialize();
-  const workspace = await seedWorkspace(a, `${context.config.runId}-col005`);
+  const workspace = await seedWorkspace(a, `col005-${context.config.runId}`);
   try {
     await a.compareAndSwap({
       workspaceId: workspace.workspaceId,
@@ -160,7 +160,7 @@ async function offlineCacheReconcile(context) {
   if (!isLiveOneDrive(context)) return blocked(context);
   const a = context.createStore();
   await a.initialize();
-  const workspace = await seedWorkspace(a, `${context.config.runId}-rec004`);
+  const workspace = await seedWorkspace(a, `rec004-${context.config.runId}`);
   try {
     await a.compareAndSwap({
       workspaceId: workspace.workspaceId,
@@ -196,9 +196,9 @@ async function recoverAfterFault(context) {
   if (!isLiveOneDrive(context)) return blocked(context);
   const store = context.createStore();
   await store.initialize();
-  const workspace = await seedWorkspace(store, `${context.config.runId}-rec003`);
+  const workspace = await seedWorkspace(store, `rec003-${context.config.runId}`);
   try {
-    store.injectFault("outage", { skip: 2 });
+    store.injectFault("outage");
     await assert.rejects(
       store.compareAndSwap({
         workspaceId: workspace.workspaceId,
@@ -229,7 +229,7 @@ async function localToOneDriveRehome(context) {
   await local.initialize();
   const od = context.createStore();
   await od.initialize();
-  const workspace = createSyntheticWorkspace({ seed: `${context.config.runId}-mig004` });
+  const workspace = createSyntheticWorkspace({ seed: `mig004-${context.config.runId}` });
   try {
     await local.createWorkspace(workspace);
     await local.compareAndSwap({
@@ -256,7 +256,7 @@ async function versionHistoryRecover(context) {
   if (!isLiveOneDrive(context)) return blocked(context);
   const store = context.createStore();
   await store.initialize();
-  const workspace = await seedWorkspace(store, `${context.config.runId}-bkp003`);
+  const workspace = await seedWorkspace(store, `bkp003-${context.config.runId}`);
   try {
     await store.compareAndSwap({ workspaceId: workspace.workspaceId, expectedGeneration: 0, operation: { auditEvent: { actor: "A", action: "g1" } } });
     await store.compareAndSwap({ workspaceId: workspace.workspaceId, expectedGeneration: 1, operation: { auditEvent: { actor: "A", action: "g2" } } });
@@ -272,7 +272,7 @@ async function restoredOneHead(context) {
   if (!isLiveOneDrive(context)) return blocked(context);
   const store = context.createStore();
   await store.initialize();
-  const workspace = await seedWorkspace(store, `${context.config.runId}-bkp004`);
+  const workspace = await seedWorkspace(store, `bkp004-${context.config.runId}`);
   try {
     await store.compareAndSwap({ workspaceId: workspace.workspaceId, expectedGeneration: 0, operation: { auditEvent: { actor: "A", action: "g1" } } });
     await store.compareAndSwap({ workspaceId: workspace.workspaceId, expectedGeneration: 1, operation: { auditEvent: { actor: "A", action: "g2" } } });
@@ -290,6 +290,7 @@ async function restoredOneHead(context) {
 export const ONEDRIVE_GATE_IMPLEMENTATIONS = Object.freeze({
   "S0-BCK-002": etagCasStaleWriter,
   "S0-BCK-003": etagCasStaleWriter,
+  "S0-BCK-004": etagCasStaleWriter,
   "S0-BCK-005": noSuccessShapedOnFailure,
   "S0-COL-004": lostResponseReconcile,
   "S0-COL-005": offlinePendingUntilCas,

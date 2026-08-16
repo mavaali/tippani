@@ -4,6 +4,7 @@ import { LocalSqliteWorkspaceStore } from "./local-sqlite-store.mjs";
 import { BackingPathStore, ProviderWorkspaceStore } from "./provider-store.mjs";
 import { OneDriveGraphStore } from "./onedrive-store.mjs";
 import { AdoGitStore } from "./ado-git-store.mjs";
+import { GitHubRepoStore } from "./github-repo-store.mjs";
 
 /**
  * Adapters that keep authoritative state on disk. Only these can supply
@@ -58,7 +59,14 @@ const FACTORIES = {
     runId: options.runId,
     configurationId: options.configurationId,
   }),
-  "github": providerFactory("github"),
+  // GitHub has a real REST transport with Contents-API blob-sha CAS.
+  "github": (options) => new GitHubRepoStore({
+    dryRun: options.dryRun !== false,
+    owner: options.owner,
+    repo: options.repo,
+    runId: options.runId,
+    configurationId: options.configurationId,
+  }),
 };
 
 // Broken stores exist only to prove the durable scenarios have detection

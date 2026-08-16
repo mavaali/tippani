@@ -1,12 +1,12 @@
 {
-  "configurationId": "CFG-PROVIDER-GITHUB-DRYRUN",
+  "configurationId": "CFG-GITHUB-LIVE",
   "adapter": "github",
   "backingPath": "github",
   "platform": "windows-ntfs",
   "scale": "small",
-  "runId": "s0-provider-github-dryrun",
+  "runId": "s0-github-live",
   "syntheticDataOnly": true,
-  "dryRun": true,
+  "dryRun": false,
   "budgets": {
     "maxOperations": 100,
     "maxDurationMs": 300000,
@@ -14,38 +14,41 @@
     "maxBytes": 104857600
   },
   "sandbox": {
-    "kind": "provider-template",
+    "kind": "provider-live",
     "approved": true,
     "allowListed": true,
-    "identityLabel": "Synthetic Sandbox Identity (template - replace before live run)",
+    "identityLabel": "Live delegated identity (supplied at runtime)",
     "identityVerified": true,
     "corporateFallbackDisabled": true,
     "defaultBranchExcluded": true,
-    "ownershipMarker": "tippani-s0:s0-provider-github-dryrun",
-    "namespace": "tippani-s0/s0-provider-github-dryrun",
+    "ownershipMarker": "tippani-s0:s0-github-live",
+    "namespace": "tippani-s0/s0-github-live",
     "coordinates": {
-      "owner": "syn-github-org",
-      "repository": "syn-s0-repo",
-      "ref": "refs/heads/tippani-s0/s0-provider-github-dryrun/main"
+      "owner": "supplied at runtime via S0_GITHUB_OWNER",
+      "repository": "supplied at runtime via S0_GITHUB_REPO"
     },
     "dryRunOperations": [
       "connect",
       "get-contents",
       "put-contents",
       "list-contents",
+      "list-commits",
       "delete-ref"
     ],
     "cleanup": {
-      "manifestId": "syn-cleanup-s0-provider-github-dryrun",
+      "manifestId": "syn-cleanup-s0-github-live",
       "expiresAt": "2000-01-02T00:00:00.000Z"
     }
   },
   "scenarioIds": [
-    "S0-COL-002",
-    "S0-COL-003",
-    "S0-COL-006",
     "S0-BCK-004",
-    "S0-BCK-006",
-    "S0-PER-004"
+    "S0-BCK-005",
+    "S0-COL-004",
+    "S0-COL-005",
+    "S0-REC-003",
+    "S0-REC-004",
+    "S0-MIG-004",
+    "S0-BKP-003",
+    "S0-BKP-004"
   ]
 }

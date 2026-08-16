@@ -63,12 +63,12 @@ export class OneDriveGraphStore {
     this.initialized = false;
   }
 
-  // One-shot fault for an upcoming Graph call. Kinds: throttle (429), auth-expiry
-  // (401), outage (network throw), lost-response (the write lands but the client
-  // never sees the acknowledgement). `skip` lets a fault target a later call in a
-  // sequence (e.g. the PUT after the two reads of a compare-and-swap).
-  injectFault(kind, { skip = 0 } = {}) {
-    this._fault = { kind, skip };
+  // One-shot fault for the next write. Reads pass through, so the fault lands on
+  // the compare-and-swap write regardless of how many reads precede it. Kinds:
+  // throttle (429), auth-expiry (401), outage (network throw), lost-response (the
+  // write lands but the client never sees the acknowledgement).
+  injectFault(kind) {
+    this._fault = { kind };
   }
 
   record(op, detail = {}) {
@@ -85,9 +85,7 @@ export class OneDriveGraphStore {
     if (!this.driveId || !this.baseFolder) throw new WorkspaceStoreError("driveId and folder are required for a live run", "no_coordinates");
     this.liveProviderCalls++;
     const fault = this._fault;
-    if (fault && fault.skip > 0) {
-      fault.skip -= 1;
-    } else if (fault) {
+    if (fault && method !== "GET") {
       this._fault = null;
       if (fault.kind === "throttle") return { ok: false, status: 429, json: async () => ({}), text: async () => "throttled" };
       if (fault.kind === "auth-expiry") return { ok: false, status: 401, json: async () => ({}), text: async () => "unauthorized" };

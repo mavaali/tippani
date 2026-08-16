@@ -8,6 +8,7 @@ import { PROVIDER_PREREQUISITES } from "./provider-gates.mjs";
 import { ProviderWorkspaceStore } from "./adapters/provider-store.mjs";
 import { OneDriveGraphStore } from "./adapters/onedrive-store.mjs";
 import { AdoGitStore } from "./adapters/ado-git-store.mjs";
+import { GitHubRepoStore } from "./adapters/github-repo-store.mjs";
 import { createSyntheticWorkspace } from "./synthetic-fixtures.mjs";
 
 function makeDryRunStore(config) {
@@ -27,6 +28,15 @@ function makeDryRunStore(config) {
       configurationId: config.configurationId,
       org: config.sandbox?.coordinates?.organization,
       project: config.sandbox?.coordinates?.project,
+      repo: config.sandbox?.coordinates?.repository,
+    });
+  }
+  if (config.backingPath === "github") {
+    return new GitHubRepoStore({
+      dryRun: true,
+      runId: config.runId,
+      configurationId: config.configurationId,
+      owner: config.sandbox?.coordinates?.owner,
       repo: config.sandbox?.coordinates?.repository,
     });
   }
