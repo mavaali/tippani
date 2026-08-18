@@ -112,7 +112,10 @@ export function buildTools(http, session) {
         "threads and changed files. The portal runs headless: this returns a " +
         "`portalUrl` for the review — SHOW that URL to the user (a clickable " +
         "link) or open it yourself in a code block so they can watch the " +
-        "review. This opens a specific PR for review; the PR-review reading and " +
+        "review. The portalUrl is a SINGLE-USE sign-in link: share it only from " +
+        "the result that just minted it. Never repeat an older portalUrl from " +
+        "chat history; call get_portal_url immediately before sharing another " +
+        "link. This opens a specific PR for review; the PR-review reading and " +
         "comment tools (list_threads, get_thread, get_spec, set_view, and the " +
         "reply/resolve tools) act on the PR opened here, so open the PR before " +
         "using them. It is not the only entry point: to browse first use " +
@@ -175,11 +178,16 @@ export function buildTools(http, session) {
         let portalUrl = null;
         try { portalUrl = await browserSessionUrl("/"); } catch {}
         const browserOpened = !isHeadless && !!(bind && bind.opened);
+        const linkNote =
+          "The portalUrl is a single-use sign-in link that works once and expires quickly. " +
+          "Share it only from this result; call get_portal_url immediately before sharing " +
+          "another link instead of repeating an older URL.";
         return {
           prId: Number(prId),
           portalUrl,
           headless: isHeadless,
-          note: isHeadless
+          singleUse: true,
+          note: (isHeadless
             ? "The review portal is running HEADLESS in the background — it is NOT open on the " +
               "user's screen and you did NOT open it. Do not say it is 'open in the portal', " +
               "'opened', or that a window/browser is up. Give the user the portalUrl as a " +
@@ -189,7 +197,7 @@ export function buildTools(http, session) {
             : browserOpened
               ? "Opened the portal in the user's default browser; you may also share the portalUrl."
               : "Could not open the user's default browser automatically — give the user the " +
-                "portalUrl as a clickable link instead.",
+                "portalUrl as a clickable link instead.") + " " + linkNote,
           openThreadCount: openThreads.length,
           threads,
         };

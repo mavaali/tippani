@@ -225,10 +225,21 @@ try {
 
   // --- open_pr ---
   {
+    const bootstrapCount = bootstrapCalls.length;
     const r = await byName.open_pr.handler({ prId: 952607, org: "https://dev.azure.com/o", project: "P" });
     check("open_pr: calls ensurePortal with prId", ensurePortalCalls.length === 1 && ensurePortalCalls[0].prId === 952607);
     check("open_pr: forwards org/project", ensurePortalCalls[0].org === "https://dev.azure.com/o" && ensurePortalCalls[0].project === "P");
     check("open_pr: returns threads after launch", r.threads.length === 2);
+    check("open_pr: mints a fresh browser sign-in link",
+      bootstrapCalls.length === bootstrapCount + 1 &&
+      /\/auth\/bootstrap\?token=/.test(r.portalUrl));
+    check("open_pr: marks the portal link single use", r.singleUse === true);
+    check("open_pr: result forbids reuse and directs a fresh-link call",
+      /single-use|one-time/.test(r.note) && /get_portal_url/.test(r.note) && /older/.test(r.note));
+    check("open_pr: description warns against reusing a portal link",
+      /SINGLE-USE|single-use|one-time/.test(byName.open_pr.description) &&
+      /get_portal_url/.test(byName.open_pr.description) &&
+      /Never repeat/.test(byName.open_pr.description));
     check("open_pr: carries no embedded instructions (driving is via skills/instructions)",
       r.instructions === undefined);
     check("open_pr: reports open thread count", r.openThreadCount === 2);
