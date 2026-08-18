@@ -113,7 +113,13 @@ try {
   check("page: fresh profile gets authentication-required surface", response.status === 401 && (await response.text()).includes("Authentication required"));
 
   const browserBootstrap = auth.createBrowserBootstrap({ returnTo: "/" });
-  response = await request(new URL(browserBootstrap.url).pathname + new URL(browserBootstrap.url).search, { redirect: "manual" });
+  const browserBootstrapPath = new URL(browserBootstrap.url).pathname + new URL(browserBootstrap.url).search;
+  response = await request(browserBootstrapPath, { method: "HEAD", redirect: "manual" });
+  check("bootstrap route: HEAD confirms endpoint without exchange", response.status === 200);
+  check("bootstrap route: HEAD sets no browser cookie", !response.headers.get("set-cookie"));
+  check("bootstrap route: HEAD does not redirect", !response.headers.get("location"));
+
+  response = await request(browserBootstrapPath, { redirect: "manual" });
   const setCookie = response.headers.get("set-cookie") || "";
   const cookie = setCookie.split(";")[0];
   check("bootstrap route: redirects after exchange", response.status === 303 && response.headers.get("location") === "/");

@@ -334,6 +334,14 @@ export function createLocalClientAuth({
   }
 
   function mount(app) {
+    // Express automatically routes HEAD through a matching GET handler when no
+    // explicit HEAD route exists. Link checkers commonly probe hyperlinks with
+    // HEAD; letting that reach the exchange would consume the one-time token
+    // before the browser navigates. Confirm the local endpoint exists without
+    // validating or exchanging the credential.
+    app.head("/auth/bootstrap", (_req, res) => {
+      res.status(200).set("Cache-Control", "no-store").end();
+    });
     app.get("/auth/bootstrap", (req, res) => {
       const result = exchangeBrowserBootstrap(req.query.token);
       if (!result) {
