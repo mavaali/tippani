@@ -1,0 +1,23 @@
+{
+  "configurationId": "CFG-REF-MEM",
+  "runId": "s0-reference-selftest",
+  "adapter": "reference-memory",
+  "backingPath": "local",
+  "syntheticDataOnly": true,
+  "sandbox": {
+    "approved": true,
+    "kind": "local-reference",
+    "identityLabel": "Synthetic Local Harness",
+    "identityVerified": false,
+    "ownershipMarker": "tippani-s0:s0-reference-selftest",
+    "namespace": null,
+    "defaultBranchExcluded": false,
+    "corporateFallbackDisabled": true
+  },
+  "budgets": {
+    "maxOperations": 100,
+    "maxDurationMs": 60000,
+    "maxObjects": 10000,
+    "maxBytes": 104857600
+  }
+}

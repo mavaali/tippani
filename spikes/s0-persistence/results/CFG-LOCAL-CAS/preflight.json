@@ -1,0 +1,23 @@
+{
+  "configurationId": "CFG-LOCAL-CAS",
+  "runId": "s0-local-cas-windows",
+  "adapter": "local-cas",
+  "backingPath": "local",
+  "syntheticDataOnly": true,
+  "sandbox": {
+    "approved": true,
+    "kind": "local-temp",
+    "identityLabel": "Synthetic Local Harness",
+    "identityVerified": false,
+    "ownershipMarker": "tippani-s0:s0-local-cas-windows",
+    "namespace": null,
+    "defaultBranchExcluded": false,
+    "corporateFallbackDisabled": true
+  },
+  "budgets": {
+    "maxOperations": 100,
+    "maxDurationMs": 300000,
+    "maxObjects": 10000,
+    "maxBytes": 104857600
+  }
+}

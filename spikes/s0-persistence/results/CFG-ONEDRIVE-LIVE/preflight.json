@@ -1,0 +1,23 @@
+{
+  "configurationId": "CFG-ONEDRIVE-LIVE",
+  "runId": "s0-onedrive-live-20260815233143",
+  "adapter": "onedrive",
+  "backingPath": "onedrive",
+  "syntheticDataOnly": true,
+  "sandbox": {
+    "approved": true,
+    "kind": "provider-live",
+    "identityLabel": "Live delegated identity (supplied at runtime)",
+    "identityVerified": true,
+    "ownershipMarker": "tippani-s0:s0-onedrive-live-20260815233143",
+    "namespace": "tippani-s0/s0-onedrive-live-20260815233143",
+    "defaultBranchExcluded": true,
+    "corporateFallbackDisabled": true
+  },
+  "budgets": {
+    "maxOperations": 100,
+    "maxDurationMs": 300000,
+    "maxObjects": 10000,
+    "maxBytes": 104857600
+  }
+}

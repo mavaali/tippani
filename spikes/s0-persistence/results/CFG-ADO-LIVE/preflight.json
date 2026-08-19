@@ -1,0 +1,23 @@
+{
+  "configurationId": "CFG-ADO-LIVE",
+  "runId": "s0-ado-live-20260815235002",
+  "adapter": "ado",
+  "backingPath": "ado",
+  "syntheticDataOnly": true,
+  "sandbox": {
+    "approved": true,
+    "kind": "provider-live",
+    "identityLabel": "Live delegated identity (supplied at runtime)",
+    "identityVerified": true,
+    "ownershipMarker": "tippani-s0:s0-ado-live-20260815235002",
+    "namespace": "tippani-s0/s0-ado-live-20260815235002",
+    "defaultBranchExcluded": true,
+    "corporateFallbackDisabled": true
+  },
+  "budgets": {
+    "maxOperations": 100,
+    "maxDurationMs": 300000,
+    "maxObjects": 10000,
+    "maxBytes": 104857600
+  }
+}

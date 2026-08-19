@@ -1,0 +1,23 @@
+{
+  "configurationId": "CFG-PROVIDER-ADO-DRYRUN",
+  "runId": "s0-provider-ado-dryrun",
+  "adapter": "ado",
+  "backingPath": "ado",
+  "syntheticDataOnly": true,
+  "sandbox": {
+    "approved": true,
+    "kind": "provider-template",
+    "identityLabel": "Synthetic Sandbox Identity (template - replace before live run)",
+    "identityVerified": true,
+    "ownershipMarker": "tippani-s0:s0-provider-ado-dryrun",
+    "namespace": "tippani-s0/s0-provider-ado-dryrun",
+    "defaultBranchExcluded": true,
+    "corporateFallbackDisabled": true
+  },
+  "budgets": {
+    "maxOperations": 100,
+    "maxDurationMs": 300000,
+    "maxObjects": 10000,
+    "maxBytes": 104857600
+  }
+}
