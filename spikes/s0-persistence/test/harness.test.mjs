@@ -217,5 +217,23 @@ await check("eligibility is No on a failed gate and Yes only when every gate pas
   assert.equal(gateSummary(oneIncomplete).eligible, "Incomplete");
 });
 
+await check("a reviewer-approved N/A gate is not-applicable, not unresolved, and does not block eligibility", () => {
+  const catalog = [
+    { id: "S0-ATM-001", criterionType: "absolute", title: "a" },
+    { id: "S0-REC-002", criterionType: "absolute", title: "stale lock recovery" },
+  ];
+  const withNa = {
+    catalog,
+    results: [
+      { scenarioId: "S0-ATM-001", criterionType: "absolute", status: "Pass" },
+      { scenarioId: "S0-REC-002", criterionType: "absolute", status: "N/A", reason: "contract" },
+    ],
+  };
+  const gates = gateSummary(withNa);
+  assert.equal(gates.notApplicable.length, 1);
+  assert.equal(gates.unresolved.length, 0);
+  assert.equal(gates.eligible, "Yes");
+});
+
 console.log(`s0-persistence-harness: ${pass} passed, ${fail} failed`);
 if (fail > 0) process.exit(1);

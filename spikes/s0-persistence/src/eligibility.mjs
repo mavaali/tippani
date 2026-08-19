@@ -13,6 +13,7 @@ export function gateSummary(run) {
   const unresolved = [];
   const passed = [];
   const missing = [];
+  const notApplicable = [];
 
   for (const scenario of absoluteCatalog) {
     const result = byId.get(scenario.id);
@@ -22,6 +23,10 @@ export function gateSummary(run) {
       failed.push(result);
     } else if (result.status === "Pass") {
       passed.push(result);
+    } else if (result.status === "N/A") {
+      // Reviewer-approved not-applicable: the gate does not apply to this
+      // configuration's contract, so it neither passes nor blocks eligibility.
+      notApplicable.push(result);
     } else {
       // Incomplete or Blocked.
       unresolved.push(result);
@@ -31,5 +36,5 @@ export function gateSummary(run) {
   const clean = failed.length === 0 && unresolved.length === 0 && missing.length === 0;
   const eligible = clean ? "Yes" : (failed.length ? "No" : "Incomplete");
 
-  return { failed, unresolved, passed, missing, eligible };
+  return { failed, unresolved, passed, missing, notApplicable, eligible };
 }

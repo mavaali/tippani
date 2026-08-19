@@ -704,9 +704,21 @@ async function restartRecovery(context) {
 
 async function staleLockRecovery(context) {
   if (!context.durable) return { skip: NOT_DURABLE };
+  if (context.adapter === "local-sqlite") {
+    // Reviewer-approved N/A: the invariant is real, but the scenario is written
+    // around an external lock file. SQLite owns locking internally and recovers
+    // a killed writer through its own journal on open, so external stale-lock
+    // reclamation does not apply to its contract rather than being missing
+    // evidence.
+    return {
+      na: "SQLite owns locking internally and recovers a killed writer through " +
+        "its own journal on open, so the external stale-lock-file recovery " +
+        "scenario does not apply to its contract (reviewer-approved).",
+    };
+  }
   if (context.adapter !== "local-cas") {
     return {
-      skip: "No external lock file: SQLite owns locking internally and " +
+      skip: "No external lock file: this adapter owns locking internally and " +
         "recovers a killed writer through its own journal on open.",
     };
   }

@@ -80,7 +80,7 @@ for (const configPath of selected) {
   process.stdout.write(
     `  absolute gates: ${gates.passed.length} passed, ` +
     `${gates.failed.length} failed, ${gates.unresolved.length} unresolved, ` +
-    `${gates.missing.length} not executed — eligible: ${gates.eligible}\n`,
+    `${gates.notApplicable.length} n/a, ${gates.missing.length} not executed — eligible: ${gates.eligible}\n`,
   );
 }
 
@@ -96,12 +96,12 @@ const lines = [
   "",
   "## Absolute gates",
   "",
-  "| Configuration | Adapter | Passed | Failed | Unresolved | Not executed | Eligible |",
-  "|---|---|---:|---:|---:|---:|---|",
+  "| Configuration | Adapter | Passed | Failed | Unresolved | N/A | Not executed | Eligible |",
+  "|---|---|---:|---:|---:|---:|---:|---|",
   ...runs.map(({ run, gates }) =>
     `| ${run.configuration.configurationId} | ${run.configuration.adapter} | ` +
     `${gates.passed.length} | ${gates.failed.length} | ${gates.unresolved.length} | ` +
-    `${gates.missing.length} | ${gates.eligible} |`),
+    `${gates.notApplicable.length} | ${gates.missing.length} | ${gates.eligible} |`),
   "",
   "## Relative metrics",
   "",
@@ -115,7 +115,7 @@ const lines = [
 
 for (const { run, gates } of runs) {
   lines.push(`### ${run.configuration.configurationId}`, "");
-  if (!gates.unresolved.length && !gates.failed.length && !gates.missing.length) {
+  if (!gates.unresolved.length && !gates.failed.length && !gates.missing.length && !gates.notApplicable.length) {
     lines.push("Every absolute gate passed.", "");
   }
   for (const result of gates.failed) {
@@ -123,6 +123,9 @@ for (const { run, gates } of runs) {
   }
   for (const result of gates.unresolved) {
     lines.push(`- **${result.status}** \`${result.scenarioId}\` — ${result.reason || "no reason recorded"}`);
+  }
+  for (const result of (gates.notApplicable || [])) {
+    lines.push(`- **N/A** \`${result.scenarioId}\` — ${result.reason || "not applicable to this configuration"}`);
   }
   for (const scenario of gates.missing) {
     lines.push(`- **Not executed** \`${scenario.id}\` — ${scenario.title}`);

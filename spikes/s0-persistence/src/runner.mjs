@@ -142,6 +142,16 @@ export async function runHarness({
             durationMs: performance.now() - scenarioStarted,
             reason: detail.blocked,
           });
+        } else if (detail?.na) {
+          // Reviewer-approved not-applicable: the invariant is real but does not
+          // apply to this adapter's contract. Distinct from Incomplete, which is
+          // missing evidence and must never read as a pass.
+          results.push({
+            ...base,
+            status: "N/A",
+            durationMs: performance.now() - scenarioStarted,
+            reason: detail.na,
+          });
         } else if (detail?.skip) {
           results.push({
             ...base,
