@@ -5835,6 +5835,25 @@ function scrollToLine(line) {
   const dest = target._diffDest || target;
   dest.scrollIntoView({ behavior: 'smooth', block: 'center' });
 }
+// Scroll to a source line once the document view has actually rendered its
+// blocks. A one-shot scroll can fire before the diff/proposed render or a large
+// spec has laid out its commentable blocks, leaving SOURCE_MAP empty so the
+// scroll silently misses and the page never moves. Retry for a bounded window
+// until the blocks exist, then scroll. Editor mode scrolls immediately since it
+// uses CodeMirror geometry, not SOURCE_MAP.
+function scrollToLineWhenReady(line) {
+  if (!Number.isFinite(line)) return;
+  const main = document.getElementById('mainContent');
+  if (main && main.classList.contains('editing')) { scrollToLine(line); return; }
+  let attempts = 0;
+  function attempt() {
+    attempts++;
+    const ready = commentableEls && commentableEls.length > 0 && Object.keys(SOURCE_MAP).length > 0;
+    if (ready || attempts >= 30) { scrollToLine(line); return; }
+    setTimeout(attempt, 80);
+  }
+  attempt();
+}
 // Scroll the document to a thread's location so opening/focusing a thread syncs the doc.
 function scrollDocToThread(threadId) {
   const td = THREADS_DATA.find((t) => Number(t.id) === Number(threadId));
@@ -6000,7 +6019,7 @@ function setSidebarMode(mode) {
 (function () {
   const q = new URLSearchParams(location.search).get('line');
   const n = q ? parseInt(q, 10) : NaN;
-  if (Number.isFinite(n)) setTimeout(() => { try { scrollToLine(n); } catch {} }, 400);
+  if (Number.isFinite(n)) scrollToLineWhenReady(n);
 })();
 
 
@@ -6449,7 +6468,7 @@ document.addEventListener('keydown', (e) => {
       // Baseline on the first poll so a stale command doesn't scroll on load.
       if (typeof s.lineSeq === 'number') {
         if (lastLineSeq === null) lastLineSeq = s.lineSeq;
-        else if (s.lineSeq > lastLineSeq) { lastLineSeq = s.lineSeq; try { scrollToLine(s.line); } catch {} }
+        else if (s.lineSeq > lastLineSeq) { lastLineSeq = s.lineSeq; try { scrollToLineWhenReady(s.line); } catch {} }
       }
     } catch {}
   }
