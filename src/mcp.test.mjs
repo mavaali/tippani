@@ -271,8 +271,14 @@ try {
     const r1 = await byName.open_file.handler({ fileIndex: 2 });
     check("open_file: opens /file/<idx>", r1.opened === "/file/2" && focus.get().navUrl === "/file/2");
     check("open_file: single-tab does NOT open a new browser tab", !openUrlCalls.includes("/file/2"));
+    check("open_file: no line -> line null and no scroll command", r1.line === null && r1.lineSeq === null);
+    const beforeLineSeq = focus.get().lineSeq;
     const r2 = await byName.open_file.handler({ fileIndex: 0, line: 47 });
     check("open_file: appends ?line when given", r2.opened === "/file/0?line=47" && focus.get().navUrl === "/file/0?line=47");
+    // With a line, open_file also drives the go-to-line command so a file that
+    // is already the open page scrolls even when the same-path navigation is
+    // skipped (regression: open_file used to report ok without moving the page).
+    check("open_file: line drives go-to-line", r2.line === 47 && focus.get().line === 47 && focus.get().lineSeq === beforeLineSeq + 1);
   }
 
   // --- go_to_line (same-page scroll of the already-open file) ---

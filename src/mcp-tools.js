@@ -294,10 +294,14 @@ export function buildTools(http, session) {
     {
       name: "open_file",
       description:
-        "Open a changed file in the user's browser at the file view, optionally scrolled to a " +
-        "line. Use to bring the user to a file or section that isn't tied to a comment (e.g. " +
-        "\"show me the Meta-programming section\") — resolve a heading to its line with get_spec " +
-        "first. Read-only: opens the view, changes nothing.",
+        "Open a changed file in the user's browser at the file view and, with a line, scroll " +
+        "there. This is the reliable way to land the view on ANY line — including lines that " +
+        "have no comment thread — because it both navigates to the file and drives the scroll, " +
+        "so it works even when that file is already the open page, and the scroll waits for the " +
+        "view (diff/proposed included) to finish rendering. Use to bring the user to a file or " +
+        "section that isn't tied to a comment (e.g. \"show me the Meta-programming section\") — " +
+        "resolve a heading to its line with get_spec first, matching the currently shown view. " +
+        "Read-only: opens the view, changes nothing.",
       inputSchema: {
         fileIndex: z.number().describe("0-based index into the PR's changed files"),
         line: z.number().optional().describe("1-based line to scroll to"),
@@ -305,7 +309,19 @@ export function buildTools(http, session) {
       handler: async ({ fileIndex, line }) => {
         const path = `/file/${fileIndex}` + (line ? `?line=${line}` : "");
         await navigate(path);
-        return { ok: true, opened: path };
+        // Also arm the same-page line command. On a fresh navigation the loaded
+        // page scrolls from the ?line deep-link; when the file is already open
+        // the single-tab watcher skips the same-path move, so without this the
+        // page would not scroll. Bumping the line command makes the open page's
+        // poll scroll to the line (retrying until the view renders) either way.
+        let lineSeq = null;
+        if (typeof line === "number") {
+          try {
+            const r = await http.post("/api/v1/commands/go-to-line", { line });
+            if (r && typeof r.lineSeq === "number") lineSeq = r.lineSeq;
+          } catch { /* navigation already succeeded; the deep-link still scrolls */ }
+        }
+        return { ok: true, opened: path, line: typeof line === "number" ? line : null, lineSeq };
       },
     },
     {
@@ -314,8 +330,11 @@ export function buildTools(http, session) {
         "Scroll the file the user ALREADY has open to a 1-based source line, without " +
         "reopening or switching files. Use for \"scroll to line 130\" / \"jump to that " +
         "section\" once a file is open (any surface: a PR file, a branch file, or a " +
-        "local file). Read-only same-page scroll — creates no annotation and changes " +
-        "nothing. The open page acts within ~1.5s (it polls).",
+        "local file). If the page is NOT showing a file (e.g. a standalone thread, the " +
+        "feedback list, or discovery), this has nothing to scroll — use open_file, which " +
+        "navigates to the file AND scrolls. Read-only same-page scroll — creates no " +
+        "annotation and changes nothing. The open page acts within ~1.5s (it polls) and " +
+        "waits for the view to render before scrolling.",
       inputSchema: {
         line: z.number().int().min(1).describe("1-based source line to scroll to"),
       },
