@@ -1,0 +1,23 @@
+{
+  "configurationId": "CFG-GITHUB-LIVE",
+  "runId": "s0-github-live-20260816003913",
+  "adapter": "github",
+  "backingPath": "github",
+  "syntheticDataOnly": true,
+  "sandbox": {
+    "approved": true,
+    "kind": "provider-live",
+    "identityLabel": "Live delegated identity (supplied at runtime)",
+    "identityVerified": true,
+    "ownershipMarker": "tippani-s0:s0-github-live-20260816003913",
+    "namespace": "tippani-s0/s0-github-live-20260816003913",
+    "defaultBranchExcluded": true,
+    "corporateFallbackDisabled": true
+  },
+  "budgets": {
+    "maxOperations": 100,
+    "maxDurationMs": 300000,
+    "maxObjects": 10000,
+    "maxBytes": 104857600
+  }
+}
