@@ -5178,6 +5178,8 @@ function findNearestHeading(el) {
 let commentLine = 1;
 const commentableSelector = '.spec p, .spec li, .spec blockquote, .spec table, .spec pre';
 const commentableEls = [];
+let _activeCommentableEls = commentableEls;
+let _activeSourceMap = SOURCE_MAP;
 // Branch Personal-Comments mode replaces the PR "+" affordance with the read-only
 // review margin's hover/add-dot; keep the block list + source-map alignment either way.
 const PC_MODE = !!window.__PC;
@@ -5743,6 +5745,7 @@ async function applyDiffOverlay(opts) {
       if (!r.ok) return;
       data = await r.json();
     }
+    if (opts.renderSeq != null && opts.renderSeq !== _viewRenderSeq) return;
     clearDiffOverlay();
     const hunks = (data && data.hunks) || [];
     const db0 = document.getElementById('discardProposalBtn');
@@ -5824,16 +5827,34 @@ function scrollToLine(line) {
   const main = document.getElementById('mainContent');
   if (main && main.classList.contains('editing')) { scrollEditorToLine(line); return; }
   let target = null, bestKey = null, bestDist = Infinity;
-  for (const key of Object.keys(SOURCE_MAP)) {
-    const sm = SOURCE_MAP[key];
-    if (line >= sm.startLine && line <= sm.endLine) { target = commentableEls[parseInt(key)]; break; }
+  for (const key of Object.keys(_activeSourceMap)) {
+    const sm = _activeSourceMap[key];
+    if (line >= sm.startLine && line <= sm.endLine) { target = _activeCommentableEls[parseInt(key)]; break; }
     const dist = line < sm.startLine ? sm.startLine - line : line - sm.endLine;
     if (dist < bestDist) { bestDist = dist; bestKey = key; }
   }
-  if (!target && bestKey != null) target = commentableEls[parseInt(bestKey)];
+  if (!target && bestKey != null) target = _activeCommentableEls[parseInt(bestKey)];
   if (!target) return;
   const dest = target._diffDest || target;
   dest.scrollIntoView({ behavior: 'smooth', block: 'center' });
+}
+// Wait for persisted-view restoration, but fall back to the rendered view if a
+// state or render request stalls. Editor mode always uses CodeMirror directly.
+let _initialStatePollSettled = false;
+let _viewRenderSeq = 0;
+let _viewRenderedSeq = 0;
+function scrollToLineWhenReady(line) {
+  if (!Number.isFinite(line)) return;
+  const deadline = Date.now() + 2400;
+  function attempt() {
+    const main = document.getElementById('mainContent');
+    if (main && main.classList.contains('editing')) { scrollToLine(line); return; }
+    const ready = _activeCommentableEls && _activeCommentableEls.length > 0 && Object.keys(_activeSourceMap).length > 0;
+    const viewReady = _initialStatePollSettled && _viewRenderedSeq === _viewRenderSeq;
+    if ((viewReady && ready) || Date.now() >= deadline) { scrollToLine(line); return; }
+    setTimeout(attempt, 80);
+  }
+  attempt();
 }
 // Scroll the document to a thread's location so opening/focusing a thread syncs the doc.
 function scrollDocToThread(threadId) {
@@ -5871,6 +5892,7 @@ let _hasAgentDraft = false;
 function getSpecView() { return _currentView; }
 async function applyView(view) {
   if (!['current','diff','proposed'].includes(view)) return;
+  const renderSeq = ++_viewRenderSeq;
   _currentView = view;
   document.querySelectorAll('.view-btn').forEach((b) => b.classList.toggle('active', b.dataset.view === view));
   const content = document.getElementById('spec-content');
@@ -5880,6 +5902,8 @@ async function applyView(view) {
   // Always clear any prior diff overlay first — switching to Proposed/Current
   // must not leave the Diff boxes lingering. The 'diff' branch re-applies it.
   clearDiffOverlay();
+  _activeCommentableEls = commentableEls;
+  _activeSourceMap = SOURCE_MAP;
   if (view === 'proposed') {
     try {
       let d = null;
@@ -5891,21 +5915,35 @@ async function applyView(view) {
         const r = await fetch('/api/v1/specs/' + CURRENT_FILE_INDEX + '/render?draft=1');
         if (r.ok) d = await r.json();
       }
+      if (renderSeq !== _viewRenderSeq) return;
       if (d && current) {
-        current.innerHTML = d.html || '';
-        if (window.tippaniRenderMermaid) window.tippaniRenderMermaid(current);
+        const rendered = document.createElement('div');
+        rendered.className = 'spec';
+        rendered.innerHTML = d.html || '';
+        const blocks = collectCommentableBlocks(rendered);
+        const mermaidBlockIndexes = Array.from(rendered.querySelectorAll('pre > code.language-mermaid')).map((code) => blocks.indexOf(code.parentElement));
+        if (window.tippaniRenderMermaid) await window.tippaniRenderMermaid(rendered);
+        if (renderSeq !== _viewRenderSeq) return;
+        rendered.querySelectorAll('.mermaid-block').forEach((host, i) => {
+          if (mermaidBlockIndexes[i] >= 0) blocks[mermaidBlockIndexes[i]] = host;
+        });
+        current.replaceChildren(...rendered.childNodes);
+        _activeCommentableEls = blocks;
+        _activeSourceMap = d.ranges || {};
         // Re-anchor reviewer comment bubbles onto the Proposed content's own
         // blocks/ranges — the initial placement's bubbles live on #spec-content,
         // which is now hidden, so without this Proposed view shows none at all.
-        placeInlineBubbles(collectCommentableBlocks(current), d.ranges || {});
+        placeInlineBubbles(_activeCommentableEls, _activeSourceMap);
       }
     } catch {}
+    if (renderSeq !== _viewRenderSeq) return;
     if (!editing) { if (content) content.style.display = 'none'; if (current) current.style.display = ''; }
   } else {
     if (current) current.style.display = 'none';
     if (!editing && content) content.style.display = '';
-    if (view === 'diff') { try { await applyDiffOverlay({ personal }); } catch {} }
+    if (view === 'diff') { try { await applyDiffOverlay({ personal, renderSeq }); } catch {} }
   }
+  if (renderSeq === _viewRenderSeq) _viewRenderedSeq = renderSeq;
 }
 // Item 2: persistent dark-red highlight on the source section tied to a thread.
 function highlightSectionForThread(threadId) {
@@ -6000,7 +6038,7 @@ function setSidebarMode(mode) {
 (function () {
   const q = new URLSearchParams(location.search).get('line');
   const n = q ? parseInt(q, 10) : NaN;
-  if (Number.isFinite(n)) setTimeout(() => { try { scrollToLine(n); } catch {} }, 400);
+  if (Number.isFinite(n)) scrollToLineWhenReady(n);
 })();
 
 
@@ -6337,6 +6375,7 @@ document.addEventListener('keydown', (e) => {
   let lastViewSeq = -1;
   let lastLineSeq = null;   // baselined on first poll so a stale go_to_line doesn't yank a fresh open
   let lastSpecDraftKey = null;
+  let firstPoll = true;
   const seenDraftKey = (id, d) => id + ':' + (d ? d.updatedAt : '0');
   const lastDraftSeen = new Map();
 
@@ -6386,10 +6425,20 @@ document.addEventListener('keydown', (e) => {
   }
 
   async function poll() {
+    const settlesInitialView = firstPoll;
+    firstPoll = false;
     try {
       const r = await fetch('/api/v1/state');
       if (!r.ok) return;
       const s = await r.json();
+      let lineToScroll = null;
+      let viewRender = null;
+      // Claim line commands before any async view render. Overlapping polls can
+      // then neither baseline nor drop a newer command while an older poll waits.
+      if (typeof s.lineSeq === 'number') {
+        if (lastLineSeq === null) lastLineSeq = s.lineSeq;
+        else if (s.lineSeq > lastLineSeq) { lastLineSeq = s.lineSeq; lineToScroll = s.line; }
+      }
       if (s.version !== lastVersion) {
         lastVersion = s.version;
         // The steady-state poll omits draft bodies; fetch them only now that
@@ -6424,7 +6473,7 @@ document.addEventListener('keydown', (e) => {
         // auto-flips on a stage; it only changes when viewSeq bumps.
         if (typeof s.viewSeq === 'number' && s.viewSeq !== lastViewSeq) {
           lastViewSeq = s.viewSeq;
-          if (s.view) { try { applyView(s.view); } catch {} }
+          if (s.view) { try { viewRender = applyView(s.view); } catch {} }
         } else {
           // A staged spec edit for THIS file changed: refresh only the CURRENT
           // view (don't switch it) and, if editing, auto-load it into the editor
@@ -6434,7 +6483,7 @@ document.addEventListener('keydown', (e) => {
           if (key !== lastSpecDraftKey) {
             lastSpecDraftKey = key;
             if (typeof setViewButtonsEnabled === 'function') setViewButtonsEnabled(!!sd);
-            if (_currentView === 'diff' || _currentView === 'proposed') { try { applyView(_currentView); } catch {} }
+            if (_currentView === 'diff' || _currentView === 'proposed') { try { viewRender = applyView(_currentView); } catch {} }
             // Belt-and-suspenders for the lock-acquisition lag: the server now
             // 409s an agent edit while the user holds the edit lock, but never
             // swap a DIRTY buffer out from under the user (option (c)).
@@ -6445,13 +6494,11 @@ document.addEventListener('keydown', (e) => {
           }
         }
       }
-      // go_to_line: scroll THIS open file to a source line (same-page, no reopen).
-      // Baseline on the first poll so a stale command doesn't scroll on load.
-      if (typeof s.lineSeq === 'number') {
-        if (lastLineSeq === null) lastLineSeq = s.lineSeq;
-        else if (s.lineSeq > lastLineSeq) { lastLineSeq = s.lineSeq; try { scrollToLine(s.line); } catch {} }
-      }
-    } catch {}
+      if (lineToScroll != null) { try { scrollToLineWhenReady(lineToScroll); } catch {} }
+      if (viewRender) { try { await viewRender; } catch {} }
+    } catch {} finally {
+      if (settlesInitialView) _initialStatePollSettled = true;
+    }
   }
   setInterval(poll, 1500);
   poll();

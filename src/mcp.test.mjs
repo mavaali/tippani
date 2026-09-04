@@ -8,6 +8,7 @@ import express from "express";
 import os from "os";
 import fs from "fs";
 import path from "path";
+import { JSDOM } from "jsdom";
 import {
   createFocusStore,
   createDraftStore,
@@ -225,10 +226,21 @@ try {
 
   // --- open_pr ---
   {
+    const bootstrapCount = bootstrapCalls.length;
     const r = await byName.open_pr.handler({ prId: 952607, org: "https://dev.azure.com/o", project: "P" });
     check("open_pr: calls ensurePortal with prId", ensurePortalCalls.length === 1 && ensurePortalCalls[0].prId === 952607);
     check("open_pr: forwards org/project", ensurePortalCalls[0].org === "https://dev.azure.com/o" && ensurePortalCalls[0].project === "P");
     check("open_pr: returns threads after launch", r.threads.length === 2);
+    check("open_pr: mints a fresh browser sign-in link",
+      bootstrapCalls.length === bootstrapCount + 1 &&
+      /\/auth\/bootstrap\?token=/.test(r.portalUrl));
+    check("open_pr: marks the portal link single use", r.singleUse === true);
+    check("open_pr: result forbids reuse and directs a fresh-link call",
+      /single-use|one-time/.test(r.note) && /get_portal_url/.test(r.note) && /older/.test(r.note));
+    check("open_pr: description warns against reusing a portal link",
+      /SINGLE-USE|single-use|one-time/.test(byName.open_pr.description) &&
+      /get_portal_url/.test(byName.open_pr.description) &&
+      /Never repeat/.test(byName.open_pr.description));
     check("open_pr: carries no embedded instructions (driving is via skills/instructions)",
       r.instructions === undefined);
     check("open_pr: reports open thread count", r.openThreadCount === 2);
@@ -260,8 +272,14 @@ try {
     const r1 = await byName.open_file.handler({ fileIndex: 2 });
     check("open_file: opens /file/<idx>", r1.opened === "/file/2" && focus.get().navUrl === "/file/2");
     check("open_file: single-tab does NOT open a new browser tab", !openUrlCalls.includes("/file/2"));
+    check("open_file: no line -> line null and no scroll command", r1.line === null && r1.lineSeq === null);
+    const beforeLineSeq = focus.get().lineSeq;
     const r2 = await byName.open_file.handler({ fileIndex: 0, line: 47 });
     check("open_file: appends ?line when given", r2.opened === "/file/0?line=47" && focus.get().navUrl === "/file/0?line=47");
+    // With a line, open_file also drives the go-to-line command so a file that
+    // is already the open page scrolls even when the same-path navigation is
+    // skipped (regression: open_file used to report ok without moving the page).
+    check("open_file: line drives go-to-line", r2.line === 47 && focus.get().line === 47 && focus.get().lineSeq === beforeLineSeq + 1);
   }
 
   // --- go_to_line (same-page scroll of the already-open file) ---
@@ -270,6 +288,96 @@ try {
     const r = await byName.go_to_line.handler({ line: 130 });
     check("go_to_line: posts the line", r.ok === true && r.line === 130);
     check("go_to_line: bumps focus line + lineSeq", focus.get().line === 130 && focus.get().lineSeq === before + 1);
+  }
+
+  // Execute the client scroll/view/poll sequence extracted from the rendered page.
+  {
+    const source = fs.readFileSync(new URL("./index.js", import.meta.url), "utf8");
+    const part = (a, b) => source.slice(source.indexOf(a), source.indexOf(b, source.indexOf(a)));
+    const dom = new JSDOM('<main id="mainContent"><div id="spec-content" class="spec"><p data-scroll="current">current</p></div><div id="spec-current" class="spec"></div></main>');
+    const harness = new Function("states", "document", "window", `
+      const events=[], timers=[], proposed=[], diff=[];
+      let intervalPoll, now=0;
+      const main=document.getElementById('mainContent'), content=document.getElementById('spec-content'), current=document.getElementById('spec-current');
+      window.HTMLElement.prototype.scrollIntoView=function(){events.push(this.classList.contains('docdiff-widget')?'diff':this.dataset.scroll)};
+      window.tippani=null; window.__BRANCH=null;
+      window.tippaniRenderMermaid=async root=>root.querySelectorAll('pre > code.language-mermaid').forEach(code=>{
+        const host=document.createElement('div');host.className='mermaid-block';host.dataset.scroll='mermaid';code.parentElement.replaceWith(host);
+      });
+      const Date={now:()=>now}, SOURCE_MAP=[{startLine:1,endLine:20}];
+      const commentableSelector='.spec p, .spec li, .spec blockquote, .spec table, .spec pre';
+      const commentableEls=Array.from(content.querySelectorAll(commentableSelector));
+      let _activeSourceMap=SOURCE_MAP, _activeCommentableEls=commentableEls, _focusedThreadId=null;
+      const CURRENT_FILE_INDEX=0, setTimeout=(fn,ms)=>timers.push(fn), setInterval=fn=>{intervalPoll=fn};
+      const fetch=async url=>{
+        if(url==='/api/v1/state'){const s=states.shift();return {ok:!!s,json:async()=>s};}
+        if(url.endsWith('/diff')){
+          await new Promise(resolve=>diff.push(resolve));
+          return {ok:true,json:async()=>({hunks:[{startLine:1,endLine:20,newHtml:'<p>changed</p>'}]})};
+        }
+        await new Promise(resolve=>proposed.push(resolve));
+        return {ok:true,json:async()=>({html:'<pre><code class="language-mermaid">graph TD</code></pre><p data-scroll="later">later</p>',ranges:[{startLine:1,endLine:3},{startLine:5,endLine:7}]})};
+      };
+      const scrollEditorToLine = (line) => events.push('editor:' + line);
+      const placeInlineBubbles=()=>{}, focusThread=()=>{}, updateDiffMarkers=()=>{};
+      ${part("function collectCommentableBlocks(container) {", "// Place inline comment bubbles")}
+      ${part("function clearDiffOverlay() {", "// Color each diff widget")}
+      ${part("function scrollToLine(line) {", "// Scroll the document to a thread")}
+      ${part("let _currentView = 'current';", "// Item 2: persistent dark-red highlight")}
+      applyView('current');
+      scrollToLineWhenReady(7);
+      ${part("// --- Control-API integration (#42 Phase 1) ---", "// User-editing lock heartbeat")}
+      return {
+        events,proposed,diff,poll:()=>intervalPoll(),applyView,
+        tick:(ms=80)=>{now+=ms;timers.splice(0).forEach(fn=>fn())},
+        edit:v=>main.classList.toggle('editing',v),scrollToLine,scrollToLineWhenReady,
+        view:()=>_currentView,html:()=>current.innerHTML,
+        visible:()=>current.style.display==='none'?'current':'proposed',
+        active:()=>_activeCommentableEls[0]?.dataset.scroll,
+        overlays:()=>document.querySelectorAll('.docdiff-widget').length
+      };
+    `)([
+      { version: 1, viewSeq: 1, view: "proposed", lineSeq: 0, focusedThreadId: null, drafts: {}, specDrafts: {} },
+      { version: 2, viewSeq: 2, view: "diff", lineSeq: 0, drafts: {}, specDrafts: {} },
+      { version: 2, viewSeq: 2, view: "diff", lineSeq: 1, line: 11 },
+    ], dom.window.document, dom.window);
+    const flush = async () => { for (let i = 0; i < 8; i++) await Promise.resolve(); };
+
+    await flush();
+    check("deep-link waits for Proposed restore", harness.proposed.length === 1 && !harness.events.length);
+    harness.proposed.shift()(); await flush(); harness.tick();
+    check("Proposed Mermaid keeps later source ranges aligned", harness.events.join() === "later");
+
+    const renderingDiff = harness.poll(); await flush();
+    const overlapping = harness.poll(); await flush();
+    check("overlapping poll claims newer line command", harness.diff.length === 1 && harness.events.join() === "later");
+    harness.diff.shift()(); await Promise.all([renderingDiff, overlapping]); harness.tick();
+    check("line command waits for Diff render", harness.events.join() === "later,diff");
+
+    const staleForCurrent = harness.applyView("proposed"); await flush();
+    const priorHtml = harness.html();
+    await harness.applyView("current");
+    harness.proposed.shift()(); await staleForCurrent;
+    check("stale Proposed cannot overwrite Current", harness.view() === "current" && harness.visible() === "current" && harness.html() === priorHtml && harness.active() === "current");
+
+    const staleOverlay = harness.applyView("diff"); await flush();
+    await harness.applyView("current");
+    harness.diff.shift()(); await staleOverlay;
+    check("stale Diff cannot restore its overlay", harness.view() === "current" && harness.overlays() === 0 && harness.active() === "current");
+
+    const staleForDiff = harness.applyView("proposed"); await flush();
+    const winningDiff = harness.applyView("diff"); await flush();
+    harness.proposed.shift()(); await staleForDiff;
+    check("stale Proposed cannot overwrite pending Diff", harness.view() === "diff" && harness.visible() === "current" && harness.active() === "current");
+    harness.diff.shift()(); await winningDiff; harness.scrollToLine(7);
+    check("winning Diff owns overlay and active scroll", harness.events.at(-1) === "diff");
+
+    harness.applyView("proposed"); await flush();
+    harness.scrollToLineWhenReady(12); harness.tick(2400);
+    check("stalled render falls back by deadline", harness.events.at(-1) === "current");
+    harness.edit(true);
+    harness.scrollToLineWhenReady(13);
+    check("editor scroll remains immediate", harness.events.at(-1) === "editor:13");
   }
 
   // --- open_local_file (clickstop 2: one-off .md by path, gated to approved roots) ---

@@ -146,7 +146,7 @@ try {
     check("imports MERMAID_VIEW_JS", idx.includes('import { MERMAID_VIEW_JS } from "./client/mermaid-view.bundle.js"'));
     check("serves /vendor/mermaid.min.js", idx.includes('app.get("/vendor/mermaid.min.js"'));
     check("inlines the view bundle", idx.includes("<script>${MERMAID_VIEW_JS}</script>"));
-    check("applyView re-renders proposed diagrams", idx.includes("window.tippaniRenderMermaid(current)"));
+    check("applyView re-renders proposed diagrams", idx.includes("await window.tippaniRenderMermaid(rendered)"));
     check("mermaid-block CSS present", idx.includes(".mermaid-block"));
   }
 } catch (e) {
