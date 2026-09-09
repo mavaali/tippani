@@ -9,6 +9,38 @@ Manual release — there is no CI. Run these from `main` after the release PR is
 - `npm run build` produces `dist/cli.cjs`, the launchers, and (on macOS) `dist/bin/tippani`.
 - Logged in to npm as a `tippani` package owner (`npm whoami`) and to `gh` with push access.
 
+## Architecture and build
+
+The CLI entry point, `src/index.js`, signs in to the repository host, loads PR
+metadata, changed files and threads, and caches review data locally. Local-clone
+review skips repository-host sign-in. An Express server listens on port 3847 by
+default, renders Markdown through `remark` and `rehype`, and opens the browser.
+Provider adapters and helper modules handle repository-specific behavior.
+
+Browser comments enter a local queue before attempted online delivery. Offline
+actions wait for sync; votes are never queued because a delayed vote could approve
+content that has since changed. Staged authoring has a separate explicit publication
+step. See the [CLI and API reference](mcp-api.md) for configuration and endpoints.
+
+`src/demo.js` serves fixture data using shared portal helpers; its write routes are
+stubs, not a persistence or repository-integration test.
+
+```bash
+npm run build
+```
+
+Build outputs:
+
+| Output | Purpose |
+|---|---|
+| `dist/bin/tippani` | macOS standalone binary, approximately 123 MB; no Node.js installation required to run. |
+| `dist/cli.cjs` + `dist/tippani.bat` | Windows bundle and launcher; Node.js 18+ for the release wrapper. |
+| `dist/tippani.sh` | Linux/macOS shell launcher for the bundle. |
+
+To build a Windows `.exe`, run the build on Windows with Node.js 20+.
+For npm-based installation, use Node.js 20+; release-wrapper prerequisites above
+are distinct from source dependency requirements.
+
 ## Beta / pre-release (e.g. `1.3.0-beta.0`)
 
 A beta keeps `latest` on the previous stable, so `npm i -g tippani` does **not** pull it.

@@ -1,4 +1,9 @@
-# Tippani MCP & API Reference
+# Tippani CLI, MCP & API Reference
+
+For a browser-first walkthrough, use the [User Guide](user-guide.md).
+This reference covers [CLI configuration](#cli-reference),
+[MCP client setup](#mcp-client-setup), the [tool inventory](#mcp-server), and the
+[HTTP control API](#http-control-api).
 
 Tippani exposes its workflow two ways for automation:
 
@@ -7,9 +12,194 @@ Tippani exposes its workflow two ways for automation:
 - an **HTTP control API** served by the portal itself, which the browser UI and
   external clients use.
 
-Everything is **staged**: no MCP tool or control-API route writes to Azure
-DevOps until the single publish step (`push_staged_changes` /
-`POST /api/v1/branches/push`).
+MCP review and authoring staging tools prepare work for `push_staged_changes`
+(`POST /api/v1/branches/push`). This is not a blanket rule for HTTP routes:
+direct comment, reply, resolve, save, and review routes can publish immediately.
+See the [publication table](user-guide.md#know-which-actions-publish).
+
+## CLI reference
+
+### Installation and downloads
+
+For npm installation, use Node.js 20 or later and npm:
+
+```bash
+npm install -g tippani
+```
+
+Or run without installing globally:
+
+```bash
+npx tippani 12345 --org=https://dev.azure.com/YOUR_ORG --project="Your Project" --save-config
+```
+
+Authenticate first as described below. See [One-time setup](user-guide.md#one-time-setup)
+for Azure CLI and GitHub CLI installation links.
+
+Alternatively, download from the [latest release](https://github.com/mavaali/tippani/releases/latest):
+
+| Platform | Download | Requires |
+|---|---|---|
+| macOS (Apple Silicon) | [`tippani`](https://github.com/mavaali/tippani/releases/latest/download/tippani) | Standalone binary; no Node.js installation |
+| Windows | [`cli.cjs`](https://github.com/mavaali/tippani/releases/latest/download/cli.cjs) + [`tippani.bat`](https://github.com/mavaali/tippani/releases/latest/download/tippani.bat) | Node.js 18+ for the release wrapper |
+| Linux / macOS | [`cli.cjs`](https://github.com/mavaali/tippani/releases/latest/download/cli.cjs) + [`tippani.sh`](https://github.com/mavaali/tippani/releases/latest/download/tippani.sh) | Node.js 18+ for the release wrapper |
+
+### Launch examples
+
+Leave the terminal process running while using the browser. Stop an existing
+instance before starting another on the same port, or choose a different `--port`.
+
+```bash
+# Sample review: no repository credentials; comments are not saved
+tippani --demo
+
+# Azure DevOps PR; save org/project for later PR-number launches
+tippani 12345 --org=https://dev.azure.com/YOUR_ORG --project="Your Project" --save-config
+tippani 12345
+
+# Equivalent GitHub PR targets
+tippani https://github.com/OWNER/REPO/pull/123
+tippani github:OWNER/REPO#123
+tippani 123 --github=OWNER/REPO
+
+# GitHub Discovery, anchored to a repository for authoring
+tippani --browse --github=OWNER/REPO
+
+# Azure DevOps Discovery: requires saved config and PAT or supplied ADO token
+tippani --browse
+
+# Open a specific file from a PR
+tippani 12345 --file="/path/to/spec.md"
+
+# Fetch fresh PR data, bypassing the cache
+tippani 12345 --refresh
+
+# Use a previously cached PR offline
+tippani 12345 --offline
+
+# Review a local git clone without a PR or repository-host sign-in
+tippani --local-repo=/path/to/clone
+```
+
+GitHub Discovery searches reviews and Markdown across the owner's accessible
+repositories; the selected repository anchors authoring. Azure DevOps Discovery
+also includes Work items. GitHub omits that capability.
+
+Offline content lives in `~/.tippani/cache/`. Online launches reuse a fresh cache
+for up to one hour; offline mode can use older data. Files that weren't cached
+aren't available offline. Save or copy unfinished work, stop the offline instance,
+restart the same review without `--offline`, then use **Sync to ADO**. Reconnecting
+the network doesn't change the launch mode. Votes are never queued.
+
+### Flags and configuration
+
+| Flag | Meaning | Environment variable |
+|---|---|---|
+| `--org=<url>` | Azure DevOps organization URL, e.g. `https://dev.azure.com/myorg`. | `TIPPANI_ORG` |
+| `--project=<name>` | Project containing the repositories. | `TIPPANI_PROJECT` |
+| `--repo=<name>` | Repository name; optional for PR lookup, where it is detected. | `TIPPANI_REPO` |
+| `--browse` | Start Discovery instead of a single PR. | — |
+| `--file=<path>` | Open a specific file directly. | — |
+| `--offline` | Work from the cache without connecting. | — |
+| `--refresh` | Fetch fresh data, ignoring the cache. | — |
+| `--save-config` | Save org/project/repo defaults. Include a PR number or supported launch mode. | — |
+| `--port=<n>` | Server port; default `3847`. | `TIPPANI_PORT` |
+| `--headless` | Don't open a browser; use `tippani open` to connect one later. | `TIPPANI_HEADLESS` |
+| `--ado-token=<t>` | Supply an ADO access token, bypassing PAT / Azure CLI. | `TIPPANI_ADO_TOKEN` |
+| `--github=<owner/repo>` | Select GitHub with a PR number or `--browse`. | `TIPPANI_GITHUB_REPO` / `TIPPANI_GH_REPO` |
+| `--gh-token=<t>` | Supply a GitHub token. | `TIPPANI_GH_TOKEN` / `GITHUB_TOKEN` |
+| `--local-repo=<path>` | Review a local clone. | `TIPPANI_LOCAL_REPO` |
+
+Azure DevOps defaults are stored in `~/.tippani/config.json`:
+
+```json
+{
+  "org": "https://dev.azure.com/myorg",
+  "project": "My Project",
+  "repo": "My Repo"
+}
+```
+
+For these defaults, precedence is CLI flags, then environment variables, then
+the config file. Configuration flags alone don't save settings: include a PR number
+or supported launch mode.
+
+### Repository authentication
+
+Tippani uses your credentials, not a shared account. GitHub token precedence is
+`--gh-token`, then `TIPPANI_GH_TOKEN` / `GITHUB_TOKEN`, then `gh auth token`.
+Run `gh auth login` first if using GitHub CLI. Tippani doesn't save the GitHub token.
+
+An online Azure DevOps PR launch uses `--ado-token` / `TIPPANI_ADO_TOKEN`, then a
+saved PAT at `~/.tippani/pat`, then Azure CLI. Use `az login` for the CLI path.
+On a fresh load without credentials, Tippani prompts for a PAT and recommends
+Azure CLI as the alternative. A PAT needs Code (Read & Write) scope; creation may
+be prohibited by tenant policy.
+
+An expired saved PAT isn't replaced by running `az login`. Resolve that credential
+before retrying. Direct Azure DevOps `--browse` startup accepts a saved PAT or
+supplied access token but doesn't try Azure CLI or prompt interactively. Use a
+PR-number launch if you're relying on Azure CLI sign-in.
+
+Credentials can expire, and repository read access doesn't necessarily include
+permission to comment, review, or edit. Don't share tokens through chat.
+
+### Reconnect a browser
+
+The plain `http://localhost:3847` address doesn't establish a browser session.
+Startup opens a one-time sign-in link unless `--headless` is set. Each link works
+once and expires after about two minutes. Browser sessions last up to eight hours
+or end after 30 minutes idle.
+
+```bash
+# Reconnect to an existing portal, including a demo
+tippani open
+
+# Print a fresh link instead of opening it
+tippani open --headless
+
+# Choose among multiple running portals
+tippani open --port=3848
+
+# Land on a particular page
+tippani open --path=/feedback
+```
+
+`tippani reopen` is an alias. Neither command starts a server. Reconnecting to a
+running portal preserves its state; restarting it is different. If no portal is
+running, start one; if several are running, choose a listed port. If its registered
+app session has expired or been rejected, preserve unfinished work before restarting.
+
+## MCP client setup
+
+Install Tippani globally, then add a server entry to your client's configuration.
+For example, in Claude Desktop's `claude_desktop_config.json`:
+
+```json
+{
+  "mcpServers": {
+    "tippani": {
+      "command": "tippani-mcp",
+      "env": { "TIPPANI_ADO_TOKEN": "<your ADO access token>" }
+    }
+  }
+}
+```
+
+For GitHub, set `TIPPANI_GH_TOKEN` instead, or use `gh auth token` from the MCP
+server's environment. GitHub and ADO tokens are separate. Without an ADO token,
+local-only review remains available; ADO-backed tools require a token. A supplied
+ADO token receives fail-fast audience/type validation; optionally configure
+`TIPPANI_ADO_AUDIENCE` for an expected audience.
+
+You don't need to start a review portal first. The shim launches or adopts one on
+demand, with instances discovered through `~/.tippani/instances/`. Multiple PRs can
+run on separate ports. The integration design is tracked in
+[issue #42](https://github.com/mavaali/tippani/issues/42).
+
+Staged whole-file proposals appear as Current/Proposed comparisons. A user can
+accept and refine one in the editor before committing. An assistant should show a
+fresh clickable `portalUrl`, not reuse a consumed sign-in link.
 
 ---
 
@@ -142,9 +332,12 @@ survive edits, and never post to ADO.
 
 The portal serves both the HTML pages and a JSON control API on
 `http://localhost:<port>` (default `3847`). Read routes require an active
-session; **mutating routes require the session bearer token** (sent by the UI
-and by external clients) and every request must pass a **loopback host
-allow-list** (localhost is not treated as an authentication boundary).
+session. Browsers exchange a one-time sign-in link for an HttpOnly, SameSite
+app-session cookie; browser mutations require an exact `localhost` or `127.0.0.1`
+Origin match. Headless clients use a separate expiring app-session bearer from
+`~/.tippani/session-token-<port>` plus the configured `TIPPANI_CLIENT_NAME`.
+Bearer values aren't printed to stdout. Every request must pass a loopback host
+allow-list; localhost isn't treated as an authentication boundary.
 
 ### Portal pages (HTML)
 
@@ -175,7 +368,8 @@ allow-list** (localhost is not treated as an authentication boundary).
 
 ### Control API (`/api/v1`)
 
-All routes are prefixed `/api/v1`. Mutating routes (marked ✎) require the bearer.
+All routes are prefixed `/api/v1`. Mutating routes (marked ✎) require an authorized
+session as described above.
 
 **Feedback & threads**
 
@@ -222,7 +416,7 @@ All routes are prefixed `/api/v1`. Mutating routes (marked ✎) require the bear
 | `POST /pr/open` ✎ | Open a PR into the review session. |
 | `POST /pr/publish/stage` ✎ · `POST /pr/publish/unstage` ✎ | Stage / discard a draft→published promotion. Unstage accepts `project` + `repo` to disambiguate repository-local PR numbers; an id-only legacy request works when it has one unique match. |
 
-`POST /api/v1/branches/push` is the single publication boundary used by both the
+`POST /api/v1/branches/push` is the staged-publication endpoint used by both the
 portal's **Push to remote** button and the MCP `push_staged_changes` tool. ADO
 calls are timeout-bounded, and a failed group keeps its staged state with a
 target-specific error for correction and retry.

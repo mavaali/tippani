@@ -360,5 +360,5 @@ review number. Keep Tippani's terminal running during a review; use `Ctrl+C` to
 stop it after saving or copying unfinished work.
 
 For other installation options and advanced configuration, see the
-[README](../README.md). For a running portal whose browser tab has closed,
+[CLI reference](mcp-api.md#cli-reference). For a running portal whose browser tab has closed,
 use [Come back later](#5-come-back-later), not another server launch.
