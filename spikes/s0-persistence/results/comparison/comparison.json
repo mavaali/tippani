@@ -1,0 +1,2430 @@
+{
+  "schemaVersion": 3,
+  "generatedAt": "2026-09-04T18:20:50.320Z",
+  "artifactDisposition": {
+    "status": "historical-invalid-incomplete",
+    "harnessOnly": true,
+    "productionIntegration": false,
+    "mappingSelected": false,
+    "followUp": "Fresh local, cross-platform, synced-folder, and provider campaigns plus independent sign-off are required."
+  },
+  "decision": {
+    "status": "Incomplete",
+    "mapping": null,
+    "eligibleMappings": [],
+    "approval": "Pending"
+  },
+  "mappings": [
+    {
+      "id": "MAP-HYBRID-SQLITE",
+      "label": "Hybrid SQLite + provider-native CAS",
+      "components": [
+        "CFG-LOCAL-SQLITE",
+        "CFG-ONEDRIVE-LIVE",
+        "CFG-ADO-LIVE",
+        "CFG-GITHUB-LIVE"
+      ],
+      "status": "Incomplete"
+    },
+    {
+      "id": "MAP-ENVELOPE",
+      "label": "Generation-CAS envelope on every backing path",
+      "components": [
+        "CFG-LOCAL-CAS",
+        "CFG-ONEDRIVE-LIVE",
+        "CFG-ADO-LIVE",
+        "CFG-GITHUB-LIVE"
+      ],
+      "status": "Incomplete"
+    }
+  ],
+  "validationFailures": [
+    {
+      "configurationId": "CFG-LOCAL-SQLITE",
+      "errors": [
+        "unsupported or missing result schemaVersion",
+        "sourceRevision is stale or missing",
+        "catalogRevision is stale or missing",
+        "applicabilityRevision is stale or missing",
+        "configRevision is stale or missing",
+        "catalog snapshot does not match the current catalog",
+        "S0-REC-002 N/A lacks scenario-specific contract rationale is required, structured independent approval"
+      ]
+    },
+    {
+      "configurationId": "CFG-LOCAL-CAS",
+      "errors": [
+        "unsupported or missing result schemaVersion",
+        "sourceRevision is stale or missing",
+        "catalogRevision is stale or missing",
+        "applicabilityRevision is stale or missing",
+        "configRevision is stale or missing",
+        "catalog snapshot does not match the current catalog"
+      ]
+    },
+    {
+      "configurationId": "CFG-ONEDRIVE-LIVE",
+      "errors": [
+        "sourceRevision is stale or missing",
+        "catalogRevision is stale or missing",
+        "applicabilityRevision is stale or missing",
+        "configRevision is stale or missing",
+        "catalog snapshot does not match the current catalog",
+        "provider campaigns must have distinct names, run IDs, and artifact paths/digests",
+        "campaign-1 artifact path/digest is missing",
+        "campaign-1 artifact path/digest is missing",
+        "campaign-2 artifact path/digest is missing",
+        "campaign-2 artifact path/digest is missing",
+        "campaign-3 artifact path/digest is missing",
+        "campaign-3 artifact path/digest is missing",
+        "provider campaigns lack structured approvals for their effective target hashes",
+        "campaign-1 linked raw has an unsupported or missing result schemaVersion",
+        "campaign-1 linked raw source/catalog/applicability/config identity does not match the current configuration",
+        "campaign-1 approval target hash does not match the linked preflight",
+        "campaign-2 linked raw has an unsupported or missing result schemaVersion",
+        "campaign-2 linked raw source/catalog/applicability/config identity does not match the current configuration",
+        "campaign-2 approval target hash does not match the linked preflight",
+        "campaign-3 linked raw has an unsupported or missing result schemaVersion",
+        "campaign-3 linked raw source/catalog/applicability/config identity does not match the current configuration",
+        "campaign-3 approval target hash does not match the linked preflight",
+        "S0-COL-002 is not backed by every linked campaign raw",
+        "S0-COL-003 is not backed by every linked campaign raw",
+        "S0-COL-004 is not backed by every linked campaign raw",
+        "S0-COL-005 is not backed by every linked campaign raw",
+        "S0-COL-006 is not backed by every linked campaign raw",
+        "S0-BCK-002 is not backed by every linked campaign raw",
+        "S0-BCK-005 is not backed by every linked campaign raw",
+        "S0-MIG-004 is not backed by every linked campaign raw",
+        "S0-BKP-003 is not backed by every linked campaign raw",
+        "S0-BKP-004 is not backed by every linked campaign raw",
+        "S0-REC-003 is not backed by every linked campaign raw",
+        "S0-REC-004 is not backed by every linked campaign raw",
+        "S0-SEC-001 is not backed by every linked campaign raw",
+        "S0-SEC-002 is not backed by every linked campaign raw",
+        "S0-SEC-003 is not backed by every linked campaign raw",
+        "S0-SEC-004 is not backed by every linked campaign raw",
+        "S0-SEC-005 is not backed by every linked campaign raw",
+        "S0-SEC-006 is not backed by every linked campaign raw",
+        "S0-PER-004 is not backed by every linked campaign raw",
+        "S0-PER-005 is not backed by every linked campaign raw",
+        "missing separate OneDrive synced-folder (S0-BCK-006) evidence record"
+      ]
+    },
+    {
+      "configurationId": "CFG-ADO-LIVE",
+      "errors": [
+        "sourceRevision is stale or missing",
+        "catalogRevision is stale or missing",
+        "applicabilityRevision is stale or missing",
+        "configRevision is stale or missing",
+        "catalog snapshot does not match the current catalog",
+        "provider campaigns must have distinct names, run IDs, and artifact paths/digests",
+        "campaign-1 artifact path/digest is missing",
+        "campaign-1 artifact path/digest is missing",
+        "campaign-2 artifact path/digest is missing",
+        "campaign-2 artifact path/digest is missing",
+        "campaign-3 artifact path/digest is missing",
+        "campaign-3 artifact path/digest is missing",
+        "provider campaigns lack structured approvals for their effective target hashes",
+        "campaign-1 linked raw has an unsupported or missing result schemaVersion",
+        "campaign-1 linked raw source/catalog/applicability/config identity does not match the current configuration",
+        "campaign-1 approval target hash does not match the linked preflight",
+        "campaign-2 linked raw has an unsupported or missing result schemaVersion",
+        "campaign-2 linked raw source/catalog/applicability/config identity does not match the current configuration",
+        "campaign-2 approval target hash does not match the linked preflight",
+        "campaign-3 linked raw has an unsupported or missing result schemaVersion",
+        "campaign-3 linked raw source/catalog/applicability/config identity does not match the current configuration",
+        "campaign-3 approval target hash does not match the linked preflight",
+        "S0-COL-002 is not backed by every linked campaign raw",
+        "S0-COL-003 is not backed by every linked campaign raw",
+        "S0-COL-004 is not backed by every linked campaign raw",
+        "S0-COL-005 is not backed by every linked campaign raw",
+        "S0-COL-006 is not backed by every linked campaign raw",
+        "S0-BCK-003 is not backed by every linked campaign raw",
+        "S0-BCK-005 is not backed by every linked campaign raw",
+        "S0-MIG-004 is not backed by every linked campaign raw",
+        "S0-BKP-003 is not backed by every linked campaign raw",
+        "S0-BKP-004 is not backed by every linked campaign raw",
+        "S0-REC-003 is not backed by every linked campaign raw",
+        "S0-REC-004 is not backed by every linked campaign raw",
+        "S0-SEC-001 is not backed by every linked campaign raw",
+        "S0-SEC-002 is not backed by every linked campaign raw",
+        "S0-SEC-003 is not backed by every linked campaign raw",
+        "S0-SEC-004 is not backed by every linked campaign raw",
+        "S0-SEC-005 is not backed by every linked campaign raw",
+        "S0-SEC-006 is not backed by every linked campaign raw",
+        "S0-PER-004 is not backed by every linked campaign raw",
+        "S0-PER-005 is not backed by every linked campaign raw"
+      ]
+    },
+    {
+      "configurationId": "CFG-GITHUB-LIVE",
+      "errors": [
+        "sourceRevision is stale or missing",
+        "catalogRevision is stale or missing",
+        "applicabilityRevision is stale or missing",
+        "configRevision is stale or missing",
+        "catalog snapshot does not match the current catalog",
+        "provider campaigns must have distinct names, run IDs, and artifact paths/digests",
+        "campaign-1 artifact path/digest is missing",
+        "campaign-1 artifact path/digest is missing",
+        "campaign-2 artifact path/digest is missing",
+        "campaign-2 artifact path/digest is missing",
+        "campaign-3 artifact path/digest is missing",
+        "campaign-3 artifact path/digest is missing",
+        "provider campaigns lack structured approvals for their effective target hashes",
+        "campaign-1 linked raw has an unsupported or missing result schemaVersion",
+        "campaign-1 linked raw source/catalog/applicability/config identity does not match the current configuration",
+        "campaign-1 approval target hash does not match the linked preflight",
+        "campaign-2 linked raw has an unsupported or missing result schemaVersion",
+        "campaign-2 linked raw source/catalog/applicability/config identity does not match the current configuration",
+        "campaign-2 approval target hash does not match the linked preflight",
+        "campaign-3 linked raw has an unsupported or missing result schemaVersion",
+        "campaign-3 linked raw source/catalog/applicability/config identity does not match the current configuration",
+        "campaign-3 approval target hash does not match the linked preflight",
+        "S0-COL-002 is not backed by every linked campaign raw",
+        "S0-COL-003 is not backed by every linked campaign raw",
+        "S0-COL-004 is not backed by every linked campaign raw",
+        "S0-COL-005 is not backed by every linked campaign raw",
+        "S0-COL-006 is not backed by every linked campaign raw",
+        "S0-BCK-004 is not backed by every linked campaign raw",
+        "S0-BCK-005 is not backed by every linked campaign raw",
+        "S0-MIG-004 is not backed by every linked campaign raw",
+        "S0-BKP-003 is not backed by every linked campaign raw",
+        "S0-BKP-004 is not backed by every linked campaign raw",
+        "S0-REC-003 is not backed by every linked campaign raw",
+        "S0-REC-004 is not backed by every linked campaign raw",
+        "S0-SEC-001 is not backed by every linked campaign raw",
+        "S0-SEC-002 is not backed by every linked campaign raw",
+        "S0-SEC-003 is not backed by every linked campaign raw",
+        "S0-SEC-004 is not backed by every linked campaign raw",
+        "S0-SEC-005 is not backed by every linked campaign raw",
+        "S0-SEC-006 is not backed by every linked campaign raw",
+        "S0-PER-004 is not backed by every linked campaign raw",
+        "S0-PER-005 is not backed by every linked campaign raw"
+      ]
+    }
+  ],
+  "runs": [
+    {
+      "schemaVersion": 2,
+      "syntheticData": true,
+      "harnessRevision": "invalid-existing-evidence",
+      "evidenceIdentity": {
+        "sourceRevision": "sha256:a52df05bc1720442d4675599ae1eeccf25a7f825ae9af823113adeb5a4361403",
+        "catalogRevision": "sha256:d423452f3c8870f446a3558f3a7678608fb7f38f72e21aa458fd62113fd7a941",
+        "applicabilityRevision": "sha256:bd1f843f2adcf93ae4236331b6ade68e5b66996602283308b3cb8908126d987e",
+        "configRevision": "sha256:111cad6ecddee4588ea05790ee7bccd3b12857879c63c52a302dc0c5a46bf5fe"
+      },
+      "startedAt": "2026-09-04T18:20:50.320Z",
+      "completedAt": "2026-09-04T18:20:50.320Z",
+      "configuration": {
+        "configurationId": "CFG-LOCAL-SQLITE",
+        "adapter": "local-sqlite",
+        "backingPath": "local",
+        "platform": "windows-ntfs",
+        "scale": "small",
+        "runId": "s0-local-sqlite-windows",
+        "host": "not executed",
+        "applicabilityProfile": "local"
+      },
+      "preflight": {
+        "sandbox": {},
+        "budgets": {
+          "maxOperations": 100,
+          "maxDurationMs": 300000,
+          "maxObjects": 10000,
+          "maxBytes": 104857600
+        }
+      },
+      "applicableScenarioIds": [
+        "S0-ATM-001",
+        "S0-ATM-002",
+        "S0-ATM-003",
+        "S0-CON-001",
+        "S0-CON-002",
+        "S0-CON-003",
+        "S0-CON-004",
+        "S0-CON-005",
+        "S0-JRN-001",
+        "S0-JRN-002",
+        "S0-CRS-001",
+        "S0-CRS-002",
+        "S0-CRS-003",
+        "S0-COL-001",
+        "S0-BCK-001",
+        "S0-COR-001",
+        "S0-COR-002",
+        "S0-COR-003",
+        "S0-COR-004",
+        "S0-HYD-001",
+        "S0-HYD-002",
+        "S0-HYD-003",
+        "S0-MIG-001",
+        "S0-MIG-002",
+        "S0-MIG-003",
+        "S0-IMP-001",
+        "S0-IMP-002",
+        "S0-BKP-001",
+        "S0-BKP-002",
+        "S0-REC-001",
+        "S0-REC-002",
+        "S0-REC-005",
+        "S0-SEC-001",
+        "S0-SEC-002",
+        "S0-SEC-003",
+        "S0-SEC-004",
+        "S0-SEC-005",
+        "S0-SEC-006",
+        "S0-PER-001",
+        "S0-PER-002",
+        "S0-PER-003",
+        "S0-PER-005"
+      ],
+      "catalog": [
+        {
+          "id": "S0-ATM-001",
+          "criterionType": "absolute",
+          "title": "A multi-field workspace mutation commits completely or not at all",
+          "section": "1"
+        },
+        {
+          "id": "S0-ATM-002",
+          "criterionType": "absolute",
+          "title": "Branch-to-PR alias transition preserves one workspace and commits alias/index/state atomically",
+          "section": "1"
+        },
+        {
+          "id": "S0-ATM-003",
+          "criterionType": "absolute",
+          "title": "Failed mutation exposes no empty-body intent, mixed generation, or dangling alias",
+          "section": "1"
+        },
+        {
+          "id": "S0-CON-001",
+          "criterionType": "absolute",
+          "title": "Portal/user and Copilot/MCP writers from generation g produce one winner and one typed stale conflict",
+          "section": "2"
+        },
+        {
+          "id": "S0-CON-002",
+          "criterionType": "absolute",
+          "title": "Multiple headless/automation clients cannot overwrite a newer generation",
+          "section": "2"
+        },
+        {
+          "id": "S0-CON-003",
+          "criterionType": "absolute",
+          "title": "Independent workspaces progress concurrently without global serialization",
+          "section": "2"
+        },
+        {
+          "id": "S0-CON-004",
+          "criterionType": "absolute",
+          "title": "Concurrent staging during publication preserves the newer intent revision",
+          "section": "2"
+        },
+        {
+          "id": "S0-CON-005",
+          "criterionType": "absolute",
+          "title": "Lock/CAS contention is bounded, observable, and retryable",
+          "section": "2"
+        },
+        {
+          "id": "S0-JRN-001",
+          "criterionType": "absolute",
+          "title": "Frozen intent tuples and planned journal become durable atomically before any provider operation",
+          "section": "3"
+        },
+        {
+          "id": "S0-JRN-002",
+          "criterionType": "absolute",
+          "title": "No journal references a missing workspace, generation, or intent revision",
+          "section": "3"
+        },
+        {
+          "id": "S0-CRS-001",
+          "criterionType": "absolute",
+          "title": "Kill before/during/after commit recovers only the complete previous or committed generation",
+          "section": "4"
+        },
+        {
+          "id": "S0-CRS-002",
+          "criterionType": "absolute",
+          "title": "Kill during alias/index update never exposes a partially updated index",
+          "section": "4"
+        },
+        {
+          "id": "S0-CRS-003",
+          "criterionType": "absolute",
+          "title": "Kill during backup or migration leaves an unambiguous recoverable state",
+          "section": "4"
+        },
+        {
+          "id": "S0-COL-001",
+          "criterionType": "absolute",
+          "title": "Independent local actors observe one stable workspace/generation and equal concurrency rules",
+          "section": "5"
+        },
+        {
+          "id": "S0-COL-002",
+          "criterionType": "absolute",
+          "title": "Two users on a shared backing path cannot silently overwrite each other",
+          "section": "5"
+        },
+        {
+          "id": "S0-COL-003",
+          "criterionType": "absolute",
+          "title": "Two devices reconnecting from different generations receive deterministic conflict/reload behavior",
+          "section": "5"
+        },
+        {
+          "id": "S0-COL-004",
+          "criterionType": "absolute",
+          "title": "Remote success with a lost response is reconciled without duplicate generation or false failure",
+          "section": "5"
+        },
+        {
+          "id": "S0-COL-005",
+          "criterionType": "absolute",
+          "title": "Offline work remains pending until authoritative CAS confirmation and reconciles without silent overwrite",
+          "section": "5"
+        },
+        {
+          "id": "S0-COL-006",
+          "criterionType": "absolute",
+          "title": "Another collaborator discovers a committed generation through the backing path change mechanism",
+          "section": "5"
+        },
+        {
+          "id": "S0-BCK-001",
+          "criterionType": "absolute",
+          "title": "Local flush and atomic replace preserve file and index durability under supported filesystems",
+          "section": "6"
+        },
+        {
+          "id": "S0-BCK-002",
+          "criterionType": "absolute",
+          "title": "OneDrive ETag/version preconditions reject stale updates and support version recovery",
+          "section": "6"
+        },
+        {
+          "id": "S0-BCK-003",
+          "criterionType": "absolute",
+          "title": "ADO object/ref preconditions reject stale updates and preserve one auditable generation commit",
+          "section": "6"
+        },
+        {
+          "id": "S0-BCK-004",
+          "criterionType": "absolute",
+          "title": "GitHub object/ref preconditions reject stale updates and preserve one auditable generation commit",
+          "section": "6"
+        },
+        {
+          "id": "S0-BCK-005",
+          "criterionType": "absolute",
+          "title": "Provider outage, throttling, auth expiry, quota, or permission loss never produces success-shaped state",
+          "section": "6"
+        },
+        {
+          "id": "S0-BCK-006",
+          "criterionType": "relative",
+          "title": "Synced-folder conflict behavior is measured separately from provider-API CAS",
+          "section": "6"
+        },
+        {
+          "id": "S0-COR-001",
+          "criterionType": "absolute",
+          "title": "Truncated, invalid, checksum-failing, or damaged primary state is detected and preserved/quarantined",
+          "section": "7"
+        },
+        {
+          "id": "S0-COR-002",
+          "criterionType": "absolute",
+          "title": "Missing/dangling aliases and duplicate identities fail closed",
+          "section": "7"
+        },
+        {
+          "id": "S0-COR-003",
+          "criterionType": "absolute",
+          "title": "Unsupported schema/provider-operation version fails closed with a typed state",
+          "section": "7"
+        },
+        {
+          "id": "S0-COR-004",
+          "criterionType": "absolute",
+          "title": "Permission-denied or unreadable existing state is never treated as an absent/new store",
+          "section": "7"
+        },
+        {
+          "id": "S0-HYD-001",
+          "criterionType": "absolute",
+          "title": "Startup enumerates and validates all workspaces/aliases before APIs open",
+          "section": "8"
+        },
+        {
+          "id": "S0-HYD-002",
+          "criterionType": "absolute",
+          "title": "Rehydration restores exact generation, intent order, private state, journal state, and last selection",
+          "section": "8"
+        },
+        {
+          "id": "S0-HYD-003",
+          "criterionType": "absolute",
+          "title": "Incomplete/indeterminate journals are surfaced for reconciliation before mutation is accepted",
+          "section": "8"
+        },
+        {
+          "id": "S0-MIG-001",
+          "criterionType": "absolute",
+          "title": "Forward migration is transactional or resumable, idempotent, and preserves originals/audit",
+          "section": "9"
+        },
+        {
+          "id": "S0-MIG-002",
+          "criterionType": "absolute",
+          "title": "Interrupted migration resumes or rolls back without ambiguity",
+          "section": "9"
+        },
+        {
+          "id": "S0-MIG-003",
+          "criterionType": "absolute",
+          "title": "Unsupported source version and downgrade policy are explicit and fail closed",
+          "section": "9"
+        },
+        {
+          "id": "S0-MIG-004",
+          "criterionType": "absolute",
+          "title": "Local-to-OneDrive/ADO/GitHub rehome preserves WorkspaceId and establishes one authority only after receipt",
+          "section": "9"
+        },
+        {
+          "id": "S0-IMP-001",
+          "criterionType": "absolute",
+          "title": "Complete checksummed legacy envelope validates before atomic import",
+          "section": "10"
+        },
+        {
+          "id": "S0-IMP-002",
+          "criterionType": "absolute",
+          "title": "Failed/corrupt/duplicate legacy import preserves source and creates no partial destination",
+          "section": "10"
+        },
+        {
+          "id": "S0-BKP-001",
+          "criterionType": "absolute",
+          "title": "Active-store backup is internally consistent at one logical generation",
+          "section": "11"
+        },
+        {
+          "id": "S0-BKP-002",
+          "criterionType": "absolute",
+          "title": "Restore reproduces exact workspace/journal state and rejects incomplete/corrupt backup",
+          "section": "11"
+        },
+        {
+          "id": "S0-BKP-003",
+          "criterionType": "absolute",
+          "title": "Shared-backing history/export recovers a known generation without rewriting newer valid history",
+          "section": "11"
+        },
+        {
+          "id": "S0-BKP-004",
+          "criterionType": "absolute",
+          "title": "Restored shared workspace establishes one explicit authoritative head",
+          "section": "11"
+        },
+        {
+          "id": "S0-REC-001",
+          "criterionType": "absolute",
+          "title": "Clean and forced shutdown restart recover exact durable state",
+          "section": "12"
+        },
+        {
+          "id": "S0-REC-002",
+          "criterionType": "absolute",
+          "title": "Stale lock recovery removes only provably owned stale state",
+          "section": "12"
+        },
+        {
+          "id": "S0-REC-003",
+          "criterionType": "absolute",
+          "title": "Provider outage/auth/throttle/lost-response recovery reconciles authoritative state",
+          "section": "12"
+        },
+        {
+          "id": "S0-REC-004",
+          "criterionType": "absolute",
+          "title": "Local offline cache reconciles against newer authority without silent overwrite",
+          "section": "12"
+        },
+        {
+          "id": "S0-REC-005",
+          "criterionType": "absolute",
+          "title": "Diagnostics identify recovery state without exposing content or credentials",
+          "section": "12"
+        },
+        {
+          "id": "S0-SEC-001",
+          "criterionType": "absolute",
+          "title": "Preflight rejects non-allow-listed, unmarked, default/protected, or production coordinates before provider calls",
+          "section": "Safety contract"
+        },
+        {
+          "id": "S0-SEC-002",
+          "criterionType": "absolute",
+          "title": "Effective sandbox identity is verified and corporate-account fallback is impossible",
+          "section": "Prerequisites"
+        },
+        {
+          "id": "S0-SEC-003",
+          "criterionType": "absolute",
+          "title": "Only synthetic data appears in stores, fixtures, logs, backups, screenshots, dumps, and reports",
+          "section": "Prerequisites"
+        },
+        {
+          "id": "S0-SEC-004",
+          "criterionType": "absolute",
+          "title": "Credentials remain brokered/redacted and absent from workspace state and evidence",
+          "section": "Safety contract"
+        },
+        {
+          "id": "S0-SEC-005",
+          "criterionType": "absolute",
+          "title": "Cleanup/reaper deletes only run-owned resources recorded in the manifest",
+          "section": "Safety contract"
+        },
+        {
+          "id": "S0-SEC-006",
+          "criterionType": "absolute",
+          "title": "Provider request/object/time/storage budgets stop unsafe or abusive runs",
+          "section": "Safety contract"
+        },
+        {
+          "id": "S0-PER-001",
+          "criterionType": "relative",
+          "title": "Cold startup and enumeration are measured at small, medium, and stress scale",
+          "section": "13"
+        },
+        {
+          "id": "S0-PER-002",
+          "criterionType": "relative",
+          "title": "Alias-open, mutation, conflict, and journal p50/p95 are measured comparably",
+          "section": "13"
+        },
+        {
+          "id": "S0-PER-003",
+          "criterionType": "relative",
+          "title": "Backup/restore time, store size, memory, and write amplification are measured comparably",
+          "section": "13"
+        },
+        {
+          "id": "S0-PER-004",
+          "criterionType": "relative",
+          "title": "Provider requests, bytes, throttling, CAS latency, and collaborator discovery are measured comparably",
+          "section": "13"
+        },
+        {
+          "id": "S0-PER-005",
+          "criterionType": "relative",
+          "title": "Operational and implementation complexity is recorded using the same rubric",
+          "section": "Decision criteria"
+        }
+      ],
+      "results": [],
+      "validationErrors": [
+        "unsupported or missing result schemaVersion",
+        "sourceRevision is stale or missing",
+        "catalogRevision is stale or missing",
+        "applicabilityRevision is stale or missing",
+        "configRevision is stale or missing",
+        "catalog snapshot does not match the current catalog",
+        "S0-REC-002 N/A lacks scenario-specific contract rationale is required, structured independent approval"
+      ]
+    },
+    {
+      "schemaVersion": 2,
+      "syntheticData": true,
+      "harnessRevision": "invalid-existing-evidence",
+      "evidenceIdentity": {
+        "sourceRevision": "sha256:a52df05bc1720442d4675599ae1eeccf25a7f825ae9af823113adeb5a4361403",
+        "catalogRevision": "sha256:d423452f3c8870f446a3558f3a7678608fb7f38f72e21aa458fd62113fd7a941",
+        "applicabilityRevision": "sha256:bd1f843f2adcf93ae4236331b6ade68e5b66996602283308b3cb8908126d987e",
+        "configRevision": "sha256:d74d137ed48d732f594e228961b171205e077f7bdd53004d9b056d0377a41405"
+      },
+      "startedAt": "2026-09-04T18:20:50.320Z",
+      "completedAt": "2026-09-04T18:20:50.320Z",
+      "configuration": {
+        "configurationId": "CFG-LOCAL-CAS",
+        "adapter": "local-cas",
+        "backingPath": "local",
+        "platform": "windows-ntfs",
+        "scale": "small",
+        "runId": "s0-local-cas-windows",
+        "host": "not executed",
+        "applicabilityProfile": "local"
+      },
+      "preflight": {
+        "sandbox": {},
+        "budgets": {
+          "maxOperations": 100,
+          "maxDurationMs": 300000,
+          "maxObjects": 10000,
+          "maxBytes": 104857600
+        }
+      },
+      "applicableScenarioIds": [
+        "S0-ATM-001",
+        "S0-ATM-002",
+        "S0-ATM-003",
+        "S0-CON-001",
+        "S0-CON-002",
+        "S0-CON-003",
+        "S0-CON-004",
+        "S0-CON-005",
+        "S0-JRN-001",
+        "S0-JRN-002",
+        "S0-CRS-001",
+        "S0-CRS-002",
+        "S0-CRS-003",
+        "S0-COL-001",
+        "S0-BCK-001",
+        "S0-COR-001",
+        "S0-COR-002",
+        "S0-COR-003",
+        "S0-COR-004",
+        "S0-HYD-001",
+        "S0-HYD-002",
+        "S0-HYD-003",
+        "S0-MIG-001",
+        "S0-MIG-002",
+        "S0-MIG-003",
+        "S0-IMP-001",
+        "S0-IMP-002",
+        "S0-BKP-001",
+        "S0-BKP-002",
+        "S0-REC-001",
+        "S0-REC-002",
+        "S0-REC-005",
+        "S0-SEC-001",
+        "S0-SEC-002",
+        "S0-SEC-003",
+        "S0-SEC-004",
+        "S0-SEC-005",
+        "S0-SEC-006",
+        "S0-PER-001",
+        "S0-PER-002",
+        "S0-PER-003",
+        "S0-PER-005"
+      ],
+      "catalog": [
+        {
+          "id": "S0-ATM-001",
+          "criterionType": "absolute",
+          "title": "A multi-field workspace mutation commits completely or not at all",
+          "section": "1"
+        },
+        {
+          "id": "S0-ATM-002",
+          "criterionType": "absolute",
+          "title": "Branch-to-PR alias transition preserves one workspace and commits alias/index/state atomically",
+          "section": "1"
+        },
+        {
+          "id": "S0-ATM-003",
+          "criterionType": "absolute",
+          "title": "Failed mutation exposes no empty-body intent, mixed generation, or dangling alias",
+          "section": "1"
+        },
+        {
+          "id": "S0-CON-001",
+          "criterionType": "absolute",
+          "title": "Portal/user and Copilot/MCP writers from generation g produce one winner and one typed stale conflict",
+          "section": "2"
+        },
+        {
+          "id": "S0-CON-002",
+          "criterionType": "absolute",
+          "title": "Multiple headless/automation clients cannot overwrite a newer generation",
+          "section": "2"
+        },
+        {
+          "id": "S0-CON-003",
+          "criterionType": "absolute",
+          "title": "Independent workspaces progress concurrently without global serialization",
+          "section": "2"
+        },
+        {
+          "id": "S0-CON-004",
+          "criterionType": "absolute",
+          "title": "Concurrent staging during publication preserves the newer intent revision",
+          "section": "2"
+        },
+        {
+          "id": "S0-CON-005",
+          "criterionType": "absolute",
+          "title": "Lock/CAS contention is bounded, observable, and retryable",
+          "section": "2"
+        },
+        {
+          "id": "S0-JRN-001",
+          "criterionType": "absolute",
+          "title": "Frozen intent tuples and planned journal become durable atomically before any provider operation",
+          "section": "3"
+        },
+        {
+          "id": "S0-JRN-002",
+          "criterionType": "absolute",
+          "title": "No journal references a missing workspace, generation, or intent revision",
+          "section": "3"
+        },
+        {
+          "id": "S0-CRS-001",
+          "criterionType": "absolute",
+          "title": "Kill before/during/after commit recovers only the complete previous or committed generation",
+          "section": "4"
+        },
+        {
+          "id": "S0-CRS-002",
+          "criterionType": "absolute",
+          "title": "Kill during alias/index update never exposes a partially updated index",
+          "section": "4"
+        },
+        {
+          "id": "S0-CRS-003",
+          "criterionType": "absolute",
+          "title": "Kill during backup or migration leaves an unambiguous recoverable state",
+          "section": "4"
+        },
+        {
+          "id": "S0-COL-001",
+          "criterionType": "absolute",
+          "title": "Independent local actors observe one stable workspace/generation and equal concurrency rules",
+          "section": "5"
+        },
+        {
+          "id": "S0-COL-002",
+          "criterionType": "absolute",
+          "title": "Two users on a shared backing path cannot silently overwrite each other",
+          "section": "5"
+        },
+        {
+          "id": "S0-COL-003",
+          "criterionType": "absolute",
+          "title": "Two devices reconnecting from different generations receive deterministic conflict/reload behavior",
+          "section": "5"
+        },
+        {
+          "id": "S0-COL-004",
+          "criterionType": "absolute",
+          "title": "Remote success with a lost response is reconciled without duplicate generation or false failure",
+          "section": "5"
+        },
+        {
+          "id": "S0-COL-005",
+          "criterionType": "absolute",
+          "title": "Offline work remains pending until authoritative CAS confirmation and reconciles without silent overwrite",
+          "section": "5"
+        },
+        {
+          "id": "S0-COL-006",
+          "criterionType": "absolute",
+          "title": "Another collaborator discovers a committed generation through the backing path change mechanism",
+          "section": "5"
+        },
+        {
+          "id": "S0-BCK-001",
+          "criterionType": "absolute",
+          "title": "Local flush and atomic replace preserve file and index durability under supported filesystems",
+          "section": "6"
+        },
+        {
+          "id": "S0-BCK-002",
+          "criterionType": "absolute",
+          "title": "OneDrive ETag/version preconditions reject stale updates and support version recovery",
+          "section": "6"
+        },
+        {
+          "id": "S0-BCK-003",
+          "criterionType": "absolute",
+          "title": "ADO object/ref preconditions reject stale updates and preserve one auditable generation commit",
+          "section": "6"
+        },
+        {
+          "id": "S0-BCK-004",
+          "criterionType": "absolute",
+          "title": "GitHub object/ref preconditions reject stale updates and preserve one auditable generation commit",
+          "section": "6"
+        },
+        {
+          "id": "S0-BCK-005",
+          "criterionType": "absolute",
+          "title": "Provider outage, throttling, auth expiry, quota, or permission loss never produces success-shaped state",
+          "section": "6"
+        },
+        {
+          "id": "S0-BCK-006",
+          "criterionType": "relative",
+          "title": "Synced-folder conflict behavior is measured separately from provider-API CAS",
+          "section": "6"
+        },
+        {
+          "id": "S0-COR-001",
+          "criterionType": "absolute",
+          "title": "Truncated, invalid, checksum-failing, or damaged primary state is detected and preserved/quarantined",
+          "section": "7"
+        },
+        {
+          "id": "S0-COR-002",
+          "criterionType": "absolute",
+          "title": "Missing/dangling aliases and duplicate identities fail closed",
+          "section": "7"
+        },
+        {
+          "id": "S0-COR-003",
+          "criterionType": "absolute",
+          "title": "Unsupported schema/provider-operation version fails closed with a typed state",
+          "section": "7"
+        },
+        {
+          "id": "S0-COR-004",
+          "criterionType": "absolute",
+          "title": "Permission-denied or unreadable existing state is never treated as an absent/new store",
+          "section": "7"
+        },
+        {
+          "id": "S0-HYD-001",
+          "criterionType": "absolute",
+          "title": "Startup enumerates and validates all workspaces/aliases before APIs open",
+          "section": "8"
+        },
+        {
+          "id": "S0-HYD-002",
+          "criterionType": "absolute",
+          "title": "Rehydration restores exact generation, intent order, private state, journal state, and last selection",
+          "section": "8"
+        },
+        {
+          "id": "S0-HYD-003",
+          "criterionType": "absolute",
+          "title": "Incomplete/indeterminate journals are surfaced for reconciliation before mutation is accepted",
+          "section": "8"
+        },
+        {
+          "id": "S0-MIG-001",
+          "criterionType": "absolute",
+          "title": "Forward migration is transactional or resumable, idempotent, and preserves originals/audit",
+          "section": "9"
+        },
+        {
+          "id": "S0-MIG-002",
+          "criterionType": "absolute",
+          "title": "Interrupted migration resumes or rolls back without ambiguity",
+          "section": "9"
+        },
+        {
+          "id": "S0-MIG-003",
+          "criterionType": "absolute",
+          "title": "Unsupported source version and downgrade policy are explicit and fail closed",
+          "section": "9"
+        },
+        {
+          "id": "S0-MIG-004",
+          "criterionType": "absolute",
+          "title": "Local-to-OneDrive/ADO/GitHub rehome preserves WorkspaceId and establishes one authority only after receipt",
+          "section": "9"
+        },
+        {
+          "id": "S0-IMP-001",
+          "criterionType": "absolute",
+          "title": "Complete checksummed legacy envelope validates before atomic import",
+          "section": "10"
+        },
+        {
+          "id": "S0-IMP-002",
+          "criterionType": "absolute",
+          "title": "Failed/corrupt/duplicate legacy import preserves source and creates no partial destination",
+          "section": "10"
+        },
+        {
+          "id": "S0-BKP-001",
+          "criterionType": "absolute",
+          "title": "Active-store backup is internally consistent at one logical generation",
+          "section": "11"
+        },
+        {
+          "id": "S0-BKP-002",
+          "criterionType": "absolute",
+          "title": "Restore reproduces exact workspace/journal state and rejects incomplete/corrupt backup",
+          "section": "11"
+        },
+        {
+          "id": "S0-BKP-003",
+          "criterionType": "absolute",
+          "title": "Shared-backing history/export recovers a known generation without rewriting newer valid history",
+          "section": "11"
+        },
+        {
+          "id": "S0-BKP-004",
+          "criterionType": "absolute",
+          "title": "Restored shared workspace establishes one explicit authoritative head",
+          "section": "11"
+        },
+        {
+          "id": "S0-REC-001",
+          "criterionType": "absolute",
+          "title": "Clean and forced shutdown restart recover exact durable state",
+          "section": "12"
+        },
+        {
+          "id": "S0-REC-002",
+          "criterionType": "absolute",
+          "title": "Stale lock recovery removes only provably owned stale state",
+          "section": "12"
+        },
+        {
+          "id": "S0-REC-003",
+          "criterionType": "absolute",
+          "title": "Provider outage/auth/throttle/lost-response recovery reconciles authoritative state",
+          "section": "12"
+        },
+        {
+          "id": "S0-REC-004",
+          "criterionType": "absolute",
+          "title": "Local offline cache reconciles against newer authority without silent overwrite",
+          "section": "12"
+        },
+        {
+          "id": "S0-REC-005",
+          "criterionType": "absolute",
+          "title": "Diagnostics identify recovery state without exposing content or credentials",
+          "section": "12"
+        },
+        {
+          "id": "S0-SEC-001",
+          "criterionType": "absolute",
+          "title": "Preflight rejects non-allow-listed, unmarked, default/protected, or production coordinates before provider calls",
+          "section": "Safety contract"
+        },
+        {
+          "id": "S0-SEC-002",
+          "criterionType": "absolute",
+          "title": "Effective sandbox identity is verified and corporate-account fallback is impossible",
+          "section": "Prerequisites"
+        },
+        {
+          "id": "S0-SEC-003",
+          "criterionType": "absolute",
+          "title": "Only synthetic data appears in stores, fixtures, logs, backups, screenshots, dumps, and reports",
+          "section": "Prerequisites"
+        },
+        {
+          "id": "S0-SEC-004",
+          "criterionType": "absolute",
+          "title": "Credentials remain brokered/redacted and absent from workspace state and evidence",
+          "section": "Safety contract"
+        },
+        {
+          "id": "S0-SEC-005",
+          "criterionType": "absolute",
+          "title": "Cleanup/reaper deletes only run-owned resources recorded in the manifest",
+          "section": "Safety contract"
+        },
+        {
+          "id": "S0-SEC-006",
+          "criterionType": "absolute",
+          "title": "Provider request/object/time/storage budgets stop unsafe or abusive runs",
+          "section": "Safety contract"
+        },
+        {
+          "id": "S0-PER-001",
+          "criterionType": "relative",
+          "title": "Cold startup and enumeration are measured at small, medium, and stress scale",
+          "section": "13"
+        },
+        {
+          "id": "S0-PER-002",
+          "criterionType": "relative",
+          "title": "Alias-open, mutation, conflict, and journal p50/p95 are measured comparably",
+          "section": "13"
+        },
+        {
+          "id": "S0-PER-003",
+          "criterionType": "relative",
+          "title": "Backup/restore time, store size, memory, and write amplification are measured comparably",
+          "section": "13"
+        },
+        {
+          "id": "S0-PER-004",
+          "criterionType": "relative",
+          "title": "Provider requests, bytes, throttling, CAS latency, and collaborator discovery are measured comparably",
+          "section": "13"
+        },
+        {
+          "id": "S0-PER-005",
+          "criterionType": "relative",
+          "title": "Operational and implementation complexity is recorded using the same rubric",
+          "section": "Decision criteria"
+        }
+      ],
+      "results": [],
+      "validationErrors": [
+        "unsupported or missing result schemaVersion",
+        "sourceRevision is stale or missing",
+        "catalogRevision is stale or missing",
+        "applicabilityRevision is stale or missing",
+        "configRevision is stale or missing",
+        "catalog snapshot does not match the current catalog"
+      ]
+    },
+    {
+      "schemaVersion": 2,
+      "syntheticData": true,
+      "harnessRevision": "invalid-existing-evidence",
+      "evidenceIdentity": {
+        "sourceRevision": "sha256:a52df05bc1720442d4675599ae1eeccf25a7f825ae9af823113adeb5a4361403",
+        "catalogRevision": "sha256:d423452f3c8870f446a3558f3a7678608fb7f38f72e21aa458fd62113fd7a941",
+        "applicabilityRevision": "sha256:bd1f843f2adcf93ae4236331b6ade68e5b66996602283308b3cb8908126d987e",
+        "configRevision": "sha256:090f3c79916df385720438191fafdcbcb9130cb10d6a67d32663b79364188e2e"
+      },
+      "startedAt": "2026-09-04T18:20:50.320Z",
+      "completedAt": "2026-09-04T18:20:50.320Z",
+      "configuration": {
+        "configurationId": "CFG-ONEDRIVE-LIVE",
+        "adapter": "onedrive",
+        "backingPath": "onedrive",
+        "platform": "windows-ntfs",
+        "scale": "small",
+        "runId": "s0-onedrive-live",
+        "host": "not executed",
+        "applicabilityProfile": "onedrive"
+      },
+      "preflight": {
+        "sandbox": {},
+        "budgets": {
+          "maxOperations": 100,
+          "maxDurationMs": 300000,
+          "maxObjects": 10000,
+          "maxBytes": 104857600
+        }
+      },
+      "applicableScenarioIds": [
+        "S0-COL-002",
+        "S0-COL-003",
+        "S0-COL-004",
+        "S0-COL-005",
+        "S0-COL-006",
+        "S0-BCK-005",
+        "S0-MIG-004",
+        "S0-BKP-003",
+        "S0-BKP-004",
+        "S0-REC-003",
+        "S0-REC-004",
+        "S0-SEC-001",
+        "S0-SEC-002",
+        "S0-SEC-003",
+        "S0-SEC-004",
+        "S0-SEC-005",
+        "S0-SEC-006",
+        "S0-PER-004",
+        "S0-PER-005",
+        "S0-BCK-002",
+        "S0-BCK-006"
+      ],
+      "catalog": [
+        {
+          "id": "S0-ATM-001",
+          "criterionType": "absolute",
+          "title": "A multi-field workspace mutation commits completely or not at all",
+          "section": "1"
+        },
+        {
+          "id": "S0-ATM-002",
+          "criterionType": "absolute",
+          "title": "Branch-to-PR alias transition preserves one workspace and commits alias/index/state atomically",
+          "section": "1"
+        },
+        {
+          "id": "S0-ATM-003",
+          "criterionType": "absolute",
+          "title": "Failed mutation exposes no empty-body intent, mixed generation, or dangling alias",
+          "section": "1"
+        },
+        {
+          "id": "S0-CON-001",
+          "criterionType": "absolute",
+          "title": "Portal/user and Copilot/MCP writers from generation g produce one winner and one typed stale conflict",
+          "section": "2"
+        },
+        {
+          "id": "S0-CON-002",
+          "criterionType": "absolute",
+          "title": "Multiple headless/automation clients cannot overwrite a newer generation",
+          "section": "2"
+        },
+        {
+          "id": "S0-CON-003",
+          "criterionType": "absolute",
+          "title": "Independent workspaces progress concurrently without global serialization",
+          "section": "2"
+        },
+        {
+          "id": "S0-CON-004",
+          "criterionType": "absolute",
+          "title": "Concurrent staging during publication preserves the newer intent revision",
+          "section": "2"
+        },
+        {
+          "id": "S0-CON-005",
+          "criterionType": "absolute",
+          "title": "Lock/CAS contention is bounded, observable, and retryable",
+          "section": "2"
+        },
+        {
+          "id": "S0-JRN-001",
+          "criterionType": "absolute",
+          "title": "Frozen intent tuples and planned journal become durable atomically before any provider operation",
+          "section": "3"
+        },
+        {
+          "id": "S0-JRN-002",
+          "criterionType": "absolute",
+          "title": "No journal references a missing workspace, generation, or intent revision",
+          "section": "3"
+        },
+        {
+          "id": "S0-CRS-001",
+          "criterionType": "absolute",
+          "title": "Kill before/during/after commit recovers only the complete previous or committed generation",
+          "section": "4"
+        },
+        {
+          "id": "S0-CRS-002",
+          "criterionType": "absolute",
+          "title": "Kill during alias/index update never exposes a partially updated index",
+          "section": "4"
+        },
+        {
+          "id": "S0-CRS-003",
+          "criterionType": "absolute",
+          "title": "Kill during backup or migration leaves an unambiguous recoverable state",
+          "section": "4"
+        },
+        {
+          "id": "S0-COL-001",
+          "criterionType": "absolute",
+          "title": "Independent local actors observe one stable workspace/generation and equal concurrency rules",
+          "section": "5"
+        },
+        {
+          "id": "S0-COL-002",
+          "criterionType": "absolute",
+          "title": "Two users on a shared backing path cannot silently overwrite each other",
+          "section": "5"
+        },
+        {
+          "id": "S0-COL-003",
+          "criterionType": "absolute",
+          "title": "Two devices reconnecting from different generations receive deterministic conflict/reload behavior",
+          "section": "5"
+        },
+        {
+          "id": "S0-COL-004",
+          "criterionType": "absolute",
+          "title": "Remote success with a lost response is reconciled without duplicate generation or false failure",
+          "section": "5"
+        },
+        {
+          "id": "S0-COL-005",
+          "criterionType": "absolute",
+          "title": "Offline work remains pending until authoritative CAS confirmation and reconciles without silent overwrite",
+          "section": "5"
+        },
+        {
+          "id": "S0-COL-006",
+          "criterionType": "absolute",
+          "title": "Another collaborator discovers a committed generation through the backing path change mechanism",
+          "section": "5"
+        },
+        {
+          "id": "S0-BCK-001",
+          "criterionType": "absolute",
+          "title": "Local flush and atomic replace preserve file and index durability under supported filesystems",
+          "section": "6"
+        },
+        {
+          "id": "S0-BCK-002",
+          "criterionType": "absolute",
+          "title": "OneDrive ETag/version preconditions reject stale updates and support version recovery",
+          "section": "6"
+        },
+        {
+          "id": "S0-BCK-003",
+          "criterionType": "absolute",
+          "title": "ADO object/ref preconditions reject stale updates and preserve one auditable generation commit",
+          "section": "6"
+        },
+        {
+          "id": "S0-BCK-004",
+          "criterionType": "absolute",
+          "title": "GitHub object/ref preconditions reject stale updates and preserve one auditable generation commit",
+          "section": "6"
+        },
+        {
+          "id": "S0-BCK-005",
+          "criterionType": "absolute",
+          "title": "Provider outage, throttling, auth expiry, quota, or permission loss never produces success-shaped state",
+          "section": "6"
+        },
+        {
+          "id": "S0-BCK-006",
+          "criterionType": "relative",
+          "title": "Synced-folder conflict behavior is measured separately from provider-API CAS",
+          "section": "6"
+        },
+        {
+          "id": "S0-COR-001",
+          "criterionType": "absolute",
+          "title": "Truncated, invalid, checksum-failing, or damaged primary state is detected and preserved/quarantined",
+          "section": "7"
+        },
+        {
+          "id": "S0-COR-002",
+          "criterionType": "absolute",
+          "title": "Missing/dangling aliases and duplicate identities fail closed",
+          "section": "7"
+        },
+        {
+          "id": "S0-COR-003",
+          "criterionType": "absolute",
+          "title": "Unsupported schema/provider-operation version fails closed with a typed state",
+          "section": "7"
+        },
+        {
+          "id": "S0-COR-004",
+          "criterionType": "absolute",
+          "title": "Permission-denied or unreadable existing state is never treated as an absent/new store",
+          "section": "7"
+        },
+        {
+          "id": "S0-HYD-001",
+          "criterionType": "absolute",
+          "title": "Startup enumerates and validates all workspaces/aliases before APIs open",
+          "section": "8"
+        },
+        {
+          "id": "S0-HYD-002",
+          "criterionType": "absolute",
+          "title": "Rehydration restores exact generation, intent order, private state, journal state, and last selection",
+          "section": "8"
+        },
+        {
+          "id": "S0-HYD-003",
+          "criterionType": "absolute",
+          "title": "Incomplete/indeterminate journals are surfaced for reconciliation before mutation is accepted",
+          "section": "8"
+        },
+        {
+          "id": "S0-MIG-001",
+          "criterionType": "absolute",
+          "title": "Forward migration is transactional or resumable, idempotent, and preserves originals/audit",
+          "section": "9"
+        },
+        {
+          "id": "S0-MIG-002",
+          "criterionType": "absolute",
+          "title": "Interrupted migration resumes or rolls back without ambiguity",
+          "section": "9"
+        },
+        {
+          "id": "S0-MIG-003",
+          "criterionType": "absolute",
+          "title": "Unsupported source version and downgrade policy are explicit and fail closed",
+          "section": "9"
+        },
+        {
+          "id": "S0-MIG-004",
+          "criterionType": "absolute",
+          "title": "Local-to-OneDrive/ADO/GitHub rehome preserves WorkspaceId and establishes one authority only after receipt",
+          "section": "9"
+        },
+        {
+          "id": "S0-IMP-001",
+          "criterionType": "absolute",
+          "title": "Complete checksummed legacy envelope validates before atomic import",
+          "section": "10"
+        },
+        {
+          "id": "S0-IMP-002",
+          "criterionType": "absolute",
+          "title": "Failed/corrupt/duplicate legacy import preserves source and creates no partial destination",
+          "section": "10"
+        },
+        {
+          "id": "S0-BKP-001",
+          "criterionType": "absolute",
+          "title": "Active-store backup is internally consistent at one logical generation",
+          "section": "11"
+        },
+        {
+          "id": "S0-BKP-002",
+          "criterionType": "absolute",
+          "title": "Restore reproduces exact workspace/journal state and rejects incomplete/corrupt backup",
+          "section": "11"
+        },
+        {
+          "id": "S0-BKP-003",
+          "criterionType": "absolute",
+          "title": "Shared-backing history/export recovers a known generation without rewriting newer valid history",
+          "section": "11"
+        },
+        {
+          "id": "S0-BKP-004",
+          "criterionType": "absolute",
+          "title": "Restored shared workspace establishes one explicit authoritative head",
+          "section": "11"
+        },
+        {
+          "id": "S0-REC-001",
+          "criterionType": "absolute",
+          "title": "Clean and forced shutdown restart recover exact durable state",
+          "section": "12"
+        },
+        {
+          "id": "S0-REC-002",
+          "criterionType": "absolute",
+          "title": "Stale lock recovery removes only provably owned stale state",
+          "section": "12"
+        },
+        {
+          "id": "S0-REC-003",
+          "criterionType": "absolute",
+          "title": "Provider outage/auth/throttle/lost-response recovery reconciles authoritative state",
+          "section": "12"
+        },
+        {
+          "id": "S0-REC-004",
+          "criterionType": "absolute",
+          "title": "Local offline cache reconciles against newer authority without silent overwrite",
+          "section": "12"
+        },
+        {
+          "id": "S0-REC-005",
+          "criterionType": "absolute",
+          "title": "Diagnostics identify recovery state without exposing content or credentials",
+          "section": "12"
+        },
+        {
+          "id": "S0-SEC-001",
+          "criterionType": "absolute",
+          "title": "Preflight rejects non-allow-listed, unmarked, default/protected, or production coordinates before provider calls",
+          "section": "Safety contract"
+        },
+        {
+          "id": "S0-SEC-002",
+          "criterionType": "absolute",
+          "title": "Effective sandbox identity is verified and corporate-account fallback is impossible",
+          "section": "Prerequisites"
+        },
+        {
+          "id": "S0-SEC-003",
+          "criterionType": "absolute",
+          "title": "Only synthetic data appears in stores, fixtures, logs, backups, screenshots, dumps, and reports",
+          "section": "Prerequisites"
+        },
+        {
+          "id": "S0-SEC-004",
+          "criterionType": "absolute",
+          "title": "Credentials remain brokered/redacted and absent from workspace state and evidence",
+          "section": "Safety contract"
+        },
+        {
+          "id": "S0-SEC-005",
+          "criterionType": "absolute",
+          "title": "Cleanup/reaper deletes only run-owned resources recorded in the manifest",
+          "section": "Safety contract"
+        },
+        {
+          "id": "S0-SEC-006",
+          "criterionType": "absolute",
+          "title": "Provider request/object/time/storage budgets stop unsafe or abusive runs",
+          "section": "Safety contract"
+        },
+        {
+          "id": "S0-PER-001",
+          "criterionType": "relative",
+          "title": "Cold startup and enumeration are measured at small, medium, and stress scale",
+          "section": "13"
+        },
+        {
+          "id": "S0-PER-002",
+          "criterionType": "relative",
+          "title": "Alias-open, mutation, conflict, and journal p50/p95 are measured comparably",
+          "section": "13"
+        },
+        {
+          "id": "S0-PER-003",
+          "criterionType": "relative",
+          "title": "Backup/restore time, store size, memory, and write amplification are measured comparably",
+          "section": "13"
+        },
+        {
+          "id": "S0-PER-004",
+          "criterionType": "relative",
+          "title": "Provider requests, bytes, throttling, CAS latency, and collaborator discovery are measured comparably",
+          "section": "13"
+        },
+        {
+          "id": "S0-PER-005",
+          "criterionType": "relative",
+          "title": "Operational and implementation complexity is recorded using the same rubric",
+          "section": "Decision criteria"
+        }
+      ],
+      "results": [],
+      "validationErrors": [
+        "sourceRevision is stale or missing",
+        "catalogRevision is stale or missing",
+        "applicabilityRevision is stale or missing",
+        "configRevision is stale or missing",
+        "catalog snapshot does not match the current catalog",
+        "provider campaigns must have distinct names, run IDs, and artifact paths/digests",
+        "campaign-1 artifact path/digest is missing",
+        "campaign-1 artifact path/digest is missing",
+        "campaign-2 artifact path/digest is missing",
+        "campaign-2 artifact path/digest is missing",
+        "campaign-3 artifact path/digest is missing",
+        "campaign-3 artifact path/digest is missing",
+        "provider campaigns lack structured approvals for their effective target hashes",
+        "campaign-1 linked raw has an unsupported or missing result schemaVersion",
+        "campaign-1 linked raw source/catalog/applicability/config identity does not match the current configuration",
+        "campaign-1 approval target hash does not match the linked preflight",
+        "campaign-2 linked raw has an unsupported or missing result schemaVersion",
+        "campaign-2 linked raw source/catalog/applicability/config identity does not match the current configuration",
+        "campaign-2 approval target hash does not match the linked preflight",
+        "campaign-3 linked raw has an unsupported or missing result schemaVersion",
+        "campaign-3 linked raw source/catalog/applicability/config identity does not match the current configuration",
+        "campaign-3 approval target hash does not match the linked preflight",
+        "S0-COL-002 is not backed by every linked campaign raw",
+        "S0-COL-003 is not backed by every linked campaign raw",
+        "S0-COL-004 is not backed by every linked campaign raw",
+        "S0-COL-005 is not backed by every linked campaign raw",
+        "S0-COL-006 is not backed by every linked campaign raw",
+        "S0-BCK-002 is not backed by every linked campaign raw",
+        "S0-BCK-005 is not backed by every linked campaign raw",
+        "S0-MIG-004 is not backed by every linked campaign raw",
+        "S0-BKP-003 is not backed by every linked campaign raw",
+        "S0-BKP-004 is not backed by every linked campaign raw",
+        "S0-REC-003 is not backed by every linked campaign raw",
+        "S0-REC-004 is not backed by every linked campaign raw",
+        "S0-SEC-001 is not backed by every linked campaign raw",
+        "S0-SEC-002 is not backed by every linked campaign raw",
+        "S0-SEC-003 is not backed by every linked campaign raw",
+        "S0-SEC-004 is not backed by every linked campaign raw",
+        "S0-SEC-005 is not backed by every linked campaign raw",
+        "S0-SEC-006 is not backed by every linked campaign raw",
+        "S0-PER-004 is not backed by every linked campaign raw",
+        "S0-PER-005 is not backed by every linked campaign raw",
+        "missing separate OneDrive synced-folder (S0-BCK-006) evidence record"
+      ]
+    },
+    {
+      "schemaVersion": 2,
+      "syntheticData": true,
+      "harnessRevision": "invalid-existing-evidence",
+      "evidenceIdentity": {
+        "sourceRevision": "sha256:a52df05bc1720442d4675599ae1eeccf25a7f825ae9af823113adeb5a4361403",
+        "catalogRevision": "sha256:d423452f3c8870f446a3558f3a7678608fb7f38f72e21aa458fd62113fd7a941",
+        "applicabilityRevision": "sha256:bd1f843f2adcf93ae4236331b6ade68e5b66996602283308b3cb8908126d987e",
+        "configRevision": "sha256:8fcfbce32e76c25fb91675a056611a58a8a6dc675315803f83fe1526cbb4930b"
+      },
+      "startedAt": "2026-09-04T18:20:50.320Z",
+      "completedAt": "2026-09-04T18:20:50.320Z",
+      "configuration": {
+        "configurationId": "CFG-ADO-LIVE",
+        "adapter": "ado",
+        "backingPath": "ado",
+        "platform": "windows-ntfs",
+        "scale": "small",
+        "runId": "s0-ado-live",
+        "host": "not executed",
+        "applicabilityProfile": "ado"
+      },
+      "preflight": {
+        "sandbox": {},
+        "budgets": {
+          "maxOperations": 100,
+          "maxDurationMs": 300000,
+          "maxObjects": 10000,
+          "maxBytes": 104857600
+        }
+      },
+      "applicableScenarioIds": [
+        "S0-COL-002",
+        "S0-COL-003",
+        "S0-COL-004",
+        "S0-COL-005",
+        "S0-COL-006",
+        "S0-BCK-005",
+        "S0-MIG-004",
+        "S0-BKP-003",
+        "S0-BKP-004",
+        "S0-REC-003",
+        "S0-REC-004",
+        "S0-SEC-001",
+        "S0-SEC-002",
+        "S0-SEC-003",
+        "S0-SEC-004",
+        "S0-SEC-005",
+        "S0-SEC-006",
+        "S0-PER-004",
+        "S0-PER-005",
+        "S0-BCK-003"
+      ],
+      "catalog": [
+        {
+          "id": "S0-ATM-001",
+          "criterionType": "absolute",
+          "title": "A multi-field workspace mutation commits completely or not at all",
+          "section": "1"
+        },
+        {
+          "id": "S0-ATM-002",
+          "criterionType": "absolute",
+          "title": "Branch-to-PR alias transition preserves one workspace and commits alias/index/state atomically",
+          "section": "1"
+        },
+        {
+          "id": "S0-ATM-003",
+          "criterionType": "absolute",
+          "title": "Failed mutation exposes no empty-body intent, mixed generation, or dangling alias",
+          "section": "1"
+        },
+        {
+          "id": "S0-CON-001",
+          "criterionType": "absolute",
+          "title": "Portal/user and Copilot/MCP writers from generation g produce one winner and one typed stale conflict",
+          "section": "2"
+        },
+        {
+          "id": "S0-CON-002",
+          "criterionType": "absolute",
+          "title": "Multiple headless/automation clients cannot overwrite a newer generation",
+          "section": "2"
+        },
+        {
+          "id": "S0-CON-003",
+          "criterionType": "absolute",
+          "title": "Independent workspaces progress concurrently without global serialization",
+          "section": "2"
+        },
+        {
+          "id": "S0-CON-004",
+          "criterionType": "absolute",
+          "title": "Concurrent staging during publication preserves the newer intent revision",
+          "section": "2"
+        },
+        {
+          "id": "S0-CON-005",
+          "criterionType": "absolute",
+          "title": "Lock/CAS contention is bounded, observable, and retryable",
+          "section": "2"
+        },
+        {
+          "id": "S0-JRN-001",
+          "criterionType": "absolute",
+          "title": "Frozen intent tuples and planned journal become durable atomically before any provider operation",
+          "section": "3"
+        },
+        {
+          "id": "S0-JRN-002",
+          "criterionType": "absolute",
+          "title": "No journal references a missing workspace, generation, or intent revision",
+          "section": "3"
+        },
+        {
+          "id": "S0-CRS-001",
+          "criterionType": "absolute",
+          "title": "Kill before/during/after commit recovers only the complete previous or committed generation",
+          "section": "4"
+        },
+        {
+          "id": "S0-CRS-002",
+          "criterionType": "absolute",
+          "title": "Kill during alias/index update never exposes a partially updated index",
+          "section": "4"
+        },
+        {
+          "id": "S0-CRS-003",
+          "criterionType": "absolute",
+          "title": "Kill during backup or migration leaves an unambiguous recoverable state",
+          "section": "4"
+        },
+        {
+          "id": "S0-COL-001",
+          "criterionType": "absolute",
+          "title": "Independent local actors observe one stable workspace/generation and equal concurrency rules",
+          "section": "5"
+        },
+        {
+          "id": "S0-COL-002",
+          "criterionType": "absolute",
+          "title": "Two users on a shared backing path cannot silently overwrite each other",
+          "section": "5"
+        },
+        {
+          "id": "S0-COL-003",
+          "criterionType": "absolute",
+          "title": "Two devices reconnecting from different generations receive deterministic conflict/reload behavior",
+          "section": "5"
+        },
+        {
+          "id": "S0-COL-004",
+          "criterionType": "absolute",
+          "title": "Remote success with a lost response is reconciled without duplicate generation or false failure",
+          "section": "5"
+        },
+        {
+          "id": "S0-COL-005",
+          "criterionType": "absolute",
+          "title": "Offline work remains pending until authoritative CAS confirmation and reconciles without silent overwrite",
+          "section": "5"
+        },
+        {
+          "id": "S0-COL-006",
+          "criterionType": "absolute",
+          "title": "Another collaborator discovers a committed generation through the backing path change mechanism",
+          "section": "5"
+        },
+        {
+          "id": "S0-BCK-001",
+          "criterionType": "absolute",
+          "title": "Local flush and atomic replace preserve file and index durability under supported filesystems",
+          "section": "6"
+        },
+        {
+          "id": "S0-BCK-002",
+          "criterionType": "absolute",
+          "title": "OneDrive ETag/version preconditions reject stale updates and support version recovery",
+          "section": "6"
+        },
+        {
+          "id": "S0-BCK-003",
+          "criterionType": "absolute",
+          "title": "ADO object/ref preconditions reject stale updates and preserve one auditable generation commit",
+          "section": "6"
+        },
+        {
+          "id": "S0-BCK-004",
+          "criterionType": "absolute",
+          "title": "GitHub object/ref preconditions reject stale updates and preserve one auditable generation commit",
+          "section": "6"
+        },
+        {
+          "id": "S0-BCK-005",
+          "criterionType": "absolute",
+          "title": "Provider outage, throttling, auth expiry, quota, or permission loss never produces success-shaped state",
+          "section": "6"
+        },
+        {
+          "id": "S0-BCK-006",
+          "criterionType": "relative",
+          "title": "Synced-folder conflict behavior is measured separately from provider-API CAS",
+          "section": "6"
+        },
+        {
+          "id": "S0-COR-001",
+          "criterionType": "absolute",
+          "title": "Truncated, invalid, checksum-failing, or damaged primary state is detected and preserved/quarantined",
+          "section": "7"
+        },
+        {
+          "id": "S0-COR-002",
+          "criterionType": "absolute",
+          "title": "Missing/dangling aliases and duplicate identities fail closed",
+          "section": "7"
+        },
+        {
+          "id": "S0-COR-003",
+          "criterionType": "absolute",
+          "title": "Unsupported schema/provider-operation version fails closed with a typed state",
+          "section": "7"
+        },
+        {
+          "id": "S0-COR-004",
+          "criterionType": "absolute",
+          "title": "Permission-denied or unreadable existing state is never treated as an absent/new store",
+          "section": "7"
+        },
+        {
+          "id": "S0-HYD-001",
+          "criterionType": "absolute",
+          "title": "Startup enumerates and validates all workspaces/aliases before APIs open",
+          "section": "8"
+        },
+        {
+          "id": "S0-HYD-002",
+          "criterionType": "absolute",
+          "title": "Rehydration restores exact generation, intent order, private state, journal state, and last selection",
+          "section": "8"
+        },
+        {
+          "id": "S0-HYD-003",
+          "criterionType": "absolute",
+          "title": "Incomplete/indeterminate journals are surfaced for reconciliation before mutation is accepted",
+          "section": "8"
+        },
+        {
+          "id": "S0-MIG-001",
+          "criterionType": "absolute",
+          "title": "Forward migration is transactional or resumable, idempotent, and preserves originals/audit",
+          "section": "9"
+        },
+        {
+          "id": "S0-MIG-002",
+          "criterionType": "absolute",
+          "title": "Interrupted migration resumes or rolls back without ambiguity",
+          "section": "9"
+        },
+        {
+          "id": "S0-MIG-003",
+          "criterionType": "absolute",
+          "title": "Unsupported source version and downgrade policy are explicit and fail closed",
+          "section": "9"
+        },
+        {
+          "id": "S0-MIG-004",
+          "criterionType": "absolute",
+          "title": "Local-to-OneDrive/ADO/GitHub rehome preserves WorkspaceId and establishes one authority only after receipt",
+          "section": "9"
+        },
+        {
+          "id": "S0-IMP-001",
+          "criterionType": "absolute",
+          "title": "Complete checksummed legacy envelope validates before atomic import",
+          "section": "10"
+        },
+        {
+          "id": "S0-IMP-002",
+          "criterionType": "absolute",
+          "title": "Failed/corrupt/duplicate legacy import preserves source and creates no partial destination",
+          "section": "10"
+        },
+        {
+          "id": "S0-BKP-001",
+          "criterionType": "absolute",
+          "title": "Active-store backup is internally consistent at one logical generation",
+          "section": "11"
+        },
+        {
+          "id": "S0-BKP-002",
+          "criterionType": "absolute",
+          "title": "Restore reproduces exact workspace/journal state and rejects incomplete/corrupt backup",
+          "section": "11"
+        },
+        {
+          "id": "S0-BKP-003",
+          "criterionType": "absolute",
+          "title": "Shared-backing history/export recovers a known generation without rewriting newer valid history",
+          "section": "11"
+        },
+        {
+          "id": "S0-BKP-004",
+          "criterionType": "absolute",
+          "title": "Restored shared workspace establishes one explicit authoritative head",
+          "section": "11"
+        },
+        {
+          "id": "S0-REC-001",
+          "criterionType": "absolute",
+          "title": "Clean and forced shutdown restart recover exact durable state",
+          "section": "12"
+        },
+        {
+          "id": "S0-REC-002",
+          "criterionType": "absolute",
+          "title": "Stale lock recovery removes only provably owned stale state",
+          "section": "12"
+        },
+        {
+          "id": "S0-REC-003",
+          "criterionType": "absolute",
+          "title": "Provider outage/auth/throttle/lost-response recovery reconciles authoritative state",
+          "section": "12"
+        },
+        {
+          "id": "S0-REC-004",
+          "criterionType": "absolute",
+          "title": "Local offline cache reconciles against newer authority without silent overwrite",
+          "section": "12"
+        },
+        {
+          "id": "S0-REC-005",
+          "criterionType": "absolute",
+          "title": "Diagnostics identify recovery state without exposing content or credentials",
+          "section": "12"
+        },
+        {
+          "id": "S0-SEC-001",
+          "criterionType": "absolute",
+          "title": "Preflight rejects non-allow-listed, unmarked, default/protected, or production coordinates before provider calls",
+          "section": "Safety contract"
+        },
+        {
+          "id": "S0-SEC-002",
+          "criterionType": "absolute",
+          "title": "Effective sandbox identity is verified and corporate-account fallback is impossible",
+          "section": "Prerequisites"
+        },
+        {
+          "id": "S0-SEC-003",
+          "criterionType": "absolute",
+          "title": "Only synthetic data appears in stores, fixtures, logs, backups, screenshots, dumps, and reports",
+          "section": "Prerequisites"
+        },
+        {
+          "id": "S0-SEC-004",
+          "criterionType": "absolute",
+          "title": "Credentials remain brokered/redacted and absent from workspace state and evidence",
+          "section": "Safety contract"
+        },
+        {
+          "id": "S0-SEC-005",
+          "criterionType": "absolute",
+          "title": "Cleanup/reaper deletes only run-owned resources recorded in the manifest",
+          "section": "Safety contract"
+        },
+        {
+          "id": "S0-SEC-006",
+          "criterionType": "absolute",
+          "title": "Provider request/object/time/storage budgets stop unsafe or abusive runs",
+          "section": "Safety contract"
+        },
+        {
+          "id": "S0-PER-001",
+          "criterionType": "relative",
+          "title": "Cold startup and enumeration are measured at small, medium, and stress scale",
+          "section": "13"
+        },
+        {
+          "id": "S0-PER-002",
+          "criterionType": "relative",
+          "title": "Alias-open, mutation, conflict, and journal p50/p95 are measured comparably",
+          "section": "13"
+        },
+        {
+          "id": "S0-PER-003",
+          "criterionType": "relative",
+          "title": "Backup/restore time, store size, memory, and write amplification are measured comparably",
+          "section": "13"
+        },
+        {
+          "id": "S0-PER-004",
+          "criterionType": "relative",
+          "title": "Provider requests, bytes, throttling, CAS latency, and collaborator discovery are measured comparably",
+          "section": "13"
+        },
+        {
+          "id": "S0-PER-005",
+          "criterionType": "relative",
+          "title": "Operational and implementation complexity is recorded using the same rubric",
+          "section": "Decision criteria"
+        }
+      ],
+      "results": [],
+      "validationErrors": [
+        "sourceRevision is stale or missing",
+        "catalogRevision is stale or missing",
+        "applicabilityRevision is stale or missing",
+        "configRevision is stale or missing",
+        "catalog snapshot does not match the current catalog",
+        "provider campaigns must have distinct names, run IDs, and artifact paths/digests",
+        "campaign-1 artifact path/digest is missing",
+        "campaign-1 artifact path/digest is missing",
+        "campaign-2 artifact path/digest is missing",
+        "campaign-2 artifact path/digest is missing",
+        "campaign-3 artifact path/digest is missing",
+        "campaign-3 artifact path/digest is missing",
+        "provider campaigns lack structured approvals for their effective target hashes",
+        "campaign-1 linked raw has an unsupported or missing result schemaVersion",
+        "campaign-1 linked raw source/catalog/applicability/config identity does not match the current configuration",
+        "campaign-1 approval target hash does not match the linked preflight",
+        "campaign-2 linked raw has an unsupported or missing result schemaVersion",
+        "campaign-2 linked raw source/catalog/applicability/config identity does not match the current configuration",
+        "campaign-2 approval target hash does not match the linked preflight",
+        "campaign-3 linked raw has an unsupported or missing result schemaVersion",
+        "campaign-3 linked raw source/catalog/applicability/config identity does not match the current configuration",
+        "campaign-3 approval target hash does not match the linked preflight",
+        "S0-COL-002 is not backed by every linked campaign raw",
+        "S0-COL-003 is not backed by every linked campaign raw",
+        "S0-COL-004 is not backed by every linked campaign raw",
+        "S0-COL-005 is not backed by every linked campaign raw",
+        "S0-COL-006 is not backed by every linked campaign raw",
+        "S0-BCK-003 is not backed by every linked campaign raw",
+        "S0-BCK-005 is not backed by every linked campaign raw",
+        "S0-MIG-004 is not backed by every linked campaign raw",
+        "S0-BKP-003 is not backed by every linked campaign raw",
+        "S0-BKP-004 is not backed by every linked campaign raw",
+        "S0-REC-003 is not backed by every linked campaign raw",
+        "S0-REC-004 is not backed by every linked campaign raw",
+        "S0-SEC-001 is not backed by every linked campaign raw",
+        "S0-SEC-002 is not backed by every linked campaign raw",
+        "S0-SEC-003 is not backed by every linked campaign raw",
+        "S0-SEC-004 is not backed by every linked campaign raw",
+        "S0-SEC-005 is not backed by every linked campaign raw",
+        "S0-SEC-006 is not backed by every linked campaign raw",
+        "S0-PER-004 is not backed by every linked campaign raw",
+        "S0-PER-005 is not backed by every linked campaign raw"
+      ]
+    },
+    {
+      "schemaVersion": 2,
+      "syntheticData": true,
+      "harnessRevision": "invalid-existing-evidence",
+      "evidenceIdentity": {
+        "sourceRevision": "sha256:a52df05bc1720442d4675599ae1eeccf25a7f825ae9af823113adeb5a4361403",
+        "catalogRevision": "sha256:d423452f3c8870f446a3558f3a7678608fb7f38f72e21aa458fd62113fd7a941",
+        "applicabilityRevision": "sha256:bd1f843f2adcf93ae4236331b6ade68e5b66996602283308b3cb8908126d987e",
+        "configRevision": "sha256:ac2d95c7178f186c26fd4f82f7a809dc087673646249de24eec281a00635282c"
+      },
+      "startedAt": "2026-09-04T18:20:50.320Z",
+      "completedAt": "2026-09-04T18:20:50.320Z",
+      "configuration": {
+        "configurationId": "CFG-GITHUB-LIVE",
+        "adapter": "github",
+        "backingPath": "github",
+        "platform": "windows-ntfs",
+        "scale": "small",
+        "runId": "s0-github-live",
+        "host": "not executed",
+        "applicabilityProfile": "github"
+      },
+      "preflight": {
+        "sandbox": {},
+        "budgets": {
+          "maxOperations": 100,
+          "maxDurationMs": 300000,
+          "maxObjects": 10000,
+          "maxBytes": 104857600
+        }
+      },
+      "applicableScenarioIds": [
+        "S0-COL-002",
+        "S0-COL-003",
+        "S0-COL-004",
+        "S0-COL-005",
+        "S0-COL-006",
+        "S0-BCK-005",
+        "S0-MIG-004",
+        "S0-BKP-003",
+        "S0-BKP-004",
+        "S0-REC-003",
+        "S0-REC-004",
+        "S0-SEC-001",
+        "S0-SEC-002",
+        "S0-SEC-003",
+        "S0-SEC-004",
+        "S0-SEC-005",
+        "S0-SEC-006",
+        "S0-PER-004",
+        "S0-PER-005",
+        "S0-BCK-004"
+      ],
+      "catalog": [
+        {
+          "id": "S0-ATM-001",
+          "criterionType": "absolute",
+          "title": "A multi-field workspace mutation commits completely or not at all",
+          "section": "1"
+        },
+        {
+          "id": "S0-ATM-002",
+          "criterionType": "absolute",
+          "title": "Branch-to-PR alias transition preserves one workspace and commits alias/index/state atomically",
+          "section": "1"
+        },
+        {
+          "id": "S0-ATM-003",
+          "criterionType": "absolute",
+          "title": "Failed mutation exposes no empty-body intent, mixed generation, or dangling alias",
+          "section": "1"
+        },
+        {
+          "id": "S0-CON-001",
+          "criterionType": "absolute",
+          "title": "Portal/user and Copilot/MCP writers from generation g produce one winner and one typed stale conflict",
+          "section": "2"
+        },
+        {
+          "id": "S0-CON-002",
+          "criterionType": "absolute",
+          "title": "Multiple headless/automation clients cannot overwrite a newer generation",
+          "section": "2"
+        },
+        {
+          "id": "S0-CON-003",
+          "criterionType": "absolute",
+          "title": "Independent workspaces progress concurrently without global serialization",
+          "section": "2"
+        },
+        {
+          "id": "S0-CON-004",
+          "criterionType": "absolute",
+          "title": "Concurrent staging during publication preserves the newer intent revision",
+          "section": "2"
+        },
+        {
+          "id": "S0-CON-005",
+          "criterionType": "absolute",
+          "title": "Lock/CAS contention is bounded, observable, and retryable",
+          "section": "2"
+        },
+        {
+          "id": "S0-JRN-001",
+          "criterionType": "absolute",
+          "title": "Frozen intent tuples and planned journal become durable atomically before any provider operation",
+          "section": "3"
+        },
+        {
+          "id": "S0-JRN-002",
+          "criterionType": "absolute",
+          "title": "No journal references a missing workspace, generation, or intent revision",
+          "section": "3"
+        },
+        {
+          "id": "S0-CRS-001",
+          "criterionType": "absolute",
+          "title": "Kill before/during/after commit recovers only the complete previous or committed generation",
+          "section": "4"
+        },
+        {
+          "id": "S0-CRS-002",
+          "criterionType": "absolute",
+          "title": "Kill during alias/index update never exposes a partially updated index",
+          "section": "4"
+        },
+        {
+          "id": "S0-CRS-003",
+          "criterionType": "absolute",
+          "title": "Kill during backup or migration leaves an unambiguous recoverable state",
+          "section": "4"
+        },
+        {
+          "id": "S0-COL-001",
+          "criterionType": "absolute",
+          "title": "Independent local actors observe one stable workspace/generation and equal concurrency rules",
+          "section": "5"
+        },
+        {
+          "id": "S0-COL-002",
+          "criterionType": "absolute",
+          "title": "Two users on a shared backing path cannot silently overwrite each other",
+          "section": "5"
+        },
+        {
+          "id": "S0-COL-003",
+          "criterionType": "absolute",
+          "title": "Two devices reconnecting from different generations receive deterministic conflict/reload behavior",
+          "section": "5"
+        },
+        {
+          "id": "S0-COL-004",
+          "criterionType": "absolute",
+          "title": "Remote success with a lost response is reconciled without duplicate generation or false failure",
+          "section": "5"
+        },
+        {
+          "id": "S0-COL-005",
+          "criterionType": "absolute",
+          "title": "Offline work remains pending until authoritative CAS confirmation and reconciles without silent overwrite",
+          "section": "5"
+        },
+        {
+          "id": "S0-COL-006",
+          "criterionType": "absolute",
+          "title": "Another collaborator discovers a committed generation through the backing path change mechanism",
+          "section": "5"
+        },
+        {
+          "id": "S0-BCK-001",
+          "criterionType": "absolute",
+          "title": "Local flush and atomic replace preserve file and index durability under supported filesystems",
+          "section": "6"
+        },
+        {
+          "id": "S0-BCK-002",
+          "criterionType": "absolute",
+          "title": "OneDrive ETag/version preconditions reject stale updates and support version recovery",
+          "section": "6"
+        },
+        {
+          "id": "S0-BCK-003",
+          "criterionType": "absolute",
+          "title": "ADO object/ref preconditions reject stale updates and preserve one auditable generation commit",
+          "section": "6"
+        },
+        {
+          "id": "S0-BCK-004",
+          "criterionType": "absolute",
+          "title": "GitHub object/ref preconditions reject stale updates and preserve one auditable generation commit",
+          "section": "6"
+        },
+        {
+          "id": "S0-BCK-005",
+          "criterionType": "absolute",
+          "title": "Provider outage, throttling, auth expiry, quota, or permission loss never produces success-shaped state",
+          "section": "6"
+        },
+        {
+          "id": "S0-BCK-006",
+          "criterionType": "relative",
+          "title": "Synced-folder conflict behavior is measured separately from provider-API CAS",
+          "section": "6"
+        },
+        {
+          "id": "S0-COR-001",
+          "criterionType": "absolute",
+          "title": "Truncated, invalid, checksum-failing, or damaged primary state is detected and preserved/quarantined",
+          "section": "7"
+        },
+        {
+          "id": "S0-COR-002",
+          "criterionType": "absolute",
+          "title": "Missing/dangling aliases and duplicate identities fail closed",
+          "section": "7"
+        },
+        {
+          "id": "S0-COR-003",
+          "criterionType": "absolute",
+          "title": "Unsupported schema/provider-operation version fails closed with a typed state",
+          "section": "7"
+        },
+        {
+          "id": "S0-COR-004",
+          "criterionType": "absolute",
+          "title": "Permission-denied or unreadable existing state is never treated as an absent/new store",
+          "section": "7"
+        },
+        {
+          "id": "S0-HYD-001",
+          "criterionType": "absolute",
+          "title": "Startup enumerates and validates all workspaces/aliases before APIs open",
+          "section": "8"
+        },
+        {
+          "id": "S0-HYD-002",
+          "criterionType": "absolute",
+          "title": "Rehydration restores exact generation, intent order, private state, journal state, and last selection",
+          "section": "8"
+        },
+        {
+          "id": "S0-HYD-003",
+          "criterionType": "absolute",
+          "title": "Incomplete/indeterminate journals are surfaced for reconciliation before mutation is accepted",
+          "section": "8"
+        },
+        {
+          "id": "S0-MIG-001",
+          "criterionType": "absolute",
+          "title": "Forward migration is transactional or resumable, idempotent, and preserves originals/audit",
+          "section": "9"
+        },
+        {
+          "id": "S0-MIG-002",
+          "criterionType": "absolute",
+          "title": "Interrupted migration resumes or rolls back without ambiguity",
+          "section": "9"
+        },
+        {
+          "id": "S0-MIG-003",
+          "criterionType": "absolute",
+          "title": "Unsupported source version and downgrade policy are explicit and fail closed",
+          "section": "9"
+        },
+        {
+          "id": "S0-MIG-004",
+          "criterionType": "absolute",
+          "title": "Local-to-OneDrive/ADO/GitHub rehome preserves WorkspaceId and establishes one authority only after receipt",
+          "section": "9"
+        },
+        {
+          "id": "S0-IMP-001",
+          "criterionType": "absolute",
+          "title": "Complete checksummed legacy envelope validates before atomic import",
+          "section": "10"
+        },
+        {
+          "id": "S0-IMP-002",
+          "criterionType": "absolute",
+          "title": "Failed/corrupt/duplicate legacy import preserves source and creates no partial destination",
+          "section": "10"
+        },
+        {
+          "id": "S0-BKP-001",
+          "criterionType": "absolute",
+          "title": "Active-store backup is internally consistent at one logical generation",
+          "section": "11"
+        },
+        {
+          "id": "S0-BKP-002",
+          "criterionType": "absolute",
+          "title": "Restore reproduces exact workspace/journal state and rejects incomplete/corrupt backup",
+          "section": "11"
+        },
+        {
+          "id": "S0-BKP-003",
+          "criterionType": "absolute",
+          "title": "Shared-backing history/export recovers a known generation without rewriting newer valid history",
+          "section": "11"
+        },
+        {
+          "id": "S0-BKP-004",
+          "criterionType": "absolute",
+          "title": "Restored shared workspace establishes one explicit authoritative head",
+          "section": "11"
+        },
+        {
+          "id": "S0-REC-001",
+          "criterionType": "absolute",
+          "title": "Clean and forced shutdown restart recover exact durable state",
+          "section": "12"
+        },
+        {
+          "id": "S0-REC-002",
+          "criterionType": "absolute",
+          "title": "Stale lock recovery removes only provably owned stale state",
+          "section": "12"
+        },
+        {
+          "id": "S0-REC-003",
+          "criterionType": "absolute",
+          "title": "Provider outage/auth/throttle/lost-response recovery reconciles authoritative state",
+          "section": "12"
+        },
+        {
+          "id": "S0-REC-004",
+          "criterionType": "absolute",
+          "title": "Local offline cache reconciles against newer authority without silent overwrite",
+          "section": "12"
+        },
+        {
+          "id": "S0-REC-005",
+          "criterionType": "absolute",
+          "title": "Diagnostics identify recovery state without exposing content or credentials",
+          "section": "12"
+        },
+        {
+          "id": "S0-SEC-001",
+          "criterionType": "absolute",
+          "title": "Preflight rejects non-allow-listed, unmarked, default/protected, or production coordinates before provider calls",
+          "section": "Safety contract"
+        },
+        {
+          "id": "S0-SEC-002",
+          "criterionType": "absolute",
+          "title": "Effective sandbox identity is verified and corporate-account fallback is impossible",
+          "section": "Prerequisites"
+        },
+        {
+          "id": "S0-SEC-003",
+          "criterionType": "absolute",
+          "title": "Only synthetic data appears in stores, fixtures, logs, backups, screenshots, dumps, and reports",
+          "section": "Prerequisites"
+        },
+        {
+          "id": "S0-SEC-004",
+          "criterionType": "absolute",
+          "title": "Credentials remain brokered/redacted and absent from workspace state and evidence",
+          "section": "Safety contract"
+        },
+        {
+          "id": "S0-SEC-005",
+          "criterionType": "absolute",
+          "title": "Cleanup/reaper deletes only run-owned resources recorded in the manifest",
+          "section": "Safety contract"
+        },
+        {
+          "id": "S0-SEC-006",
+          "criterionType": "absolute",
+          "title": "Provider request/object/time/storage budgets stop unsafe or abusive runs",
+          "section": "Safety contract"
+        },
+        {
+          "id": "S0-PER-001",
+          "criterionType": "relative",
+          "title": "Cold startup and enumeration are measured at small, medium, and stress scale",
+          "section": "13"
+        },
+        {
+          "id": "S0-PER-002",
+          "criterionType": "relative",
+          "title": "Alias-open, mutation, conflict, and journal p50/p95 are measured comparably",
+          "section": "13"
+        },
+        {
+          "id": "S0-PER-003",
+          "criterionType": "relative",
+          "title": "Backup/restore time, store size, memory, and write amplification are measured comparably",
+          "section": "13"
+        },
+        {
+          "id": "S0-PER-004",
+          "criterionType": "relative",
+          "title": "Provider requests, bytes, throttling, CAS latency, and collaborator discovery are measured comparably",
+          "section": "13"
+        },
+        {
+          "id": "S0-PER-005",
+          "criterionType": "relative",
+          "title": "Operational and implementation complexity is recorded using the same rubric",
+          "section": "Decision criteria"
+        }
+      ],
+      "results": [],
+      "validationErrors": [
+        "sourceRevision is stale or missing",
+        "catalogRevision is stale or missing",
+        "applicabilityRevision is stale or missing",
+        "configRevision is stale or missing",
+        "catalog snapshot does not match the current catalog",
+        "provider campaigns must have distinct names, run IDs, and artifact paths/digests",
+        "campaign-1 artifact path/digest is missing",
+        "campaign-1 artifact path/digest is missing",
+        "campaign-2 artifact path/digest is missing",
+        "campaign-2 artifact path/digest is missing",
+        "campaign-3 artifact path/digest is missing",
+        "campaign-3 artifact path/digest is missing",
+        "provider campaigns lack structured approvals for their effective target hashes",
+        "campaign-1 linked raw has an unsupported or missing result schemaVersion",
+        "campaign-1 linked raw source/catalog/applicability/config identity does not match the current configuration",
+        "campaign-1 approval target hash does not match the linked preflight",
+        "campaign-2 linked raw has an unsupported or missing result schemaVersion",
+        "campaign-2 linked raw source/catalog/applicability/config identity does not match the current configuration",
+        "campaign-2 approval target hash does not match the linked preflight",
+        "campaign-3 linked raw has an unsupported or missing result schemaVersion",
+        "campaign-3 linked raw source/catalog/applicability/config identity does not match the current configuration",
+        "campaign-3 approval target hash does not match the linked preflight",
+        "S0-COL-002 is not backed by every linked campaign raw",
+        "S0-COL-003 is not backed by every linked campaign raw",
+        "S0-COL-004 is not backed by every linked campaign raw",
+        "S0-COL-005 is not backed by every linked campaign raw",
+        "S0-COL-006 is not backed by every linked campaign raw",
+        "S0-BCK-004 is not backed by every linked campaign raw",
+        "S0-BCK-005 is not backed by every linked campaign raw",
+        "S0-MIG-004 is not backed by every linked campaign raw",
+        "S0-BKP-003 is not backed by every linked campaign raw",
+        "S0-BKP-004 is not backed by every linked campaign raw",
+        "S0-REC-003 is not backed by every linked campaign raw",
+        "S0-REC-004 is not backed by every linked campaign raw",
+        "S0-SEC-001 is not backed by every linked campaign raw",
+        "S0-SEC-002 is not backed by every linked campaign raw",
+        "S0-SEC-003 is not backed by every linked campaign raw",
+        "S0-SEC-004 is not backed by every linked campaign raw",
+        "S0-SEC-005 is not backed by every linked campaign raw",
+        "S0-SEC-006 is not backed by every linked campaign raw",
+        "S0-PER-004 is not backed by every linked campaign raw",
+        "S0-PER-005 is not backed by every linked campaign raw"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,45 @@
+{
+  "configurationId": "CFG-GITHUB-LIVE",
+  "adapter": "github",
+  "backingPath": "github",
+  "applicabilityProfile": "github",
+  "platform": "windows-ntfs",
+  "scale": "small",
+  "runId": "s0-github-live",
+  "syntheticDataOnly": true,
+  "dryRun": false,
+  "budgets": {
+    "maxOperations": 100,
+    "maxDurationMs": 300000,
+    "maxObjects": 10000,
+    "maxBytes": 104857600
+  },
+  "sandbox": {
+    "kind": "provider-live",
+    "approved": true,
+    "allowListed": true,
+    "identityLabel": "Live delegated identity (supplied at runtime)",
+    "identityVerified": true,
+    "corporateFallbackDisabled": true,
+    "defaultBranchExcluded": true,
+    "ownershipMarker": "tippani-s0:s0-github-live",
+    "namespace": "tippani-s0/s0-github-live",
+    "coordinates": {
+      "owner": "supplied at runtime via S0_GITHUB_OWNER",
+      "repository": "supplied at runtime via S0_GITHUB_REPO"
+    },
+    "dryRunOperations": [
+      "connect",
+      "put-run-marker",
+      "get-contents",
+      "put-contents",
+      "list-contents",
+      "list-commits",
+      "cleanup-unsupported"
+    ],
+    "cleanup": {
+      "manifestId": "syn-cleanup-s0-github-live",
+      "retentionHours": 24
+    }
+  }
+}

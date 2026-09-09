@@ -1,0 +1,59 @@
+name: S0 local cross-platform evidence
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - s0-cross-platform-*
+
+permissions:
+  contents: read
+
+jobs:
+  local-evidence:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest, macos-latest]
+        adapter: [local-cas, local-sqlite]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - run: npm ci
+      - name: Record host filesystem
+        shell: bash
+        run: |
+          case "$RUNNER_OS" in
+            Linux)
+              filesystem="$(stat -f -c %T "$GITHUB_WORKSPACE")"
+              ;;
+            macOS)
+              device="$(df "$GITHUB_WORKSPACE" | tail -1 | awk '{print $1}')"
+              filesystem="$(diskutil info "$device" | awk -F: '/File System Personality/{gsub(/^[ \t]+/, "", $2); print $2}')"
+              ;;
+            Windows)
+              drive="$(cygpath -w "$GITHUB_WORKSPACE" | cut -c1)"
+              filesystem="$(powershell -NoProfile -Command "(Get-Volume -DriveLetter '$drive').FileSystem")"
+              ;;
+          esac
+          echo "S0_PLATFORM_DESCRIPTION=$RUNNER_OS/$filesystem" >> "$GITHUB_ENV"
+          echo "S0_FILESYSTEM_DESCRIPTION=$filesystem" >> "$GITHUB_ENV"
+          echo "S0_STORAGE_DESCRIPTION=GitHub-hosted runner workspace on $filesystem" >> "$GITHUB_ENV"
+          echo "S0_ENVIRONMENT_LIMITATIONS=Ephemeral GitHub-hosted runner" >> "$GITHUB_ENV"
+      - name: Run local S0 configuration
+        shell: bash
+        run: |
+          mkdir -p "spikes/s0-persistence/results/${{ matrix.os }}-${{ matrix.adapter }}"
+          node spikes/s0-persistence/src/cli.mjs \
+            --config "spikes/s0-persistence/config/${{ matrix.adapter }}.json" \
+            --run-id "s0-${{ matrix.adapter }}-${{ matrix.os }}-${{ github.run_id }}" \
+            --output "spikes/s0-persistence/results/${{ matrix.os }}-${{ matrix.adapter }}"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: s0-${{ matrix.os }}-${{ matrix.adapter }}
+          path: spikes/s0-persistence/results/${{ matrix.os }}-${{ matrix.adapter }}
+          if-no-files-found: error

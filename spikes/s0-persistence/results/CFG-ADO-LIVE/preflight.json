@@ -1,0 +1,35 @@
+{
+  "configurationId": "CFG-ADO-LIVE",
+  "runId": "cfg-ado-live-aggregate",
+  "adapter": "ado",
+  "backingPath": "ado",
+  "syntheticDataOnly": true,
+  "sandbox": {
+    "approved": true,
+    "kind": "provider-live",
+    "identityLabel": "Live delegated identity (supplied at runtime)",
+    "identityVerified": true,
+    "ownershipMarker": "redacted-per-campaign",
+    "namespace": "redacted-per-campaign",
+    "defaultBranchExcluded": true,
+    "corporateFallbackDisabled": true,
+    "dryRunOperations": [
+      "connect",
+      "read-item",
+      "push",
+      "list-items",
+      "list-commits",
+      "delete-ref"
+    ],
+    "cleanup": {
+      "manifestId": "see-campaign-preflights",
+      "expiresAt": "see-campaign-preflights"
+    }
+  },
+  "budgets": {
+    "maxOperations": 100,
+    "maxDurationMs": 300000,
+    "maxObjects": 10000,
+    "maxBytes": 104857600
+  }
+}

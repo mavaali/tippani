@@ -1,0 +1,34 @@
+{
+  "configurationId": "CFG-ONEDRIVE-LIVE",
+  "runId": "cfg-onedrive-live-aggregate",
+  "adapter": "onedrive",
+  "backingPath": "onedrive",
+  "syntheticDataOnly": true,
+  "sandbox": {
+    "approved": true,
+    "kind": "provider-live",
+    "identityLabel": "Live delegated identity (supplied at runtime)",
+    "identityVerified": true,
+    "ownershipMarker": "redacted-per-campaign",
+    "namespace": "redacted-per-campaign",
+    "defaultBranchExcluded": true,
+    "corporateFallbackDisabled": true,
+    "dryRunOperations": [
+      "ensure-folder",
+      "put-content",
+      "get-content",
+      "list-children",
+      "delete-folder"
+    ],
+    "cleanup": {
+      "manifestId": "see-campaign-preflights",
+      "expiresAt": "see-campaign-preflights"
+    }
+  },
+  "budgets": {
+    "maxOperations": 100,
+    "maxDurationMs": 300000,
+    "maxObjects": 10000,
+    "maxBytes": 104857600
+  }
+}

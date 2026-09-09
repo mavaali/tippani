@@ -1,0 +1,36 @@
+{
+  "configurationId": "CFG-ADO-LIVE",
+  "runId": "s0-ado-live-c1-1788212697875",
+  "adapter": "ado",
+  "backingPath": "ado",
+  "syntheticDataOnly": true,
+  "sandbox": {
+    "approved": true,
+    "kind": "provider-live",
+    "identityLabel": "Live delegated identity (supplied at runtime)",
+    "identityVerified": true,
+    "ownershipMarker": "tippani-s0:s0-ado-live-c1-1788212697875",
+    "namespace": "tippani-s0/s0-ado-live-c1-1788212697875",
+    "defaultBranchExcluded": true,
+    "corporateFallbackDisabled": true,
+    "dryRunOperations": [
+      "connect",
+      "read-item",
+      "push",
+      "list-items",
+      "list-commits",
+      "delete-ref"
+    ],
+    "cleanup": {
+      "manifestId": "syn-cleanup-s0-ado-live",
+      "retentionHours": 24,
+      "expiresAt": "2026-09-01T23:01:51.656Z"
+    }
+  },
+  "budgets": {
+    "maxOperations": 100,
+    "maxDurationMs": 300000,
+    "maxObjects": 10000,
+    "maxBytes": 104857600
+  }
+}

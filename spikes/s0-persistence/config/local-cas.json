@@ -1,0 +1,22 @@
+{
+  "configurationId": "CFG-LOCAL-CAS",
+  "adapter": "local-cas",
+  "backingPath": "local",
+  "applicabilityProfile": "local",
+  "platform": "windows-ntfs",
+  "scale": "small",
+  "runId": "s0-local-cas-windows",
+  "syntheticDataOnly": true,
+  "budgets": {
+    "maxOperations": 100,
+    "maxDurationMs": 300000,
+    "maxObjects": 10000,
+    "maxBytes": 104857600
+  },
+  "sandbox": {
+    "kind": "local-temp",
+    "approved": true,
+    "corporateFallbackDisabled": true,
+    "ownershipMarker": "tippani-s0:s0-local-cas-windows"
+  }
+}

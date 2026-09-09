@@ -1,0 +1,1336 @@
+{
+  "schemaVersion": 1,
+  "syntheticData": true,
+  "harnessRevision": "s0-harness-v3",
+  "startedAt": "2026-08-31T23:23:32.346Z",
+  "completedAt": "2026-08-31T23:23:35.749Z",
+  "configuration": {
+    "configurationId": "CFG-LOCAL-CAS",
+    "adapter": "local-cas",
+    "backingPath": "local",
+    "platform": "windows-ntfs",
+    "scale": "small",
+    "runId": "s0-local-cas-ubuntu-latest-33450465982",
+    "durable": true,
+    "host": "linux x64 node 24.19.0",
+    "applicabilityProfile": "local"
+  },
+  "preflight": {
+    "configurationId": "CFG-LOCAL-CAS",
+    "runId": "s0-local-cas-ubuntu-latest-33450465982",
+    "adapter": "local-cas",
+    "backingPath": "local",
+    "syntheticDataOnly": true,
+    "sandbox": {
+      "approved": true,
+      "kind": "local-temp",
+      "identityLabel": "Synthetic Local Harness",
+      "identityVerified": false,
+      "ownershipMarker": "tippani-s0:s0-local-cas-ubuntu-latest-33450465982",
+      "namespace": null,
+      "defaultBranchExcluded": false,
+      "corporateFallbackDisabled": true,
+      "dryRunOperations": [],
+      "cleanup": null
+    },
+    "budgets": {
+      "maxOperations": 100,
+      "maxDurationMs": 300000,
+      "maxObjects": 10000,
+      "maxBytes": 104857600
+    }
+  },
+  "environment": {
+    "os": "linux 6.17.0-1022-azure",
+    "architecture": "x64",
+    "cpuModel": "AMD EPYC 9V74 80-Core Processor",
+    "logicalCpuCount": 2,
+    "totalMemoryBytes": 8323973120,
+    "nodeVersion": "24.19.0",
+    "providerApiVersion": "N/A",
+    "configuredPlatform": "Linux/ext2/ext3",
+    "filesystem": "ext2/ext3",
+    "temporaryStoreRoot": "tippani-s0-s0-local-cas-ubuntu-latest-33450465982-KcUlVu",
+    "networkCharacteristics": "Not recorded",
+    "providerRegion": "Not recorded",
+    "storageCharacteristics": "GitHub-hosted runner workspace on ext2/ext3",
+    "syncClientState": "Not applicable",
+    "repositoryProtections": "Not recorded",
+    "dependencyVersions": "node=24.19.0; sqlite=3.53.3",
+    "workloadMix": "scenario-defined deterministic small/medium/stress fixtures",
+    "knownLimitations": "Ephemeral GitHub-hosted runner",
+    "processTopology": "Independent OS child processes for concurrency and kill tests"
+  },
+  "applicableScenarioIds": [
+    "S0-ATM-001",
+    "S0-ATM-002",
+    "S0-ATM-003",
+    "S0-CON-001",
+    "S0-CON-002",
+    "S0-CON-003",
+    "S0-CON-004",
+    "S0-CON-005",
+    "S0-JRN-001",
+    "S0-JRN-002",
+    "S0-CRS-001",
+    "S0-CRS-002",
+    "S0-CRS-003",
+    "S0-COL-001",
+    "S0-BCK-001",
+    "S0-COR-001",
+    "S0-COR-002",
+    "S0-COR-003",
+    "S0-COR-004",
+    "S0-HYD-001",
+    "S0-HYD-002",
+    "S0-HYD-003",
+    "S0-MIG-001",
+    "S0-MIG-002",
+    "S0-MIG-003",
+    "S0-IMP-001",
+    "S0-IMP-002",
+    "S0-BKP-001",
+    "S0-BKP-002",
+    "S0-REC-001",
+    "S0-REC-002",
+    "S0-REC-005",
+    "S0-SEC-001",
+    "S0-SEC-002",
+    "S0-SEC-003",
+    "S0-SEC-004",
+    "S0-SEC-005",
+    "S0-SEC-006",
+    "S0-PER-001",
+    "S0-PER-002",
+    "S0-PER-003",
+    "S0-PER-005"
+  ],
+  "catalogSize": 58,
+  "catalog": [
+    {
+      "id": "S0-ATM-001",
+      "criterionType": "absolute",
+      "title": "A multi-field workspace mutation commits completely or not at all"
+    },
+    {
+      "id": "S0-ATM-002",
+      "criterionType": "absolute",
+      "title": "Branch-to-PR alias transition preserves one workspace and commits alias/index/state atomically"
+    },
+    {
+      "id": "S0-ATM-003",
+      "criterionType": "absolute",
+      "title": "Failed mutation exposes no empty-body intent, mixed generation, or dangling alias"
+    },
+    {
+      "id": "S0-CON-001",
+      "criterionType": "absolute",
+      "title": "Portal/user and Copilot/MCP writers from generation g produce one winner and one typed stale conflict"
+    },
+    {
+      "id": "S0-CON-002",
+      "criterionType": "absolute",
+      "title": "Multiple headless/automation clients cannot overwrite a newer generation"
+    },
+    {
+      "id": "S0-CON-003",
+      "criterionType": "absolute",
+      "title": "Independent workspaces progress concurrently without global serialization"
+    },
+    {
+      "id": "S0-CON-004",
+      "criterionType": "absolute",
+      "title": "Concurrent staging during publication preserves the newer intent revision"
+    },
+    {
+      "id": "S0-CON-005",
+      "criterionType": "absolute",
+      "title": "Lock/CAS contention is bounded, observable, and retryable"
+    },
+    {
+      "id": "S0-JRN-001",
+      "criterionType": "absolute",
+      "title": "Frozen intent tuples and planned journal become durable atomically before any provider operation"
+    },
+    {
+      "id": "S0-JRN-002",
+      "criterionType": "absolute",
+      "title": "No journal references a missing workspace, generation, or intent revision"
+    },
+    {
+      "id": "S0-CRS-001",
+      "criterionType": "absolute",
+      "title": "Kill before/during/after commit recovers only the complete previous or committed generation"
+    },
+    {
+      "id": "S0-CRS-002",
+      "criterionType": "absolute",
+      "title": "Kill during alias/index update never exposes a partially updated index"
+    },
+    {
+      "id": "S0-CRS-003",
+      "criterionType": "absolute",
+      "title": "Kill during backup or migration leaves an unambiguous recoverable state"
+    },
+    {
+      "id": "S0-COL-001",
+      "criterionType": "absolute",
+      "title": "Independent local actors observe one stable workspace/generation and equal concurrency rules"
+    },
+    {
+      "id": "S0-COL-002",
+      "criterionType": "absolute",
+      "title": "Two users on a shared backing path cannot silently overwrite each other"
+    },
+    {
+      "id": "S0-COL-003",
+      "criterionType": "absolute",
+      "title": "Two devices reconnecting from different generations receive deterministic conflict/reload behavior"
+    },
+    {
+      "id": "S0-COL-004",
+      "criterionType": "absolute",
+      "title": "Remote success with a lost response is reconciled without duplicate generation or false failure"
+    },
+    {
+      "id": "S0-COL-005",
+      "criterionType": "absolute",
+      "title": "Offline work remains pending until authoritative CAS confirmation and reconciles without silent overwrite"
+    },
+    {
+      "id": "S0-COL-006",
+      "criterionType": "absolute",
+      "title": "Another collaborator discovers a committed generation through the backing path change mechanism"
+    },
+    {
+      "id": "S0-BCK-001",
+      "criterionType": "absolute",
+      "title": "Local flush and atomic replace preserve file and index durability under supported filesystems"
+    },
+    {
+      "id": "S0-BCK-002",
+      "criterionType": "absolute",
+      "title": "OneDrive ETag/version preconditions reject stale updates and support version recovery"
+    },
+    {
+      "id": "S0-BCK-003",
+      "criterionType": "absolute",
+      "title": "ADO object/ref preconditions reject stale updates and preserve one auditable generation commit"
+    },
+    {
+      "id": "S0-BCK-004",
+      "criterionType": "absolute",
+      "title": "GitHub object/ref preconditions reject stale updates and preserve one auditable generation commit"
+    },
+    {
+      "id": "S0-BCK-005",
+      "criterionType": "absolute",
+      "title": "Provider outage, throttling, auth expiry, quota, or permission loss never produces success-shaped state"
+    },
+    {
+      "id": "S0-BCK-006",
+      "criterionType": "relative",
+      "title": "Synced-folder conflict behavior is measured separately from provider-API CAS"
+    },
+    {
+      "id": "S0-COR-001",
+      "criterionType": "absolute",
+      "title": "Truncated, invalid, checksum-failing, or damaged primary state is detected and preserved/quarantined"
+    },
+    {
+      "id": "S0-COR-002",
+      "criterionType": "absolute",
+      "title": "Missing/dangling aliases and duplicate identities fail closed"
+    },
+    {
+      "id": "S0-COR-003",
+      "criterionType": "absolute",
+      "title": "Unsupported schema/provider-operation version fails closed with a typed state"
+    },
+    {
+      "id": "S0-COR-004",
+      "criterionType": "absolute",
+      "title": "Permission-denied or unreadable existing state is never treated as an absent/new store"
+    },
+    {
+      "id": "S0-HYD-001",
+      "criterionType": "absolute",
+      "title": "Startup enumerates and validates all workspaces/aliases before APIs open"
+    },
+    {
+      "id": "S0-HYD-002",
+      "criterionType": "absolute",
+      "title": "Rehydration restores exact generation, intent order, private state, journal state, and last selection"
+    },
+    {
+      "id": "S0-HYD-003",
+      "criterionType": "absolute",
+      "title": "Incomplete/indeterminate journals are surfaced for reconciliation before mutation is accepted"
+    },
+    {
+      "id": "S0-MIG-001",
+      "criterionType": "absolute",
+      "title": "Forward migration is transactional or resumable, idempotent, and preserves originals/audit"
+    },
+    {
+      "id": "S0-MIG-002",
+      "criterionType": "absolute",
+      "title": "Interrupted migration resumes or rolls back without ambiguity"
+    },
+    {
+      "id": "S0-MIG-003",
+      "criterionType": "absolute",
+      "title": "Unsupported source version and downgrade policy are explicit and fail closed"
+    },
+    {
+      "id": "S0-MIG-004",
+      "criterionType": "absolute",
+      "title": "Local-to-OneDrive/ADO/GitHub rehome preserves WorkspaceId and establishes one authority only after receipt"
+    },
+    {
+      "id": "S0-IMP-001",
+      "criterionType": "absolute",
+      "title": "Complete checksummed legacy envelope validates before atomic import"
+    },
+    {
+      "id": "S0-IMP-002",
+      "criterionType": "absolute",
+      "title": "Failed/corrupt/duplicate legacy import preserves source and creates no partial destination"
+    },
+    {
+      "id": "S0-BKP-001",
+      "criterionType": "absolute",
+      "title": "Active-store backup is internally consistent at one logical generation"
+    },
+    {
+      "id": "S0-BKP-002",
+      "criterionType": "absolute",
+      "title": "Restore reproduces exact workspace/journal state and rejects incomplete/corrupt backup"
+    },
+    {
+      "id": "S0-BKP-003",
+      "criterionType": "absolute",
+      "title": "Shared-backing history/export recovers a known generation without rewriting newer valid history"
+    },
+    {
+      "id": "S0-BKP-004",
+      "criterionType": "absolute",
+      "title": "Restored shared workspace establishes one explicit authoritative head"
+    },
+    {
+      "id": "S0-REC-001",
+      "criterionType": "absolute",
+      "title": "Clean and forced shutdown restart recover exact durable state"
+    },
+    {
+      "id": "S0-REC-002",
+      "criterionType": "absolute",
+      "title": "Stale lock recovery removes only provably owned stale state"
+    },
+    {
+      "id": "S0-REC-003",
+      "criterionType": "absolute",
+      "title": "Provider outage/auth/throttle/lost-response recovery reconciles authoritative state"
+    },
+    {
+      "id": "S0-REC-004",
+      "criterionType": "absolute",
+      "title": "Local offline cache reconciles against newer authority without silent overwrite"
+    },
+    {
+      "id": "S0-REC-005",
+      "criterionType": "absolute",
+      "title": "Diagnostics identify recovery state without exposing content or credentials"
+    },
+    {
+      "id": "S0-SEC-001",
+      "criterionType": "absolute",
+      "title": "Preflight rejects non-allow-listed, unmarked, default/protected, or production coordinates before provider calls"
+    },
+    {
+      "id": "S0-SEC-002",
+      "criterionType": "absolute",
+      "title": "Effective sandbox identity is verified and corporate-account fallback is impossible"
+    },
+    {
+      "id": "S0-SEC-003",
+      "criterionType": "absolute",
+      "title": "Only synthetic data appears in stores, fixtures, logs, backups, screenshots, dumps, and reports"
+    },
+    {
+      "id": "S0-SEC-004",
+      "criterionType": "absolute",
+      "title": "Credentials remain brokered/redacted and absent from workspace state and evidence"
+    },
+    {
+      "id": "S0-SEC-005",
+      "criterionType": "absolute",
+      "title": "Cleanup/reaper deletes only run-owned resources recorded in the manifest"
+    },
+    {
+      "id": "S0-SEC-006",
+      "criterionType": "absolute",
+      "title": "Provider request/object/time/storage budgets stop unsafe or abusive runs"
+    },
+    {
+      "id": "S0-PER-001",
+      "criterionType": "relative",
+      "title": "Cold startup and enumeration are measured at small, medium, and stress scale"
+    },
+    {
+      "id": "S0-PER-002",
+      "criterionType": "relative",
+      "title": "Alias-open, mutation, conflict, and journal p50/p95 are measured comparably"
+    },
+    {
+      "id": "S0-PER-003",
+      "criterionType": "relative",
+      "title": "Backup/restore time, store size, memory, and write amplification are measured comparably"
+    },
+    {
+      "id": "S0-PER-004",
+      "criterionType": "relative",
+      "title": "Provider requests, bytes, throttling, CAS latency, and collaborator discovery are measured comparably"
+    },
+    {
+      "id": "S0-PER-005",
+      "criterionType": "relative",
+      "title": "Operational and implementation complexity is recorded using the same rubric"
+    }
+  ],
+  "results": [
+    {
+      "scenarioId": "S0-ATM-001",
+      "title": "A multi-field workspace mutation commits completely or not at all",
+      "criterionType": "absolute",
+      "status": "Pass",
+      "durationMs": 20.864262999999994,
+      "evidence": {
+        "generation": 1,
+        "updatedPartitions": 4
+      },
+      "measurements": {}
+    },
+    {
+      "scenarioId": "S0-ATM-002",
+      "title": "Branch-to-PR alias transition preserves one workspace and commits alias/index/state atomically",
+      "criterionType": "absolute",
+      "status": "Pass",
+      "durationMs": 3.254944000000009,
+      "evidence": {
+        "aliasResolved": true,
+        "generation": 1
+      },
+      "measurements": {}
+    },
+    {
+      "scenarioId": "S0-ATM-003",
+      "title": "Failed mutation exposes no empty-body intent, mixed generation, or dangling alias",
+      "criterionType": "absolute",
+      "status": "Pass",
+      "durationMs": 2.9431379999999905,
+      "evidence": {
+        "previousGenerationPreserved": true,
+        "danglingAlias": false
+      },
+      "measurements": {}
+    },
+    {
+      "scenarioId": "S0-CON-001",
+      "title": "Portal/user and Copilot/MCP writers from generation g produce one winner and one typed stale conflict",
+      "criterionType": "absolute",
+      "status": "Pass",
+      "durationMs": 162.17222299999997,
+      "evidence": {
+        "processes": 2,
+        "winners": 1,
+        "staleConflicts": 1,
+        "durableGeneration": 1
+      },
+      "measurements": {}
+    },
+    {
+      "scenarioId": "S0-CON-002",
+      "title": "Multiple headless/automation clients cannot overwrite a newer generation",
+      "criterionType": "absolute",
+      "status": "Pass",
+      "durationMs": 259.901892,
+      "evidence": {
+        "processes": 4,
+        "winners": 1,
+        "staleConflicts": 3,
+        "durableGeneration": 1
+      },
+      "measurements": {}
+    },
+    {
+      "scenarioId": "S0-CON-003",
+      "title": "Independent workspaces progress concurrently without global serialization",
+      "criterionType": "absolute",
+      "status": "Pass",
+      "durationMs": 6.610258000000044,
+      "evidence": {
+        "independentWriters": 2,
+        "committed": 2
+      },
+      "measurements": {}
+    },
+    {
+      "scenarioId": "S0-CON-004",
+      "title": "Concurrent staging during publication preserves the newer intent revision",
+      "criterionType": "absolute",
+      "status": "Pass",
+      "durationMs": 4.014627000000019,
+      "evidence": {
+        "frozenRevision": 1,
+        "preservedRevision": 2
+      },
+      "measurements": {}
+    },
+    {
+      "scenarioId": "S0-CON-005",
+      "title": "Lock/CAS contention is bounded, observable, and retryable",
+      "criterionType": "absolute",
+      "status": "Pass",
+      "durationMs": 169.63776999999993,
+      "evidence": {
+        "processes": 3,
+        "winners": 1,
+        "staleConflicts": 2,
+        "durableGeneration": 1,
+        "boundedContention": true
+      },
+      "measurements": {
+        "contentionCompletionMs": 169.38614600000005
+      }
+    },
+    {
+      "scenarioId": "S0-JRN-001",
+      "title": "Frozen intent tuples and planned journal become durable atomically before any provider operation",
+      "criterionType": "absolute",
+      "status": "Pass",
+      "durationMs": 8.425848999999971,
+      "evidence": {
+        "journalStatus": "planned",
+        "tupleCount": 1
+      },
+      "measurements": {}
+    },
+    {
+      "scenarioId": "S0-JRN-002",
+      "title": "No journal references a missing workspace, generation, or intent revision",
+      "criterionType": "absolute",
+      "status": "Pass",
+      "durationMs": 9.196444000000042,
+      "evidence": {
+        "rejectedBeforeCommit": true
+      },
+      "measurements": {}
+    },
+    {
+      "scenarioId": "S0-CRS-001",
+      "title": "Kill before/during/after commit recovers only the complete previous or committed generation",
+      "criterionType": "absolute",
+      "status": "Pass",
+      "durationMs": 290.125362,
+      "evidence": {
+        "killedBeforeCommitGeneration": 0,
+        "killedAfterCommitGeneration": 1,
+        "lostResponseRecovered": true
+      },
+      "measurements": {}
+    },
+    {
+      "scenarioId": "S0-CRS-002",
+      "title": "Kill during alias/index update never exposes a partially updated index",
+      "criterionType": "absolute",
+      "status": "Pass",
+      "durationMs": 107.2961039999999,
+      "evidence": {
+        "partialAliasVisible": false,
+        "killedProcess": true,
+        "mechanism": "process-kill"
+      },
+      "measurements": {}
+    },
+    {
+      "scenarioId": "S0-CRS-003",
+      "title": "Kill during backup or migration leaves an unambiguous recoverable state",
+      "criterionType": "absolute",
+      "status": "Pass",
+      "durationMs": 72.6166760000001,
+      "evidence": {
+        "previousGenerationPreserved": true,
+        "killedProcess": true,
+        "mechanism": "process-kill"
+      },
+      "measurements": {}
+    },
+    {
+      "scenarioId": "S0-COL-001",
+      "title": "Independent local actors observe one stable workspace/generation and equal concurrency rules",
+      "criterionType": "absolute",
+      "status": "Pass",
+      "durationMs": 165.408234,
+      "evidence": {
+        "processes": 3,
+        "winners": 1,
+        "staleConflicts": 2,
+        "durableGeneration": 1
+      },
+      "measurements": {}
+    },
+    {
+      "scenarioId": "S0-BCK-001",
+      "title": "Local flush and atomic replace preserve file and index durability under supported filesystems",
+      "criterionType": "absolute",
+      "status": "Pass",
+      "durationMs": 155.53689799999984,
+      "evidence": {
+        "commits": 5,
+        "strayTempFiles": 0,
+        "durableGeneration": 5,
+        "tornReplaceKilled": true,
+        "previousGenerationIntact": true
+      },
+      "measurements": {}
+    },
+    {
+      "scenarioId": "S0-COR-001",
+      "title": "Truncated, invalid, checksum-failing, or damaged primary state is detected and preserved/quarantined",
+      "criterionType": "absolute",
+      "status": "Pass",
+      "durationMs": 1.4486500000000433,
+      "evidence": {
+        "typedCorruptionFailure": true
+      },
+      "measurements": {}
+    },
+    {
+      "scenarioId": "S0-COR-002",
+      "title": "Missing/dangling aliases and duplicate identities fail closed",
+      "criterionType": "absolute",
+      "status": "Pass",
+      "durationMs": 1.0855579999999918,
+      "evidence": {
+        "partialRestoreVisible": false
+      },
+      "measurements": {}
+    },
+    {
+      "scenarioId": "S0-COR-003",
+      "title": "Unsupported schema/provider-operation version fails closed with a typed state",
+      "criterionType": "absolute",
+      "status": "Pass",
+      "durationMs": 0.4408570000000509,
+      "evidence": {
+        "unsupportedVersionFailedClosed": true
+      },
+      "measurements": {}
+    },
+    {
+      "scenarioId": "S0-COR-004",
+      "title": "Permission-denied or unreadable existing state is never treated as an absent/new store",
+      "criterionType": "absolute",
+      "status": "Pass",
+      "durationMs": 3.909270000000106,
+      "evidence": {
+        "permissionErrorFailedClosed": true,
+        "treatedAsAbsent": false
+      },
+      "measurements": {}
+    },
+    {
+      "scenarioId": "S0-HYD-001",
+      "title": "Startup enumerates and validates all workspaces/aliases before APIs open",
+      "criterionType": "absolute",
+      "status": "Pass",
+      "durationMs": 2.7423499999999876,
+      "evidence": {
+        "enumeratedWorkspaces": 3
+      },
+      "measurements": {}
+    },
+    {
+      "scenarioId": "S0-HYD-002",
+      "title": "Rehydration restores exact generation, intent order, private state, journal state, and last selection",
+      "criterionType": "absolute",
+      "status": "Pass",
+      "durationMs": 3.643913999999995,
+      "evidence": {
+        "exactRehydration": true,
+        "generation": 1
+      },
+      "measurements": {}
+    },
+    {
+      "scenarioId": "S0-HYD-003",
+      "title": "Incomplete/indeterminate journals are surfaced for reconciliation before mutation is accepted",
+      "criterionType": "absolute",
+      "status": "Pass",
+      "durationMs": 7.712384999999813,
+      "evidence": {
+        "surfacedBeforeMutation": true,
+        "reconciledThenAccepted": true
+      },
+      "measurements": {}
+    },
+    {
+      "scenarioId": "S0-MIG-001",
+      "title": "Forward migration is transactional or resumable, idempotent, and preserves originals/audit",
+      "criterionType": "absolute",
+      "status": "Pass",
+      "durationMs": 3.5251170000001366,
+      "evidence": {
+        "migrated": 1,
+        "idempotentSecondRun": true,
+        "generationPreserved": 2
+      },
+      "measurements": {}
+    },
+    {
+      "scenarioId": "S0-MIG-002",
+      "title": "Interrupted migration resumes or rolls back without ambiguity",
+      "criterionType": "absolute",
+      "status": "Pass",
+      "durationMs": 2.6126560000000154,
+      "evidence": {
+        "rolledBackOnInterrupt": true,
+        "resumedToComplete": true
+      },
+      "measurements": {}
+    },
+    {
+      "scenarioId": "S0-MIG-003",
+      "title": "Unsupported source version and downgrade policy are explicit and fail closed",
+      "criterionType": "absolute",
+      "status": "Pass",
+      "durationMs": 2.2497249999998985,
+      "evidence": {
+        "failedClosedOnUnsupported": true,
+        "sourcePreserved": true
+      },
+      "measurements": {}
+    },
+    {
+      "scenarioId": "S0-IMP-001",
+      "title": "Complete checksummed legacy envelope validates before atomic import",
+      "criterionType": "absolute",
+      "status": "Pass",
+      "durationMs": 1.4117449999998826,
+      "evidence": {
+        "receiptIssued": true,
+        "generation": 0
+      },
+      "measurements": {}
+    },
+    {
+      "scenarioId": "S0-IMP-002",
+      "title": "Failed/corrupt/duplicate legacy import preserves source and creates no partial destination",
+      "criterionType": "absolute",
+      "status": "Pass",
+      "durationMs": 1.4355809999999565,
+      "evidence": {
+        "corruptRejected": true,
+        "incompleteRejected": true,
+        "duplicateRejected": true
+      },
+      "measurements": {}
+    },
+    {
+      "scenarioId": "S0-BKP-001",
+      "title": "Active-store backup is internally consistent at one logical generation",
+      "criterionType": "absolute",
+      "status": "Pass",
+      "durationMs": 1.2389479999999367,
+      "evidence": {
+        "workspaceCount": 1,
+        "knownGeneration": 0
+      },
+      "measurements": {}
+    },
+    {
+      "scenarioId": "S0-BKP-002",
+      "title": "Restore reproduces exact workspace/journal state and rejects incomplete/corrupt backup",
+      "criterionType": "absolute",
+      "status": "Pass",
+      "durationMs": 3.713997999999947,
+      "evidence": {
+        "exactRestore": true,
+        "corruptBackupRejected": true
+      },
+      "measurements": {}
+    },
+    {
+      "scenarioId": "S0-REC-001",
+      "title": "Clean and forced shutdown restart recover exact durable state",
+      "criterionType": "absolute",
+      "status": "Pass",
+      "durationMs": 76.08336199999985,
+      "evidence": {
+        "restartedInSeparateProcess": true,
+        "generation": 1,
+        "selectionRecovered": true
+      },
+      "measurements": {}
+    },
+    {
+      "scenarioId": "S0-REC-002",
+      "title": "Stale lock recovery removes only provably owned stale state",
+      "criterionType": "absolute",
+      "status": "Pass",
+      "durationMs": 78.77862899999991,
+      "evidence": {
+        "orphanedLockObserved": true,
+        "recoveredGeneration": 1
+      },
+      "measurements": {}
+    },
+    {
+      "scenarioId": "S0-REC-005",
+      "title": "Diagnostics identify recovery state without exposing content or credentials",
+      "criterionType": "absolute",
+      "status": "Pass",
+      "durationMs": 3.1842280000000756,
+      "evidence": {
+        "identifiesWorkspace": true,
+        "leaksBody": false,
+        "leaksSecret": false
+      },
+      "measurements": {}
+    },
+    {
+      "scenarioId": "S0-SEC-001",
+      "title": "Preflight rejects non-allow-listed, unmarked, default/protected, or production coordinates before provider calls",
+      "criterionType": "absolute",
+      "status": "Pass",
+      "durationMs": 0.49839399999996203,
+      "evidence": {
+        "providerPreflightRejected": true,
+        "errorCount": 8
+      },
+      "measurements": {}
+    },
+    {
+      "scenarioId": "S0-SEC-002",
+      "title": "Effective sandbox identity is verified and corporate-account fallback is impossible",
+      "criterionType": "absolute",
+      "status": "Pass",
+      "durationMs": 0.21970799999985502,
+      "evidence": {
+        "corporateFallbackImpossible": true
+      },
+      "measurements": {}
+    },
+    {
+      "scenarioId": "S0-SEC-003",
+      "title": "Only synthetic data appears in stores, fixtures, logs, backups, screenshots, dumps, and reports",
+      "criterionType": "absolute",
+      "status": "Pass",
+      "durationMs": 0.4398759999999129,
+      "evidence": {
+        "syntheticFixtureAccepted": true,
+        "actualDataRejected": true
+      },
+      "measurements": {}
+    },
+    {
+      "scenarioId": "S0-SEC-004",
+      "title": "Credentials remain brokered/redacted and absent from workspace state and evidence",
+      "criterionType": "absolute",
+      "status": "Pass",
+      "durationMs": 1.8801339999999982,
+      "evidence": {
+        "configSecretRejected": true,
+        "workspaceHasNoSecrets": true
+      },
+      "measurements": {}
+    },
+    {
+      "scenarioId": "S0-SEC-005",
+      "title": "Cleanup/reaper deletes only run-owned resources recorded in the manifest",
+      "criterionType": "absolute",
+      "status": "Pass",
+      "durationMs": 0.4123349999999846,
+      "evidence": {
+        "ownedAuthorized": true,
+        "foreignRefused": true
+      },
+      "measurements": {}
+    },
+    {
+      "scenarioId": "S0-SEC-006",
+      "title": "Provider request/object/time/storage budgets stop unsafe or abusive runs",
+      "criterionType": "absolute",
+      "status": "Pass",
+      "durationMs": 0.49268499999993765,
+      "evidence": {
+        "nonPositiveBudgetsRejected": true
+      },
+      "measurements": {}
+    },
+    {
+      "scenarioId": "S0-PER-001",
+      "title": "Cold startup and enumeration are measured at small, medium, and stress scale",
+      "criterionType": "relative",
+      "status": "Pass",
+      "durationMs": 145.9341139999999,
+      "evidence": {
+        "scales": "small,medium,stress",
+        "discardedWarmupRuns": 1,
+        "repetitions": 5,
+        "timingMethod": "performance.now monotonic elapsed time",
+        "reportedStatistics": "min,p50,p95,max,mean,stddev",
+        "rawSamples": {
+          "small": {
+            "initializedMs": [
+              0.17837600000007114,
+              0.206869000000097,
+              0.2441440000000057,
+              0.16885200000001532,
+              0.14698900000007598
+            ],
+            "createMs": [
+              0.686533000000054,
+              0.5992029999999886,
+              0.6346269999999095,
+              0.6523829999998725,
+              0.5672859999999673
+            ],
+            "enumerateMs": [
+              0.03163699999981873,
+              0.02987400000006346,
+              0.06204200000001947,
+              0.033761000000140484,
+              0.04230299999994713
+            ]
+          },
+          "medium": {
+            "initializedMs": [
+              0.16487499999993815,
+              0.16367399999990084,
+              0.16215199999987817,
+              0.15598199999999451,
+              0.15652399999999034
+            ],
+            "createMs": [
+              1.0013030000000072,
+              0.9109479999999621,
+              1.0348639999999705,
+              0.9600010000001475,
+              0.9160759999999755
+            ],
+            "enumerateMs": [
+              0.0864489999999023,
+              0.029604000000063024,
+              0.02849200000014207,
+              0.02970499999992171,
+              0.03050600000005943
+            ]
+          },
+          "stress": {
+            "initializedMs": [
+              0.16939299999989998,
+              0.1659070000000611,
+              0.17190599999980805,
+              0.22436500000003434,
+              0.16812099999992824
+            ],
+            "createMs": [
+              7.344642000000022,
+              7.035371000000168,
+              7.333425000000034,
+              7.48433,
+              7.106467000000066
+            ],
+            "enumerateMs": [
+              0.057335999999850173,
+              0.05411099999992075,
+              0.061842000000069675,
+              0.07530200000019249,
+              0.05065500000000611
+            ]
+          }
+        }
+      },
+      "measurements": {
+        "initializedMinMs_small": 0.14698900000007598,
+        "initializedP50Ms_small": 0.17837600000007114,
+        "initializedP95Ms_small": 0.2441440000000057,
+        "initializedMaxMs_small": 0.2441440000000057,
+        "initializedMeanMs_small": 0.18904600000005303,
+        "initializedStdDevMs_small": 0.03359728178884583,
+        "createMinMs_small": 0.5672859999999673,
+        "createP50Ms_small": 0.6346269999999095,
+        "createP95Ms_small": 0.686533000000054,
+        "createMaxMs_small": 0.686533000000054,
+        "createMeanMs_small": 0.6280063999999583,
+        "createStdDevMs_small": 0.04142467068596571,
+        "enumerateMinMs_small": 0.02987400000006346,
+        "enumerateP50Ms_small": 0.033761000000140484,
+        "enumerateP95Ms_small": 0.06204200000001947,
+        "enumerateMaxMs_small": 0.06204200000001947,
+        "enumerateMeanMs_small": 0.039923399999997854,
+        "enumerateStdDevMs_small": 0.011853480511652323,
+        "initializedMinMs_medium": 0.15598199999999451,
+        "initializedP50Ms_medium": 0.16215199999987817,
+        "initializedP95Ms_medium": 0.16487499999993815,
+        "initializedMaxMs_medium": 0.16487499999993815,
+        "initializedMeanMs_medium": 0.1606413999999404,
+        "initializedStdDevMs_medium": 0.0036895781655532805,
+        "createMinMs_medium": 0.9109479999999621,
+        "createP50Ms_medium": 0.9600010000001475,
+        "createP95Ms_medium": 1.0348639999999705,
+        "createMaxMs_medium": 1.0348639999999705,
+        "createMeanMs_medium": 0.9646384000000126,
+        "createStdDevMs_medium": 0.0480383159846418,
+        "enumerateMinMs_medium": 0.02849200000014207,
+        "enumerateP50Ms_medium": 0.02970499999992171,
+        "enumerateP95Ms_medium": 0.0864489999999023,
+        "enumerateMaxMs_medium": 0.0864489999999023,
+        "enumerateMeanMs_medium": 0.04095120000001771,
+        "enumerateStdDevMs_medium": 0.022757942063317844,
+        "initializedMinMs_stress": 0.1659070000000611,
+        "initializedP50Ms_stress": 0.16939299999989998,
+        "initializedP95Ms_stress": 0.22436500000003434,
+        "initializedMaxMs_stress": 0.22436500000003434,
+        "initializedMeanMs_stress": 0.17993839999994635,
+        "initializedStdDevMs_stress": 0.022297887017420397,
+        "createMinMs_stress": 7.035371000000168,
+        "createP50Ms_stress": 7.333425000000034,
+        "createP95Ms_stress": 7.48433,
+        "createMaxMs_stress": 7.48433,
+        "createMeanMs_stress": 7.260847000000058,
+        "createStdDevMs_stress": 0.1654729164388615,
+        "enumerateMinMs_stress": 0.05065500000000611,
+        "enumerateP50Ms_stress": 0.057335999999850173,
+        "enumerateP95Ms_stress": 0.07530200000019249,
+        "enumerateMaxMs_stress": 0.07530200000019249,
+        "enumerateMeanMs_stress": 0.05984920000000784,
+        "enumerateStdDevMs_stress": 0.008561970647085599
+      }
+    },
+    {
+      "scenarioId": "S0-PER-002",
+      "title": "Alias-open, mutation, conflict, and journal p50/p95 are measured comparably",
+      "criterionType": "relative",
+      "status": "Pass",
+      "durationMs": 473.44572500000004,
+      "evidence": {
+        "scales": "small,medium,stress",
+        "warmupIterations": 3,
+        "timingMethod": "performance.now monotonic elapsed time",
+        "reportedStatistics": "min,p50,p95,max,mean,stddev",
+        "repetitions_small": 40,
+        "repetitions_medium": 20,
+        "repetitions_stress": 8
+      },
+      "measurements": {
+        "openByAliasMinMs_small": 0.10111099999994622,
+        "openByAliasP50Ms_small": 0.16357399999992595,
+        "openByAliasP95Ms_small": 0.19994800000017676,
+        "openByAliasMaxMs_small": 0.25086400000009235,
+        "openByAliasMeanMs_small": 0.16591170000001512,
+        "openByAliasStdDevMs_small": 0.022763301273338976,
+        "mutationMinMs_small": 1.0331900000001042,
+        "mutationP50Ms_small": 1.2206899999998768,
+        "mutationP95Ms_small": 2.220139999999901,
+        "mutationMaxMs_small": 2.9975690000001123,
+        "mutationMeanMs_small": 1.350798074999983,
+        "mutationStdDevMs_small": 0.40701722105216254,
+        "conflictMinMs_small": 0.540286000000151,
+        "conflictP50Ms_small": 0.639363000000003,
+        "conflictP95Ms_small": 0.8795910000001186,
+        "conflictMaxMs_small": 1.8390520000000379,
+        "conflictMeanMs_small": 0.7010590000000321,
+        "conflictStdDevMs_small": 0.23295594521067592,
+        "openByAliasMinMs_medium": 0.4568609999998898,
+        "openByAliasP50Ms_medium": 0.5344470000000001,
+        "openByAliasP95Ms_medium": 0.6879860000001372,
+        "openByAliasMaxMs_medium": 1.1996990000000096,
+        "openByAliasMeanMs_medium": 0.5823006999999848,
+        "openByAliasStdDevMs_medium": 0.1534230470555692,
+        "mutationMinMs_medium": 1.6775920000000042,
+        "mutationP50Ms_medium": 1.8768180000001848,
+        "mutationP95Ms_medium": 2.5036639999998442,
+        "mutationMaxMs_medium": 2.6203270000000884,
+        "mutationMeanMs_medium": 1.9890144999999961,
+        "mutationStdDevMs_medium": 0.2723524375904144,
+        "conflictMinMs_medium": 0.700935999999956,
+        "conflictP50Ms_medium": 0.7974990000000162,
+        "conflictP95Ms_medium": 1.1489939999999024,
+        "conflictMaxMs_medium": 1.8610059999998612,
+        "conflictMeanMs_medium": 0.8685922999999889,
+        "conflictStdDevMs_medium": 0.24478399063826345,
+        "openByAliasMinMs_stress": 9.520376999999826,
+        "openByAliasP50Ms_stress": 9.588708999999653,
+        "openByAliasP95Ms_stress": 12.072642999999971,
+        "openByAliasMaxMs_stress": 12.072642999999971,
+        "openByAliasMeanMs_stress": 10.351089374999958,
+        "openByAliasStdDevMs_stress": 1.0224996111306572,
+        "mutationMinMs_stress": 14.911195000000134,
+        "mutationP50Ms_stress": 15.17283499999985,
+        "mutationP95Ms_stress": 17.805241000000024,
+        "mutationMaxMs_stress": 17.805241000000024,
+        "mutationMeanMs_stress": 16.16741862500004,
+        "mutationStdDevMs_stress": 1.2768119482809872,
+        "conflictMinMs_stress": 5.520481999999902,
+        "conflictP50Ms_stress": 5.719348999999966,
+        "conflictP95Ms_stress": 6.699661000000106,
+        "conflictMaxMs_stress": 6.699661000000106,
+        "conflictMeanMs_stress": 5.8645215000000235,
+        "conflictStdDevMs_stress": 0.3458255020848867
+      }
+    },
+    {
+      "scenarioId": "S0-PER-003",
+      "title": "Backup/restore time, store size, memory, and write amplification are measured comparably",
+      "criterionType": "relative",
+      "status": "Pass",
+      "durationMs": 1112.6024350000002,
+      "evidence": {
+        "scales": "small,medium,stress",
+        "discardedWarmupRuns": 1,
+        "repetitions": 5,
+        "timingMethod": "performance.now monotonic elapsed time",
+        "reportedStatistics": "min,p50,p95,max,mean,stddev",
+        "rawSamples": {
+          "small": {
+            "backupMs": [
+              0.1618519999997261,
+              0.15910799999983283,
+              0.16121100000009392,
+              0.16128100000014456,
+              0.16266300000006595
+            ],
+            "restoreMs": [
+              0.8807430000001659,
+              0.6672749999997905,
+              0.680084000000079,
+              0.623739999999998,
+              0.7353969999999208
+            ],
+            "storeBytes": [
+              3881,
+              3881,
+              3881,
+              3881,
+              3881
+            ],
+            "payloadBytes": [
+              3861,
+              3861,
+              3861,
+              3861,
+              3861
+            ],
+            "writeAmplification": [
+              1.0051800051800053,
+              1.0051800051800053,
+              1.0051800051800053,
+              1.0051800051800053,
+              1.0051800051800053
+            ]
+          },
+          "medium": {
+            "backupMs": [
+              0.33683300000029703,
+              0.3119149999997717,
+              0.29652200000009543,
+              0.29364799999984825,
+              0.7200540000003457
+            ],
+            "restoreMs": [
+              0.9514290000001893,
+              1.0068209999999453,
+              0.9711579999998321,
+              0.986210999999912,
+              1.8322220000000016
+            ],
+            "storeBytes": [
+              25480,
+              25480,
+              25480,
+              25480,
+              25480
+            ],
+            "payloadBytes": [
+              25460,
+              25460,
+              25460,
+              25460,
+              25460
+            ],
+            "writeAmplification": [
+              1.0007855459544384,
+              1.0007855459544384,
+              1.0007855459544384,
+              1.0007855459544384,
+              1.0007855459544384
+            ]
+          },
+          "stress": {
+            "backupMs": [
+              3.7369730000000345,
+              4.14759499999991,
+              3.4137110000001485,
+              3.5258380000000216,
+              3.5172750000001543
+            ],
+            "restoreMs": [
+              7.079531999999745,
+              7.061149999999998,
+              6.609095000000252,
+              6.910841000000346,
+              6.764662000000044
+            ],
+            "storeBytes": [
+              479783,
+              479783,
+              479783,
+              479783,
+              479783
+            ],
+            "payloadBytes": [
+              479763,
+              479763,
+              479763,
+              479763,
+              479763
+            ],
+            "writeAmplification": [
+              1.0000416872497462,
+              1.0000416872497462,
+              1.0000416872497462,
+              1.0000416872497462,
+              1.0000416872497462
+            ]
+          }
+        }
+      },
+      "measurements": {
+        "backupMinMs_small": 0.15910799999983283,
+        "backupP50Ms_small": 0.16128100000014456,
+        "backupP95Ms_small": 0.16266300000006595,
+        "backupMaxMs_small": 0.16266300000006595,
+        "backupMeanMs_small": 0.16122299999997267,
+        "backupStdDevMs_small": 0.0011786410819725425,
+        "restoreMinMs_small": 0.623739999999998,
+        "restoreP50Ms_small": 0.680084000000079,
+        "restoreP95Ms_small": 0.8807430000001659,
+        "restoreMaxMs_small": 0.8807430000001659,
+        "restoreMeanMs_small": 0.7174477999999909,
+        "restoreStdDevMs_small": 0.08908648754425876,
+        "storeMinBytes_small": 3881,
+        "storeP50Bytes_small": 3881,
+        "storeP95Bytes_small": 3881,
+        "storeMaxBytes_small": 3881,
+        "storeMeanBytes_small": 3881,
+        "storeStdDevBytes_small": 0,
+        "payloadMinBytes_small": 3861,
+        "payloadP50Bytes_small": 3861,
+        "payloadP95Bytes_small": 3861,
+        "payloadMaxBytes_small": 3861,
+        "payloadMeanBytes_small": 3861,
+        "payloadStdDevBytes_small": 0,
+        "writeAmplificationMinRatio_small": 1.0051800051800053,
+        "writeAmplificationP50Ratio_small": 1.0051800051800053,
+        "writeAmplificationP95Ratio_small": 1.0051800051800053,
+        "writeAmplificationMaxRatio_small": 1.0051800051800053,
+        "writeAmplificationMeanRatio_small": 1.0051800051800053,
+        "writeAmplificationStdDevRatio_small": 0,
+        "backupMinMs_medium": 0.29364799999984825,
+        "backupP50Ms_medium": 0.3119149999997717,
+        "backupP95Ms_medium": 0.7200540000003457,
+        "backupMaxMs_medium": 0.7200540000003457,
+        "backupMeanMs_medium": 0.3917944000000716,
+        "backupStdDevMs_medium": 0.16484258252129053,
+        "restoreMinMs_medium": 0.9514290000001893,
+        "restoreP50Ms_medium": 0.986210999999912,
+        "restoreP95Ms_medium": 1.8322220000000016,
+        "restoreMaxMs_medium": 1.8322220000000016,
+        "restoreMeanMs_medium": 1.149568199999976,
+        "restoreStdDevMs_medium": 0.34180927155208396,
+        "storeMinBytes_medium": 25480,
+        "storeP50Bytes_medium": 25480,
+        "storeP95Bytes_medium": 25480,
+        "storeMaxBytes_medium": 25480,
+        "storeMeanBytes_medium": 25480,
+        "storeStdDevBytes_medium": 0,
+        "payloadMinBytes_medium": 25460,
+        "payloadP50Bytes_medium": 25460,
+        "payloadP95Bytes_medium": 25460,
+        "payloadMaxBytes_medium": 25460,
+        "payloadMeanBytes_medium": 25460,
+        "payloadStdDevBytes_medium": 0,
+        "writeAmplificationMinRatio_medium": 1.0007855459544384,
+        "writeAmplificationP50Ratio_medium": 1.0007855459544384,
+        "writeAmplificationP95Ratio_medium": 1.0007855459544384,
+        "writeAmplificationMaxRatio_medium": 1.0007855459544384,
+        "writeAmplificationMeanRatio_medium": 1.0007855459544384,
+        "writeAmplificationStdDevRatio_medium": 0,
+        "backupMinMs_stress": 3.4137110000001485,
+        "backupP50Ms_stress": 3.5258380000000216,
+        "backupP95Ms_stress": 4.14759499999991,
+        "backupMaxMs_stress": 4.14759499999991,
+        "backupMeanMs_stress": 3.668278400000054,
+        "backupStdDevMs_stress": 0.26167124664777,
+        "restoreMinMs_stress": 6.609095000000252,
+        "restoreP50Ms_stress": 6.910841000000346,
+        "restoreP95Ms_stress": 7.079531999999745,
+        "restoreMaxMs_stress": 7.079531999999745,
+        "restoreMeanMs_stress": 6.885056000000077,
+        "restoreStdDevMs_stress": 0.17896595564171863,
+        "storeMinBytes_stress": 479783,
+        "storeP50Bytes_stress": 479783,
+        "storeP95Bytes_stress": 479783,
+        "storeMaxBytes_stress": 479783,
+        "storeMeanBytes_stress": 479783,
+        "storeStdDevBytes_stress": 0,
+        "payloadMinBytes_stress": 479763,
+        "payloadP50Bytes_stress": 479763,
+        "payloadP95Bytes_stress": 479763,
+        "payloadMaxBytes_stress": 479763,
+        "payloadMeanBytes_stress": 479763,
+        "payloadStdDevBytes_stress": 0,
+        "writeAmplificationMinRatio_stress": 1.0000416872497462,
+        "writeAmplificationP50Ratio_stress": 1.0000416872497462,
+        "writeAmplificationP95Ratio_stress": 1.0000416872497462,
+        "writeAmplificationMaxRatio_stress": 1.0000416872497462,
+        "writeAmplificationMeanRatio_stress": 1.0000416872497462,
+        "writeAmplificationStdDevRatio_stress": 0
+      }
+    },
+    {
+      "scenarioId": "S0-PER-005",
+      "title": "Operational and implementation complexity is recorded using the same rubric",
+      "criterionType": "relative",
+      "status": "Pass",
+      "durationMs": 0.29185499999994136,
+      "evidence": {
+        "scale": "1=trivial, 2=low, 3=moderate, 4=high, 5=very high",
+        "dependencies": 1,
+        "implementation": 3,
+        "test": 3,
+        "migration": 2,
+        "deployment": 1,
+        "maintenance": 3,
+        "diagnostics": 3,
+        "recovery": 3,
+        "rationale": {
+          "dependencies": "Built-in filesystem and crypto APIs",
+          "implementation": "Envelope, alias index, lock ownership, fsync, and atomic replace",
+          "test": "Filesystem race, process-kill, torn-replace, corruption, and backup fixtures",
+          "migration": "Envelope migration with explicit original preservation",
+          "deployment": "No service, credential, or external package",
+          "maintenance": "Filesystem and platform-specific durability behavior",
+          "diagnostics": "Envelope, index, lock, and temp-file diagnostics",
+          "recovery": "Stale-lock, temp-file, index rebuild, and replace recovery"
+        },
+        "total": 19,
+        "mean": 2.375
+      },
+      "measurements": {}
+    }
+  ]
+}

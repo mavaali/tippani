@@ -1,0 +1,2617 @@
+{
+  "schemaVersion": 2,
+  "syntheticData": true,
+  "harnessRevision": "s0-harness-v3-campaign-aggregate",
+  "startedAt": "2026-08-31T23:01:51.656Z",
+  "completedAt": "2026-08-31T23:04:01.076Z",
+  "configuration": {
+    "configurationId": "CFG-ADO-LIVE",
+    "adapter": "ado",
+    "backingPath": "ado",
+    "platform": "windows-ntfs",
+    "scale": "small",
+    "runId": "cfg-ado-live-aggregate",
+    "durable": false,
+    "host": "win32 x64 node 24.14.0",
+    "applicabilityProfile": "ado",
+    "campaignCount": 3,
+    "campaignRunIds": [
+      "s0-ado-live-c1-1788212697875",
+      "s0-ado-live-c2-1788212697875",
+      "s0-ado-live-c3-1788212697875"
+    ]
+  },
+  "preflight": {
+    "configurationId": "CFG-ADO-LIVE",
+    "runId": "cfg-ado-live-aggregate",
+    "adapter": "ado",
+    "backingPath": "ado",
+    "syntheticDataOnly": true,
+    "sandbox": {
+      "approved": true,
+      "kind": "provider-live",
+      "identityLabel": "Live delegated identity (supplied at runtime)",
+      "identityVerified": true,
+      "ownershipMarker": "redacted-per-campaign",
+      "namespace": "redacted-per-campaign",
+      "defaultBranchExcluded": true,
+      "corporateFallbackDisabled": true,
+      "dryRunOperations": [
+        "connect",
+        "read-item",
+        "push",
+        "list-items",
+        "list-commits",
+        "delete-ref"
+      ],
+      "cleanup": {
+        "manifestId": "see-campaign-preflights",
+        "expiresAt": "see-campaign-preflights"
+      }
+    },
+    "budgets": {
+      "maxOperations": 100,
+      "maxDurationMs": 300000,
+      "maxObjects": 10000,
+      "maxBytes": 104857600
+    }
+  },
+  "environment": {
+    "os": "win32 10.0.26200",
+    "architecture": "x64",
+    "cpuModel": "Intel(R) Core(TM) Ultra 7 165H",
+    "logicalCpuCount": 22,
+    "totalMemoryBytes": 33983225856,
+    "nodeVersion": "24.14.0",
+    "providerApiVersion": "Azure DevOps Git REST 7.1",
+    "configuredPlatform": "windows-ntfs",
+    "temporaryStoreRoot": "tippani-s0-s0-ado-live-c1-1788212697875-P9vy9c",
+    "networkCharacteristics": "Local Windows client to provider service over current network path",
+    "providerRegion": "Provider-managed; client region not asserted",
+    "storageCharacteristics": "Provider-authoritative envelope plus local Windows client cache",
+    "syncClientState": "Not applicable",
+    "repositoryProtections": "Default branch excluded; all mutations use a per-run branch",
+    "dependencyVersions": "node=24.14.0; sqlite=3.51.2",
+    "workloadMix": "scenario-defined deterministic small/medium/stress fixtures",
+    "knownLimitations": "Single physical Windows machine; two independent client processes share one provider identity",
+    "processTopology": "Independent OS child processes sharing one provider account for collaboration gates",
+    "campaignCount": 3
+  },
+  "applicableScenarioIds": [
+    "S0-COL-002",
+    "S0-COL-003",
+    "S0-COL-004",
+    "S0-COL-005",
+    "S0-COL-006",
+    "S0-BCK-005",
+    "S0-MIG-004",
+    "S0-BKP-003",
+    "S0-BKP-004",
+    "S0-REC-003",
+    "S0-REC-004",
+    "S0-SEC-001",
+    "S0-SEC-002",
+    "S0-SEC-003",
+    "S0-SEC-004",
+    "S0-SEC-005",
+    "S0-SEC-006",
+    "S0-PER-004",
+    "S0-PER-005",
+    "S0-BCK-003"
+  ],
+  "catalogSize": 58,
+  "catalog": [
+    {
+      "id": "S0-ATM-001",
+      "criterionType": "absolute",
+      "title": "A multi-field workspace mutation commits completely or not at all"
+    },
+    {
+      "id": "S0-ATM-002",
+      "criterionType": "absolute",
+      "title": "Branch-to-PR alias transition preserves one workspace and commits alias/index/state atomically"
+    },
+    {
+      "id": "S0-ATM-003",
+      "criterionType": "absolute",
+      "title": "Failed mutation exposes no empty-body intent, mixed generation, or dangling alias"
+    },
+    {
+      "id": "S0-CON-001",
+      "criterionType": "absolute",
+      "title": "Portal/user and Copilot/MCP writers from generation g produce one winner and one typed stale conflict"
+    },
+    {
+      "id": "S0-CON-002",
+      "criterionType": "absolute",
+      "title": "Multiple headless/automation clients cannot overwrite a newer generation"
+    },
+    {
+      "id": "S0-CON-003",
+      "criterionType": "absolute",
+      "title": "Independent workspaces progress concurrently without global serialization"
+    },
+    {
+      "id": "S0-CON-004",
+      "criterionType": "absolute",
+      "title": "Concurrent staging during publication preserves the newer intent revision"
+    },
+    {
+      "id": "S0-CON-005",
+      "criterionType": "absolute",
+      "title": "Lock/CAS contention is bounded, observable, and retryable"
+    },
+    {
+      "id": "S0-JRN-001",
+      "criterionType": "absolute",
+      "title": "Frozen intent tuples and planned journal become durable atomically before any provider operation"
+    },
+    {
+      "id": "S0-JRN-002",
+      "criterionType": "absolute",
+      "title": "No journal references a missing workspace, generation, or intent revision"
+    },
+    {
+      "id": "S0-CRS-001",
+      "criterionType": "absolute",
+      "title": "Kill before/during/after commit recovers only the complete previous or committed generation"
+    },
+    {
+      "id": "S0-CRS-002",
+      "criterionType": "absolute",
+      "title": "Kill during alias/index update never exposes a partially updated index"
+    },
+    {
+      "id": "S0-CRS-003",
+      "criterionType": "absolute",
+      "title": "Kill during backup or migration leaves an unambiguous recoverable state"
+    },
+    {
+      "id": "S0-COL-001",
+      "criterionType": "absolute",
+      "title": "Independent local actors observe one stable workspace/generation and equal concurrency rules"
+    },
+    {
+      "id": "S0-COL-002",
+      "criterionType": "absolute",
+      "title": "Two users on a shared backing path cannot silently overwrite each other"
+    },
+    {
+      "id": "S0-COL-003",
+      "criterionType": "absolute",
+      "title": "Two devices reconnecting from different generations receive deterministic conflict/reload behavior"
+    },
+    {
+      "id": "S0-COL-004",
+      "criterionType": "absolute",
+      "title": "Remote success with a lost response is reconciled without duplicate generation or false failure"
+    },
+    {
+      "id": "S0-COL-005",
+      "criterionType": "absolute",
+      "title": "Offline work remains pending until authoritative CAS confirmation and reconciles without silent overwrite"
+    },
+    {
+      "id": "S0-COL-006",
+      "criterionType": "absolute",
+      "title": "Another collaborator discovers a committed generation through the backing path change mechanism"
+    },
+    {
+      "id": "S0-BCK-001",
+      "criterionType": "absolute",
+      "title": "Local flush and atomic replace preserve file and index durability under supported filesystems"
+    },
+    {
+      "id": "S0-BCK-002",
+      "criterionType": "absolute",
+      "title": "OneDrive ETag/version preconditions reject stale updates and support version recovery"
+    },
+    {
+      "id": "S0-BCK-003",
+      "criterionType": "absolute",
+      "title": "ADO object/ref preconditions reject stale updates and preserve one auditable generation commit"
+    },
+    {
+      "id": "S0-BCK-004",
+      "criterionType": "absolute",
+      "title": "GitHub object/ref preconditions reject stale updates and preserve one auditable generation commit"
+    },
+    {
+      "id": "S0-BCK-005",
+      "criterionType": "absolute",
+      "title": "Provider outage, throttling, auth expiry, quota, or permission loss never produces success-shaped state"
+    },
+    {
+      "id": "S0-BCK-006",
+      "criterionType": "relative",
+      "title": "Synced-folder conflict behavior is measured separately from provider-API CAS"
+    },
+    {
+      "id": "S0-COR-001",
+      "criterionType": "absolute",
+      "title": "Truncated, invalid, checksum-failing, or damaged primary state is detected and preserved/quarantined"
+    },
+    {
+      "id": "S0-COR-002",
+      "criterionType": "absolute",
+      "title": "Missing/dangling aliases and duplicate identities fail closed"
+    },
+    {
+      "id": "S0-COR-003",
+      "criterionType": "absolute",
+      "title": "Unsupported schema/provider-operation version fails closed with a typed state"
+    },
+    {
+      "id": "S0-COR-004",
+      "criterionType": "absolute",
+      "title": "Permission-denied or unreadable existing state is never treated as an absent/new store"
+    },
+    {
+      "id": "S0-HYD-001",
+      "criterionType": "absolute",
+      "title": "Startup enumerates and validates all workspaces/aliases before APIs open"
+    },
+    {
+      "id": "S0-HYD-002",
+      "criterionType": "absolute",
+      "title": "Rehydration restores exact generation, intent order, private state, journal state, and last selection"
+    },
+    {
+      "id": "S0-HYD-003",
+      "criterionType": "absolute",
+      "title": "Incomplete/indeterminate journals are surfaced for reconciliation before mutation is accepted"
+    },
+    {
+      "id": "S0-MIG-001",
+      "criterionType": "absolute",
+      "title": "Forward migration is transactional or resumable, idempotent, and preserves originals/audit"
+    },
+    {
+      "id": "S0-MIG-002",
+      "criterionType": "absolute",
+      "title": "Interrupted migration resumes or rolls back without ambiguity"
+    },
+    {
+      "id": "S0-MIG-003",
+      "criterionType": "absolute",
+      "title": "Unsupported source version and downgrade policy are explicit and fail closed"
+    },
+    {
+      "id": "S0-MIG-004",
+      "criterionType": "absolute",
+      "title": "Local-to-OneDrive/ADO/GitHub rehome preserves WorkspaceId and establishes one authority only after receipt"
+    },
+    {
+      "id": "S0-IMP-001",
+      "criterionType": "absolute",
+      "title": "Complete checksummed legacy envelope validates before atomic import"
+    },
+    {
+      "id": "S0-IMP-002",
+      "criterionType": "absolute",
+      "title": "Failed/corrupt/duplicate legacy import preserves source and creates no partial destination"
+    },
+    {
+      "id": "S0-BKP-001",
+      "criterionType": "absolute",
+      "title": "Active-store backup is internally consistent at one logical generation"
+    },
+    {
+      "id": "S0-BKP-002",
+      "criterionType": "absolute",
+      "title": "Restore reproduces exact workspace/journal state and rejects incomplete/corrupt backup"
+    },
+    {
+      "id": "S0-BKP-003",
+      "criterionType": "absolute",
+      "title": "Shared-backing history/export recovers a known generation without rewriting newer valid history"
+    },
+    {
+      "id": "S0-BKP-004",
+      "criterionType": "absolute",
+      "title": "Restored shared workspace establishes one explicit authoritative head"
+    },
+    {
+      "id": "S0-REC-001",
+      "criterionType": "absolute",
+      "title": "Clean and forced shutdown restart recover exact durable state"
+    },
+    {
+      "id": "S0-REC-002",
+      "criterionType": "absolute",
+      "title": "Stale lock recovery removes only provably owned stale state"
+    },
+    {
+      "id": "S0-REC-003",
+      "criterionType": "absolute",
+      "title": "Provider outage/auth/throttle/lost-response recovery reconciles authoritative state"
+    },
+    {
+      "id": "S0-REC-004",
+      "criterionType": "absolute",
+      "title": "Local offline cache reconciles against newer authority without silent overwrite"
+    },
+    {
+      "id": "S0-REC-005",
+      "criterionType": "absolute",
+      "title": "Diagnostics identify recovery state without exposing content or credentials"
+    },
+    {
+      "id": "S0-SEC-001",
+      "criterionType": "absolute",
+      "title": "Preflight rejects non-allow-listed, unmarked, default/protected, or production coordinates before provider calls"
+    },
+    {
+      "id": "S0-SEC-002",
+      "criterionType": "absolute",
+      "title": "Effective sandbox identity is verified and corporate-account fallback is impossible"
+    },
+    {
+      "id": "S0-SEC-003",
+      "criterionType": "absolute",
+      "title": "Only synthetic data appears in stores, fixtures, logs, backups, screenshots, dumps, and reports"
+    },
+    {
+      "id": "S0-SEC-004",
+      "criterionType": "absolute",
+      "title": "Credentials remain brokered/redacted and absent from workspace state and evidence"
+    },
+    {
+      "id": "S0-SEC-005",
+      "criterionType": "absolute",
+      "title": "Cleanup/reaper deletes only run-owned resources recorded in the manifest"
+    },
+    {
+      "id": "S0-SEC-006",
+      "criterionType": "absolute",
+      "title": "Provider request/object/time/storage budgets stop unsafe or abusive runs"
+    },
+    {
+      "id": "S0-PER-001",
+      "criterionType": "relative",
+      "title": "Cold startup and enumeration are measured at small, medium, and stress scale"
+    },
+    {
+      "id": "S0-PER-002",
+      "criterionType": "relative",
+      "title": "Alias-open, mutation, conflict, and journal p50/p95 are measured comparably"
+    },
+    {
+      "id": "S0-PER-003",
+      "criterionType": "relative",
+      "title": "Backup/restore time, store size, memory, and write amplification are measured comparably"
+    },
+    {
+      "id": "S0-PER-004",
+      "criterionType": "relative",
+      "title": "Provider requests, bytes, throttling, CAS latency, and collaborator discovery are measured comparably"
+    },
+    {
+      "id": "S0-PER-005",
+      "criterionType": "relative",
+      "title": "Operational and implementation complexity is recorded using the same rubric"
+    }
+  ],
+  "results": [
+    {
+      "scenarioId": "S0-COL-002",
+      "title": "Two users on a shared backing path cannot silently overwrite each other",
+      "criterionType": "absolute",
+      "status": "Pass",
+      "durationMs": 3232.4515000000006,
+      "evidence": {
+        "accounts": 1,
+        "clientProcesses": 2,
+        "logicalActors": "Synthetic Client 1,Synthetic Client 2",
+        "winners": 1,
+        "staleConflicts": 1,
+        "noSilentOverwrite": true,
+        "campaigns": {
+          "campaign-1": {
+            "status": "Pass",
+            "evidence": {
+              "accounts": 1,
+              "clientProcesses": 2,
+              "logicalActors": "Synthetic Client 1,Synthetic Client 2",
+              "winners": 1,
+              "staleConflicts": 1,
+              "noSilentOverwrite": true
+            },
+            "measurements": {}
+          },
+          "campaign-2": {
+            "status": "Pass",
+            "evidence": {
+              "accounts": 1,
+              "clientProcesses": 2,
+              "logicalActors": "Synthetic Client 1,Synthetic Client 2",
+              "winners": 1,
+              "staleConflicts": 1,
+              "noSilentOverwrite": true
+            },
+            "measurements": {}
+          },
+          "campaign-3": {
+            "status": "Pass",
+            "evidence": {
+              "accounts": 1,
+              "clientProcesses": 2,
+              "logicalActors": "Synthetic Client 1,Synthetic Client 2",
+              "winners": 1,
+              "staleConflicts": 1,
+              "noSilentOverwrite": true
+            },
+            "measurements": {}
+          }
+        }
+      },
+      "measurements": {}
+    },
+    {
+      "scenarioId": "S0-COL-003",
+      "title": "Two devices reconnecting from different generations receive deterministic conflict/reload behavior",
+      "criterionType": "absolute",
+      "status": "Pass",
+      "durationMs": 4168.712266666667,
+      "evidence": {
+        "accounts": 1,
+        "clientProcesses": 2,
+        "staleGeneration": 0,
+        "reloadedGeneration": 1,
+        "reconciledGeneration": 2,
+        "deterministicReconnect": true,
+        "campaigns": {
+          "campaign-1": {
+            "status": "Pass",
+            "evidence": {
+              "accounts": 1,
+              "clientProcesses": 2,
+              "staleGeneration": 0,
+              "reloadedGeneration": 1,
+              "reconciledGeneration": 2,
+              "deterministicReconnect": true
+            },
+            "measurements": {}
+          },
+          "campaign-2": {
+            "status": "Pass",
+            "evidence": {
+              "accounts": 1,
+              "clientProcesses": 2,
+              "staleGeneration": 0,
+              "reloadedGeneration": 1,
+              "reconciledGeneration": 2,
+              "deterministicReconnect": true
+            },
+            "measurements": {}
+          },
+          "campaign-3": {
+            "status": "Pass",
+            "evidence": {
+              "accounts": 1,
+              "clientProcesses": 2,
+              "staleGeneration": 0,
+              "reloadedGeneration": 1,
+              "reconciledGeneration": 2,
+              "deterministicReconnect": true
+            },
+            "measurements": {}
+          }
+        }
+      },
+      "measurements": {}
+    },
+    {
+      "scenarioId": "S0-COL-004",
+      "title": "Remote success with a lost response is reconciled without duplicate generation or false failure",
+      "criterionType": "absolute",
+      "status": "Pass",
+      "durationMs": 1762.0993000000005,
+      "evidence": {
+        "lostResponseDetected": true,
+        "noDuplicate": true,
+        "reconciledGeneration": 1,
+        "campaigns": {
+          "campaign-1": {
+            "status": "Pass",
+            "evidence": {
+              "lostResponseDetected": true,
+              "noDuplicate": true,
+              "reconciledGeneration": 1
+            },
+            "measurements": {}
+          },
+          "campaign-2": {
+            "status": "Pass",
+            "evidence": {
+              "lostResponseDetected": true,
+              "noDuplicate": true,
+              "reconciledGeneration": 1
+            },
+            "measurements": {}
+          },
+          "campaign-3": {
+            "status": "Pass",
+            "evidence": {
+              "lostResponseDetected": true,
+              "noDuplicate": true,
+              "reconciledGeneration": 1
+            },
+            "measurements": {}
+          }
+        }
+      },
+      "measurements": {}
+    },
+    {
+      "scenarioId": "S0-COL-005",
+      "title": "Offline work remains pending until authoritative CAS confirmation and reconciles without silent overwrite",
+      "criterionType": "absolute",
+      "status": "Pass",
+      "durationMs": 2619.793833333333,
+      "evidence": {
+        "offlinePendingConflicted": true,
+        "noSilentOverwrite": true,
+        "authorityGeneration": 2,
+        "campaigns": {
+          "campaign-1": {
+            "status": "Pass",
+            "evidence": {
+              "offlinePendingConflicted": true,
+              "noSilentOverwrite": true,
+              "authorityGeneration": 2
+            },
+            "measurements": {}
+          },
+          "campaign-2": {
+            "status": "Pass",
+            "evidence": {
+              "offlinePendingConflicted": true,
+              "noSilentOverwrite": true,
+              "authorityGeneration": 2
+            },
+            "measurements": {}
+          },
+          "campaign-3": {
+            "status": "Pass",
+            "evidence": {
+              "offlinePendingConflicted": true,
+              "noSilentOverwrite": true,
+              "authorityGeneration": 2
+            },
+            "measurements": {}
+          }
+        }
+      },
+      "measurements": {}
+    },
+    {
+      "scenarioId": "S0-COL-006",
+      "title": "Another collaborator discovers a committed generation through the backing path change mechanism",
+      "criterionType": "absolute",
+      "status": "Pass",
+      "durationMs": 3225.753833333334,
+      "evidence": {
+        "accounts": 1,
+        "clientProcesses": 2,
+        "changeMechanism": "ADO branch/ref and item polling",
+        "observedGeneration": 1,
+        "campaigns": {
+          "campaign-1": {
+            "status": "Pass",
+            "evidence": {
+              "accounts": 1,
+              "clientProcesses": 2,
+              "changeMechanism": "ADO branch/ref and item polling",
+              "observedGeneration": 1
+            },
+            "measurements": {
+              "collaboratorDiscoveryMs": 329
+            }
+          },
+          "campaign-2": {
+            "status": "Pass",
+            "evidence": {
+              "accounts": 1,
+              "clientProcesses": 2,
+              "changeMechanism": "ADO branch/ref and item polling",
+              "observedGeneration": 1
+            },
+            "measurements": {
+              "collaboratorDiscoveryMs": 396
+            }
+          },
+          "campaign-3": {
+            "status": "Pass",
+            "evidence": {
+              "accounts": 1,
+              "clientProcesses": 2,
+              "changeMechanism": "ADO branch/ref and item polling",
+              "observedGeneration": 1
+            },
+            "measurements": {
+              "collaboratorDiscoveryMs": 438
+            }
+          }
+        }
+      },
+      "measurements": {
+        "collaboratorDiscoveryMs": 387.6666666666667
+      }
+    },
+    {
+      "scenarioId": "S0-BCK-003",
+      "title": "ADO object/ref preconditions reject stale updates and preserve one auditable generation commit",
+      "criterionType": "absolute",
+      "status": "Pass",
+      "durationMs": 2216.8941666666674,
+      "evidence": {
+        "winners": 1,
+        "staleConflicts": 1,
+        "durableGeneration": 2,
+        "campaigns": {
+          "campaign-1": {
+            "status": "Pass",
+            "evidence": {
+              "winners": 1,
+              "staleConflicts": 1,
+              "durableGeneration": 2
+            },
+            "measurements": {}
+          },
+          "campaign-2": {
+            "status": "Pass",
+            "evidence": {
+              "winners": 1,
+              "staleConflicts": 1,
+              "durableGeneration": 2
+            },
+            "measurements": {}
+          },
+          "campaign-3": {
+            "status": "Pass",
+            "evidence": {
+              "winners": 1,
+              "staleConflicts": 1,
+              "durableGeneration": 2
+            },
+            "measurements": {}
+          }
+        }
+      },
+      "measurements": {}
+    },
+    {
+      "scenarioId": "S0-BCK-005",
+      "title": "Provider outage, throttling, auth expiry, quota, or permission loss never produces success-shaped state",
+      "criterionType": "absolute",
+      "status": "Pass",
+      "durationMs": 2026.1898666666668,
+      "evidence": {
+        "faultsRejected": 3,
+        "generationUnchanged": true,
+        "throttleResponses": 1,
+        "retries": 0,
+        "transferredBytes": 35900,
+        "campaigns": {
+          "campaign-1": {
+            "status": "Pass",
+            "evidence": {
+              "faultsRejected": 3,
+              "generationUnchanged": true,
+              "throttleResponses": 1,
+              "retries": 0,
+              "transferredBytes": 35900
+            },
+            "measurements": {}
+          },
+          "campaign-2": {
+            "status": "Pass",
+            "evidence": {
+              "faultsRejected": 3,
+              "generationUnchanged": true,
+              "throttleResponses": 1,
+              "retries": 0,
+              "transferredBytes": 35900
+            },
+            "measurements": {}
+          },
+          "campaign-3": {
+            "status": "Pass",
+            "evidence": {
+              "faultsRejected": 3,
+              "generationUnchanged": true,
+              "throttleResponses": 1,
+              "retries": 0,
+              "transferredBytes": 35900
+            },
+            "measurements": {}
+          }
+        }
+      },
+      "measurements": {}
+    },
+    {
+      "scenarioId": "S0-MIG-004",
+      "title": "Local-to-OneDrive/ADO/GitHub rehome preserves WorkspaceId and establishes one authority only after receipt",
+      "criterionType": "absolute",
+      "status": "Pass",
+      "durationMs": 1050.0186666666675,
+      "evidence": {
+        "workspaceIdPreserved": true,
+        "generation": 1,
+        "receipt": true,
+        "campaigns": {
+          "campaign-1": {
+            "status": "Pass",
+            "evidence": {
+              "workspaceIdPreserved": true,
+              "generation": 1,
+              "receipt": true
+            },
+            "measurements": {}
+          },
+          "campaign-2": {
+            "status": "Pass",
+            "evidence": {
+              "workspaceIdPreserved": true,
+              "generation": 1,
+              "receipt": true
+            },
+            "measurements": {}
+          },
+          "campaign-3": {
+            "status": "Pass",
+            "evidence": {
+              "workspaceIdPreserved": true,
+              "generation": 1,
+              "receipt": true
+            },
+            "measurements": {}
+          }
+        }
+      },
+      "measurements": {}
+    },
+    {
+      "scenarioId": "S0-BKP-003",
+      "title": "Shared-backing history/export recovers a known generation without rewriting newer valid history",
+      "criterionType": "absolute",
+      "status": "Pass",
+      "durationMs": 2293.823999999999,
+      "evidence": {
+        "recoveredGeneration": 1,
+        "campaigns": {
+          "campaign-1": {
+            "status": "Pass",
+            "evidence": {
+              "recoveredGeneration": 1
+            },
+            "measurements": {}
+          },
+          "campaign-2": {
+            "status": "Pass",
+            "evidence": {
+              "recoveredGeneration": 1
+            },
+            "measurements": {}
+          },
+          "campaign-3": {
+            "status": "Pass",
+            "evidence": {
+              "recoveredGeneration": 1
+            },
+            "measurements": {}
+          }
+        }
+      },
+      "measurements": {}
+    },
+    {
+      "scenarioId": "S0-BKP-004",
+      "title": "Restored shared workspace establishes one explicit authoritative head",
+      "criterionType": "absolute",
+      "status": "Pass",
+      "durationMs": 3447.8951666666676,
+      "evidence": {
+        "restoredGeneration": 2,
+        "oneHead": true,
+        "campaigns": {
+          "campaign-1": {
+            "status": "Pass",
+            "evidence": {
+              "restoredGeneration": 2,
+              "oneHead": true
+            },
+            "measurements": {}
+          },
+          "campaign-2": {
+            "status": "Pass",
+            "evidence": {
+              "restoredGeneration": 2,
+              "oneHead": true
+            },
+            "measurements": {}
+          },
+          "campaign-3": {
+            "status": "Pass",
+            "evidence": {
+              "restoredGeneration": 2,
+              "oneHead": true
+            },
+            "measurements": {}
+          }
+        }
+      },
+      "measurements": {}
+    },
+    {
+      "scenarioId": "S0-REC-003",
+      "title": "Provider outage/auth/throttle/lost-response recovery reconciles authoritative state",
+      "criterionType": "absolute",
+      "status": "Pass",
+      "durationMs": 1706.9335333333318,
+      "evidence": {
+        "outageRejected": true,
+        "recoveredGeneration": 1,
+        "campaigns": {
+          "campaign-1": {
+            "status": "Pass",
+            "evidence": {
+              "outageRejected": true,
+              "recoveredGeneration": 1
+            },
+            "measurements": {}
+          },
+          "campaign-2": {
+            "status": "Pass",
+            "evidence": {
+              "outageRejected": true,
+              "recoveredGeneration": 1
+            },
+            "measurements": {}
+          },
+          "campaign-3": {
+            "status": "Pass",
+            "evidence": {
+              "outageRejected": true,
+              "recoveredGeneration": 1
+            },
+            "measurements": {}
+          }
+        }
+      },
+      "measurements": {}
+    },
+    {
+      "scenarioId": "S0-REC-004",
+      "title": "Local offline cache reconciles against newer authority without silent overwrite",
+      "criterionType": "absolute",
+      "status": "Pass",
+      "durationMs": 2247.8121333333343,
+      "evidence": {
+        "discoveredNewerAuthority": true,
+        "noSilentOverwrite": true,
+        "campaigns": {
+          "campaign-1": {
+            "status": "Pass",
+            "evidence": {
+              "discoveredNewerAuthority": true,
+              "noSilentOverwrite": true
+            },
+            "measurements": {}
+          },
+          "campaign-2": {
+            "status": "Pass",
+            "evidence": {
+              "discoveredNewerAuthority": true,
+              "noSilentOverwrite": true
+            },
+            "measurements": {}
+          },
+          "campaign-3": {
+            "status": "Pass",
+            "evidence": {
+              "discoveredNewerAuthority": true,
+              "noSilentOverwrite": true
+            },
+            "measurements": {}
+          }
+        }
+      },
+      "measurements": {}
+    },
+    {
+      "scenarioId": "S0-SEC-001",
+      "title": "Preflight rejects non-allow-listed, unmarked, default/protected, or production coordinates before provider calls",
+      "criterionType": "absolute",
+      "status": "Pass",
+      "durationMs": 0.8541333333317501,
+      "evidence": {
+        "providerPreflightRejected": true,
+        "errorCount": 8,
+        "campaigns": {
+          "campaign-1": {
+            "status": "Pass",
+            "evidence": {
+              "providerPreflightRejected": true,
+              "errorCount": 8
+            },
+            "measurements": {}
+          },
+          "campaign-2": {
+            "status": "Pass",
+            "evidence": {
+              "providerPreflightRejected": true,
+              "errorCount": 8
+            },
+            "measurements": {}
+          },
+          "campaign-3": {
+            "status": "Pass",
+            "evidence": {
+              "providerPreflightRejected": true,
+              "errorCount": 8
+            },
+            "measurements": {}
+          }
+        }
+      },
+      "measurements": {}
+    },
+    {
+      "scenarioId": "S0-SEC-002",
+      "title": "Effective sandbox identity is verified and corporate-account fallback is impossible",
+      "criterionType": "absolute",
+      "status": "Pass",
+      "durationMs": 0.6270333333316861,
+      "evidence": {
+        "corporateFallbackImpossible": true,
+        "campaigns": {
+          "campaign-1": {
+            "status": "Pass",
+            "evidence": {
+              "corporateFallbackImpossible": true
+            },
+            "measurements": {}
+          },
+          "campaign-2": {
+            "status": "Pass",
+            "evidence": {
+              "corporateFallbackImpossible": true
+            },
+            "measurements": {}
+          },
+          "campaign-3": {
+            "status": "Pass",
+            "evidence": {
+              "corporateFallbackImpossible": true
+            },
+            "measurements": {}
+          }
+        }
+      },
+      "measurements": {}
+    },
+    {
+      "scenarioId": "S0-SEC-003",
+      "title": "Only synthetic data appears in stores, fixtures, logs, backups, screenshots, dumps, and reports",
+      "criterionType": "absolute",
+      "status": "Pass",
+      "durationMs": 1.081600000000132,
+      "evidence": {
+        "syntheticFixtureAccepted": true,
+        "actualDataRejected": true,
+        "campaigns": {
+          "campaign-1": {
+            "status": "Pass",
+            "evidence": {
+              "syntheticFixtureAccepted": true,
+              "actualDataRejected": true
+            },
+            "measurements": {}
+          },
+          "campaign-2": {
+            "status": "Pass",
+            "evidence": {
+              "syntheticFixtureAccepted": true,
+              "actualDataRejected": true
+            },
+            "measurements": {}
+          },
+          "campaign-3": {
+            "status": "Pass",
+            "evidence": {
+              "syntheticFixtureAccepted": true,
+              "actualDataRejected": true
+            },
+            "measurements": {}
+          }
+        }
+      },
+      "measurements": {}
+    },
+    {
+      "scenarioId": "S0-SEC-004",
+      "title": "Credentials remain brokered/redacted and absent from workspace state and evidence",
+      "criterionType": "absolute",
+      "status": "Pass",
+      "durationMs": 1.409566666666554,
+      "evidence": {
+        "configSecretRejected": true,
+        "workspaceHasNoSecrets": true,
+        "campaigns": {
+          "campaign-1": {
+            "status": "Pass",
+            "evidence": {
+              "configSecretRejected": true,
+              "workspaceHasNoSecrets": true
+            },
+            "measurements": {}
+          },
+          "campaign-2": {
+            "status": "Pass",
+            "evidence": {
+              "configSecretRejected": true,
+              "workspaceHasNoSecrets": true
+            },
+            "measurements": {}
+          },
+          "campaign-3": {
+            "status": "Pass",
+            "evidence": {
+              "configSecretRejected": true,
+              "workspaceHasNoSecrets": true
+            },
+            "measurements": {}
+          }
+        }
+      },
+      "measurements": {}
+    },
+    {
+      "scenarioId": "S0-SEC-005",
+      "title": "Cleanup/reaper deletes only run-owned resources recorded in the manifest",
+      "criterionType": "absolute",
+      "status": "Pass",
+      "durationMs": 0.5922999999990376,
+      "evidence": {
+        "ownedAuthorized": true,
+        "foreignRefused": true,
+        "campaigns": {
+          "campaign-1": {
+            "status": "Pass",
+            "evidence": {
+              "ownedAuthorized": true,
+              "foreignRefused": true
+            },
+            "measurements": {}
+          },
+          "campaign-2": {
+            "status": "Pass",
+            "evidence": {
+              "ownedAuthorized": true,
+              "foreignRefused": true
+            },
+            "measurements": {}
+          },
+          "campaign-3": {
+            "status": "Pass",
+            "evidence": {
+              "ownedAuthorized": true,
+              "foreignRefused": true
+            },
+            "measurements": {}
+          }
+        }
+      },
+      "measurements": {}
+    },
+    {
+      "scenarioId": "S0-SEC-006",
+      "title": "Provider request/object/time/storage budgets stop unsafe or abusive runs",
+      "criterionType": "absolute",
+      "status": "Pass",
+      "durationMs": 0.7844666666678677,
+      "evidence": {
+        "nonPositiveBudgetsRejected": true,
+        "campaigns": {
+          "campaign-1": {
+            "status": "Pass",
+            "evidence": {
+              "nonPositiveBudgetsRejected": true
+            },
+            "measurements": {}
+          },
+          "campaign-2": {
+            "status": "Pass",
+            "evidence": {
+              "nonPositiveBudgetsRejected": true
+            },
+            "measurements": {}
+          },
+          "campaign-3": {
+            "status": "Pass",
+            "evidence": {
+              "nonPositiveBudgetsRejected": true
+            },
+            "measurements": {}
+          }
+        }
+      },
+      "measurements": {}
+    },
+    {
+      "scenarioId": "S0-PER-004",
+      "title": "Provider requests, bytes, throttling, CAS latency, and collaborator discovery are measured comparably",
+      "criterionType": "relative",
+      "status": "Pass",
+      "durationMs": 12485.416133333332,
+      "evidence": {
+        "scales": "small,medium,stress",
+        "warmupIterations": 3,
+        "timingMethod": "performance.now monotonic elapsed time",
+        "reportedStatistics": "min,p50,p95,max,mean,stddev",
+        "byteMethod": "UTF-8 application payload bytes submitted or consumed",
+        "rawSamples": {
+          "small": {
+            "remoteCasMs": [
+              590.5216,
+              532.7466000000022,
+              486.50640000000203,
+              540.0548999999955,
+              707.0645000000004,
+              581.7793999999994
+            ],
+            "collaboratorDiscoveryMs": [
+              108.09869999999864,
+              93.18380000000252,
+              106.77720000000409,
+              107.15400000000227,
+              132.2161999999953,
+              110.68999999999505
+            ],
+            "requestsPerMutation": [
+              4,
+              4,
+              4,
+              4,
+              4,
+              4
+            ],
+            "transferredBytesPerMutation": [
+              9059,
+              9240,
+              9422,
+              9604,
+              9786,
+              9968
+            ],
+            "requestBytesPerMutation": [
+              3115,
+              3181,
+              3247,
+              3313,
+              3379,
+              3445
+            ],
+            "responseBytesPerMutation": [
+              5944,
+              6059,
+              6175,
+              6291,
+              6407,
+              6523
+            ],
+            "retriesPerMutation": [
+              0,
+              0,
+              0,
+              0,
+              0,
+              0
+            ]
+          },
+          "medium": {
+            "remoteCasMs": [
+              585.6157999999996,
+              487.02560000000085,
+              493.96510000000126,
+              473.87690000000293
+            ],
+            "collaboratorDiscoveryMs": [
+              107.44250000000466,
+              112.69080000000395,
+              107.08580000000075,
+              118.62279999999737
+            ],
+            "requestsPerMutation": [
+              4,
+              4,
+              4,
+              4
+            ],
+            "transferredBytesPerMutation": [
+              77827,
+              78008,
+              78190,
+              78372
+            ],
+            "requestBytesPerMutation": [
+              27125,
+              27191,
+              27257,
+              27323
+            ],
+            "responseBytesPerMutation": [
+              50702,
+              50817,
+              50933,
+              51049
+            ],
+            "retriesPerMutation": [
+              0,
+              0,
+              0,
+              0
+            ]
+          },
+          "stress": {
+            "remoteCasMs": [
+              982.9493999999977,
+              1021.1298000000024
+            ],
+            "collaboratorDiscoveryMs": [
+              198.2193000000043,
+              181.76859999999579
+            ],
+            "requestsPerMutation": [
+              4,
+              4
+            ],
+            "transferredBytesPerMutation": [
+              1474432,
+              1474613
+            ],
+            "requestBytesPerMutation": [
+              514510,
+              514576
+            ],
+            "responseBytesPerMutation": [
+              959922,
+              960037
+            ],
+            "retriesPerMutation": [
+              0,
+              0
+            ]
+          }
+        },
+        "repetitions_small": 6,
+        "requestsPerMutation_small": 4,
+        "bytesPerMutation_small": 9513.167,
+        "throttleResponses_small": 0,
+        "retries_small": 0,
+        "retryAfterSeconds_small": [],
+        "backoffMs_small": 0,
+        "requestCount_small": 24,
+        "requestBytes_small": 19680,
+        "responseBytes_small": 37399,
+        "repetitions_medium": 4,
+        "requestsPerMutation_medium": 4,
+        "bytesPerMutation_medium": 78099.25,
+        "throttleResponses_medium": 0,
+        "retries_medium": 0,
+        "retryAfterSeconds_medium": [],
+        "backoffMs_medium": 0,
+        "requestCount_medium": 16,
+        "requestBytes_medium": 108896,
+        "responseBytes_medium": 203501,
+        "repetitions_stress": 2,
+        "requestsPerMutation_stress": 4,
+        "bytesPerMutation_stress": 1474522.5,
+        "throttleResponses_stress": 0,
+        "retries_stress": 0,
+        "retryAfterSeconds_stress": [],
+        "backoffMs_stress": 0,
+        "requestCount_stress": 8,
+        "requestBytes_stress": 1029086,
+        "responseBytes_stress": 1919959,
+        "throttleResponses": 1,
+        "throttleRetries": 0,
+        "throttleRetryAfterSeconds": [
+          1
+        ],
+        "throttleBackoffMs": 0,
+        "throttleBehavior": "typed failure; no success-shaped state",
+        "campaigns": {
+          "campaign-1": {
+            "status": "Pass",
+            "evidence": {
+              "scales": "small,medium,stress",
+              "warmupIterations": 3,
+              "timingMethod": "performance.now monotonic elapsed time",
+              "reportedStatistics": "min,p50,p95,max,mean,stddev",
+              "byteMethod": "UTF-8 application payload bytes submitted or consumed",
+              "rawSamples": {
+                "small": {
+                  "remoteCasMs": [
+                    590.5216,
+                    532.7466000000022,
+                    486.50640000000203,
+                    540.0548999999955,
+                    707.0645000000004,
+                    581.7793999999994
+                  ],
+                  "collaboratorDiscoveryMs": [
+                    108.09869999999864,
+                    93.18380000000252,
+                    106.77720000000409,
+                    107.15400000000227,
+                    132.2161999999953,
+                    110.68999999999505
+                  ],
+                  "requestsPerMutation": [
+                    4,
+                    4,
+                    4,
+                    4,
+                    4,
+                    4
+                  ],
+                  "transferredBytesPerMutation": [
+                    9059,
+                    9240,
+                    9422,
+                    9604,
+                    9786,
+                    9968
+                  ],
+                  "requestBytesPerMutation": [
+                    3115,
+                    3181,
+                    3247,
+                    3313,
+                    3379,
+                    3445
+                  ],
+                  "responseBytesPerMutation": [
+                    5944,
+                    6059,
+                    6175,
+                    6291,
+                    6407,
+                    6523
+                  ],
+                  "retriesPerMutation": [
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0
+                  ]
+                },
+                "medium": {
+                  "remoteCasMs": [
+                    585.6157999999996,
+                    487.02560000000085,
+                    493.96510000000126,
+                    473.87690000000293
+                  ],
+                  "collaboratorDiscoveryMs": [
+                    107.44250000000466,
+                    112.69080000000395,
+                    107.08580000000075,
+                    118.62279999999737
+                  ],
+                  "requestsPerMutation": [
+                    4,
+                    4,
+                    4,
+                    4
+                  ],
+                  "transferredBytesPerMutation": [
+                    77827,
+                    78008,
+                    78190,
+                    78372
+                  ],
+                  "requestBytesPerMutation": [
+                    27125,
+                    27191,
+                    27257,
+                    27323
+                  ],
+                  "responseBytesPerMutation": [
+                    50702,
+                    50817,
+                    50933,
+                    51049
+                  ],
+                  "retriesPerMutation": [
+                    0,
+                    0,
+                    0,
+                    0
+                  ]
+                },
+                "stress": {
+                  "remoteCasMs": [
+                    982.9493999999977,
+                    1021.1298000000024
+                  ],
+                  "collaboratorDiscoveryMs": [
+                    198.2193000000043,
+                    181.76859999999579
+                  ],
+                  "requestsPerMutation": [
+                    4,
+                    4
+                  ],
+                  "transferredBytesPerMutation": [
+                    1474432,
+                    1474613
+                  ],
+                  "requestBytesPerMutation": [
+                    514510,
+                    514576
+                  ],
+                  "responseBytesPerMutation": [
+                    959922,
+                    960037
+                  ],
+                  "retriesPerMutation": [
+                    0,
+                    0
+                  ]
+                }
+              },
+              "repetitions_small": 6,
+              "requestsPerMutation_small": 4,
+              "bytesPerMutation_small": 9513.167,
+              "throttleResponses_small": 0,
+              "retries_small": 0,
+              "retryAfterSeconds_small": [],
+              "backoffMs_small": 0,
+              "requestCount_small": 24,
+              "requestBytes_small": 19680,
+              "responseBytes_small": 37399,
+              "repetitions_medium": 4,
+              "requestsPerMutation_medium": 4,
+              "bytesPerMutation_medium": 78099.25,
+              "throttleResponses_medium": 0,
+              "retries_medium": 0,
+              "retryAfterSeconds_medium": [],
+              "backoffMs_medium": 0,
+              "requestCount_medium": 16,
+              "requestBytes_medium": 108896,
+              "responseBytes_medium": 203501,
+              "repetitions_stress": 2,
+              "requestsPerMutation_stress": 4,
+              "bytesPerMutation_stress": 1474522.5,
+              "throttleResponses_stress": 0,
+              "retries_stress": 0,
+              "retryAfterSeconds_stress": [],
+              "backoffMs_stress": 0,
+              "requestCount_stress": 8,
+              "requestBytes_stress": 1029086,
+              "responseBytes_stress": 1919959,
+              "throttleResponses": 1,
+              "throttleRetries": 0,
+              "throttleRetryAfterSeconds": [
+                1
+              ],
+              "throttleBackoffMs": 0,
+              "throttleBehavior": "typed failure; no success-shaped state"
+            },
+            "measurements": {
+              "setupMs_small": 697.4435999999987,
+              "warmupMs_small": 275.690300000002,
+              "remoteCasMinMs_small": 486.50640000000203,
+              "remoteCasP50Ms_small": 540.0548999999955,
+              "remoteCasP95Ms_small": 707.0645000000004,
+              "remoteCasMaxMs_small": 707.0645000000004,
+              "remoteCasMeanMs_small": 573.1122333333333,
+              "remoteCasStdDevMs_small": 68.97361522081371,
+              "collaboratorDiscoveryMinMs_small": 93.18380000000252,
+              "collaboratorDiscoveryP50Ms_small": 107.15400000000227,
+              "collaboratorDiscoveryP95Ms_small": 132.2161999999953,
+              "collaboratorDiscoveryMaxMs_small": 132.2161999999953,
+              "collaboratorDiscoveryMeanMs_small": 109.68664999999964,
+              "collaboratorDiscoveryStdDevMs_small": 11.534962744302385,
+              "cleanupMs_small": 0.04579999999987194,
+              "setupMs_medium": 827.9639000000025,
+              "warmupMs_medium": 324.4493999999977,
+              "remoteCasMinMs_medium": 473.87690000000293,
+              "remoteCasP50Ms_medium": 487.02560000000085,
+              "remoteCasP95Ms_medium": 585.6157999999996,
+              "remoteCasMaxMs_medium": 585.6157999999996,
+              "remoteCasMeanMs_medium": 510.12085000000116,
+              "remoteCasStdDevMs_medium": 44.18005833441612,
+              "collaboratorDiscoveryMinMs_medium": 107.08580000000075,
+              "collaboratorDiscoveryP50Ms_medium": 107.44250000000466,
+              "collaboratorDiscoveryP95Ms_medium": 118.62279999999737,
+              "collaboratorDiscoveryMaxMs_medium": 118.62279999999737,
+              "collaboratorDiscoveryMeanMs_medium": 111.46047500000168,
+              "collaboratorDiscoveryStdDevMs_medium": 4.692933609892326,
+              "cleanupMs_medium": 0.008399999998800922,
+              "setupMs_stress": 1430.891499999998,
+              "warmupMs_stress": 797.4582999999984,
+              "remoteCasMinMs_stress": 982.9493999999977,
+              "remoteCasP50Ms_stress": 982.9493999999977,
+              "remoteCasP95Ms_stress": 1021.1298000000024,
+              "remoteCasMaxMs_stress": 1021.1298000000024,
+              "remoteCasMeanMs_stress": 1002.0396000000001,
+              "remoteCasStdDevMs_stress": 19.09020000000237,
+              "collaboratorDiscoveryMinMs_stress": 181.76859999999579,
+              "collaboratorDiscoveryP50Ms_stress": 181.76859999999579,
+              "collaboratorDiscoveryP95Ms_stress": 198.2193000000043,
+              "collaboratorDiscoveryMaxMs_stress": 198.2193000000043,
+              "collaboratorDiscoveryMeanMs_stress": 189.99395000000004,
+              "collaboratorDiscoveryStdDevMs_stress": 8.225350000004255,
+              "cleanupMs_stress": 0.024600000004284084,
+              "throttleFailureLatencyMs": 298.18390000000363
+            }
+          },
+          "campaign-2": {
+            "status": "Pass",
+            "evidence": {
+              "scales": "small,medium,stress",
+              "warmupIterations": 3,
+              "timingMethod": "performance.now monotonic elapsed time",
+              "reportedStatistics": "min,p50,p95,max,mean,stddev",
+              "byteMethod": "UTF-8 application payload bytes submitted or consumed",
+              "rawSamples": {
+                "small": {
+                  "remoteCasMs": [
+                    451.5076000000008,
+                    549.2138999999988,
+                    488.17059999999765,
+                    500.9066000000021,
+                    480.14840000000186,
+                    513.2587999999996
+                  ],
+                  "collaboratorDiscoveryMs": [
+                    86.01829999999973,
+                    88.09150000000227,
+                    81.42250000000058,
+                    85.50720000000001,
+                    96.48199999999997,
+                    78.0505000000012
+                  ],
+                  "requestsPerMutation": [
+                    4,
+                    4,
+                    4,
+                    4,
+                    4,
+                    4
+                  ],
+                  "transferredBytesPerMutation": [
+                    9059,
+                    9240,
+                    9422,
+                    9604,
+                    9786,
+                    9968
+                  ],
+                  "requestBytesPerMutation": [
+                    3115,
+                    3181,
+                    3247,
+                    3313,
+                    3379,
+                    3445
+                  ],
+                  "responseBytesPerMutation": [
+                    5944,
+                    6059,
+                    6175,
+                    6291,
+                    6407,
+                    6523
+                  ],
+                  "retriesPerMutation": [
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0
+                  ]
+                },
+                "medium": {
+                  "remoteCasMs": [
+                    550.5878000000012,
+                    524.0156999999999,
+                    511.0822999999982,
+                    564.056899999996
+                  ],
+                  "collaboratorDiscoveryMs": [
+                    109.96609999999782,
+                    111.02560000000085,
+                    113.08299999999872,
+                    139.49150000000373
+                  ],
+                  "requestsPerMutation": [
+                    4,
+                    4,
+                    4,
+                    4
+                  ],
+                  "transferredBytesPerMutation": [
+                    77827,
+                    78008,
+                    78190,
+                    78372
+                  ],
+                  "requestBytesPerMutation": [
+                    27125,
+                    27191,
+                    27257,
+                    27323
+                  ],
+                  "responseBytesPerMutation": [
+                    50702,
+                    50817,
+                    50933,
+                    51049
+                  ],
+                  "retriesPerMutation": [
+                    0,
+                    0,
+                    0,
+                    0
+                  ]
+                },
+                "stress": {
+                  "remoteCasMs": [
+                    733.8390999999974,
+                    721.0731000000014
+                  ],
+                  "collaboratorDiscoveryMs": [
+                    190.45910000000003,
+                    157.01710000000458
+                  ],
+                  "requestsPerMutation": [
+                    4,
+                    4
+                  ],
+                  "transferredBytesPerMutation": [
+                    1474432,
+                    1474613
+                  ],
+                  "requestBytesPerMutation": [
+                    514510,
+                    514576
+                  ],
+                  "responseBytesPerMutation": [
+                    959922,
+                    960037
+                  ],
+                  "retriesPerMutation": [
+                    0,
+                    0
+                  ]
+                }
+              },
+              "repetitions_small": 6,
+              "requestsPerMutation_small": 4,
+              "bytesPerMutation_small": 9513.167,
+              "throttleResponses_small": 0,
+              "retries_small": 0,
+              "retryAfterSeconds_small": [],
+              "backoffMs_small": 0,
+              "requestCount_small": 24,
+              "requestBytes_small": 19680,
+              "responseBytes_small": 37399,
+              "repetitions_medium": 4,
+              "requestsPerMutation_medium": 4,
+              "bytesPerMutation_medium": 78099.25,
+              "throttleResponses_medium": 0,
+              "retries_medium": 0,
+              "retryAfterSeconds_medium": [],
+              "backoffMs_medium": 0,
+              "requestCount_medium": 16,
+              "requestBytes_medium": 108896,
+              "responseBytes_medium": 203501,
+              "repetitions_stress": 2,
+              "requestsPerMutation_stress": 4,
+              "bytesPerMutation_stress": 1474522.5,
+              "throttleResponses_stress": 0,
+              "retries_stress": 0,
+              "retryAfterSeconds_stress": [],
+              "backoffMs_stress": 0,
+              "requestCount_stress": 8,
+              "requestBytes_stress": 1029086,
+              "responseBytes_stress": 1919959,
+              "throttleResponses": 1,
+              "throttleRetries": 0,
+              "throttleRetryAfterSeconds": [
+                1
+              ],
+              "throttleBackoffMs": 0,
+              "throttleBehavior": "typed failure; no success-shaped state"
+            },
+            "measurements": {
+              "setupMs_small": 669.7360999999983,
+              "warmupMs_small": 269.8886999999995,
+              "remoteCasMinMs_small": 451.5076000000008,
+              "remoteCasP50Ms_small": 488.17059999999765,
+              "remoteCasP95Ms_small": 549.2138999999988,
+              "remoteCasMaxMs_small": 549.2138999999988,
+              "remoteCasMeanMs_small": 497.20098333333345,
+              "remoteCasStdDevMs_small": 30.103023859982677,
+              "collaboratorDiscoveryMinMs_small": 78.0505000000012,
+              "collaboratorDiscoveryP50Ms_small": 85.50720000000001,
+              "collaboratorDiscoveryP95Ms_small": 96.48199999999997,
+              "collaboratorDiscoveryMaxMs_small": 96.48199999999997,
+              "collaboratorDiscoveryMeanMs_small": 85.9286666666673,
+              "collaboratorDiscoveryStdDevMs_small": 5.75336725772132,
+              "cleanupMs_small": 0.04460000000108266,
+              "setupMs_medium": 866.392399999997,
+              "warmupMs_medium": 449.59530000000086,
+              "remoteCasMinMs_medium": 511.0822999999982,
+              "remoteCasP50Ms_medium": 524.0156999999999,
+              "remoteCasP95Ms_medium": 564.056899999996,
+              "remoteCasMaxMs_medium": 564.056899999996,
+              "remoteCasMeanMs_medium": 537.4356749999988,
+              "remoteCasStdDevMs_medium": 20.95390247309204,
+              "collaboratorDiscoveryMinMs_medium": 109.96609999999782,
+              "collaboratorDiscoveryP50Ms_medium": 111.02560000000085,
+              "collaboratorDiscoveryP95Ms_medium": 139.49150000000373,
+              "collaboratorDiscoveryMaxMs_medium": 139.49150000000373,
+              "collaboratorDiscoveryMeanMs_medium": 118.39155000000028,
+              "collaboratorDiscoveryStdDevMs_medium": 12.233499297116452,
+              "cleanupMs_medium": 0.006900000000314321,
+              "setupMs_stress": 1403.2223000000013,
+              "warmupMs_stress": 796.3066000000035,
+              "remoteCasMinMs_stress": 721.0731000000014,
+              "remoteCasP50Ms_stress": 721.0731000000014,
+              "remoteCasP95Ms_stress": 733.8390999999974,
+              "remoteCasMaxMs_stress": 733.8390999999974,
+              "remoteCasMeanMs_stress": 727.4560999999994,
+              "remoteCasStdDevMs_stress": 6.382999999997992,
+              "collaboratorDiscoveryMinMs_stress": 157.01710000000458,
+              "collaboratorDiscoveryP50Ms_stress": 157.01710000000458,
+              "collaboratorDiscoveryP95Ms_stress": 190.45910000000003,
+              "collaboratorDiscoveryMaxMs_stress": 190.45910000000003,
+              "collaboratorDiscoveryMeanMs_stress": 173.7381000000023,
+              "collaboratorDiscoveryStdDevMs_stress": 16.72099999999773,
+              "cleanupMs_stress": 0.013500000000931323,
+              "throttleFailureLatencyMs": 284.9089000000022
+            }
+          },
+          "campaign-3": {
+            "status": "Pass",
+            "evidence": {
+              "scales": "small,medium,stress",
+              "warmupIterations": 3,
+              "timingMethod": "performance.now monotonic elapsed time",
+              "reportedStatistics": "min,p50,p95,max,mean,stddev",
+              "byteMethod": "UTF-8 application payload bytes submitted or consumed",
+              "rawSamples": {
+                "small": {
+                  "remoteCasMs": [
+                    585.3109999999979,
+                    600.3283999999985,
+                    576.2695999999996,
+                    573.6425999999992,
+                    485.35589999999866,
+                    497.80669999999736
+                  ],
+                  "collaboratorDiscoveryMs": [
+                    120.25049999999828,
+                    107.11189999999988,
+                    108.24020000000019,
+                    267.7811999999976,
+                    107.92919999999867,
+                    98.19950000000244
+                  ],
+                  "requestsPerMutation": [
+                    4,
+                    4,
+                    4,
+                    4,
+                    4,
+                    4
+                  ],
+                  "transferredBytesPerMutation": [
+                    9059,
+                    9240,
+                    9422,
+                    9604,
+                    9786,
+                    9968
+                  ],
+                  "requestBytesPerMutation": [
+                    3115,
+                    3181,
+                    3247,
+                    3313,
+                    3379,
+                    3445
+                  ],
+                  "responseBytesPerMutation": [
+                    5944,
+                    6059,
+                    6175,
+                    6291,
+                    6407,
+                    6523
+                  ],
+                  "retriesPerMutation": [
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0
+                  ]
+                },
+                "medium": {
+                  "remoteCasMs": [
+                    560.0630999999994,
+                    596.4000999999989,
+                    680.5298000000039,
+                    536.1191000000035
+                  ],
+                  "collaboratorDiscoveryMs": [
+                    89.045100000003,
+                    119.15370000000257,
+                    119.1339999999982,
+                    88.6814000000013
+                  ],
+                  "requestsPerMutation": [
+                    4,
+                    4,
+                    4,
+                    4
+                  ],
+                  "transferredBytesPerMutation": [
+                    77827,
+                    78008,
+                    78190,
+                    78372
+                  ],
+                  "requestBytesPerMutation": [
+                    27125,
+                    27191,
+                    27257,
+                    27323
+                  ],
+                  "responseBytesPerMutation": [
+                    50702,
+                    50817,
+                    50933,
+                    51049
+                  ],
+                  "retriesPerMutation": [
+                    0,
+                    0,
+                    0,
+                    0
+                  ]
+                },
+                "stress": {
+                  "remoteCasMs": [
+                    914.6995000000024,
+                    745.7131000000008
+                  ],
+                  "collaboratorDiscoveryMs": [
+                    266.84470000000147,
+                    265.50670000000537
+                  ],
+                  "requestsPerMutation": [
+                    4,
+                    4
+                  ],
+                  "transferredBytesPerMutation": [
+                    1474432,
+                    1474613
+                  ],
+                  "requestBytesPerMutation": [
+                    514510,
+                    514576
+                  ],
+                  "responseBytesPerMutation": [
+                    959922,
+                    960037
+                  ],
+                  "retriesPerMutation": [
+                    0,
+                    0
+                  ]
+                }
+              },
+              "repetitions_small": 6,
+              "requestsPerMutation_small": 4,
+              "bytesPerMutation_small": 9513.167,
+              "throttleResponses_small": 0,
+              "retries_small": 0,
+              "retryAfterSeconds_small": [],
+              "backoffMs_small": 0,
+              "requestCount_small": 24,
+              "requestBytes_small": 19680,
+              "responseBytes_small": 37399,
+              "repetitions_medium": 4,
+              "requestsPerMutation_medium": 4,
+              "bytesPerMutation_medium": 78099.25,
+              "throttleResponses_medium": 0,
+              "retries_medium": 0,
+              "retryAfterSeconds_medium": [],
+              "backoffMs_medium": 0,
+              "requestCount_medium": 16,
+              "requestBytes_medium": 108896,
+              "responseBytes_medium": 203501,
+              "repetitions_stress": 2,
+              "requestsPerMutation_stress": 4,
+              "bytesPerMutation_stress": 1474522.5,
+              "throttleResponses_stress": 0,
+              "retries_stress": 0,
+              "retryAfterSeconds_stress": [],
+              "backoffMs_stress": 0,
+              "requestCount_stress": 8,
+              "requestBytes_stress": 1029086,
+              "responseBytes_stress": 1919959,
+              "throttleResponses": 1,
+              "throttleRetries": 0,
+              "throttleRetryAfterSeconds": [
+                1
+              ],
+              "throttleBackoffMs": 0,
+              "throttleBehavior": "typed failure; no success-shaped state"
+            },
+            "measurements": {
+              "setupMs_small": 826.0914000000012,
+              "warmupMs_small": 299.2052999999978,
+              "remoteCasMinMs_small": 485.35589999999866,
+              "remoteCasP50Ms_small": 573.6425999999992,
+              "remoteCasP95Ms_small": 600.3283999999985,
+              "remoteCasMaxMs_small": 600.3283999999985,
+              "remoteCasMeanMs_small": 553.1190333333319,
+              "remoteCasStdDevMs_small": 44.48503306838806,
+              "collaboratorDiscoveryMinMs_small": 98.19950000000244,
+              "collaboratorDiscoveryP50Ms_small": 107.92919999999867,
+              "collaboratorDiscoveryP95Ms_small": 267.7811999999976,
+              "collaboratorDiscoveryMaxMs_small": 267.7811999999976,
+              "collaboratorDiscoveryMeanMs_small": 134.9187499999995,
+              "collaboratorDiscoveryStdDevMs_small": 59.762436982961,
+              "cleanupMs_small": 0.044799999999668216,
+              "setupMs_medium": 788.0506999999998,
+              "warmupMs_medium": 368.2410999999993,
+              "remoteCasMinMs_medium": 536.1191000000035,
+              "remoteCasP50Ms_medium": 560.0630999999994,
+              "remoteCasP95Ms_medium": 680.5298000000039,
+              "remoteCasMaxMs_medium": 680.5298000000039,
+              "remoteCasMeanMs_medium": 593.2780250000014,
+              "remoteCasStdDevMs_medium": 54.756263438230995,
+              "collaboratorDiscoveryMinMs_medium": 88.6814000000013,
+              "collaboratorDiscoveryP50Ms_medium": 89.045100000003,
+              "collaboratorDiscoveryP95Ms_medium": 119.15370000000257,
+              "collaboratorDiscoveryMaxMs_medium": 119.15370000000257,
+              "collaboratorDiscoveryMeanMs_medium": 104.00355000000127,
+              "collaboratorDiscoveryStdDevMs_medium": 15.140847641809009,
+              "cleanupMs_medium": 0.008000000001629815,
+              "setupMs_stress": 1566.779499999997,
+              "warmupMs_stress": 830.5152000000016,
+              "remoteCasMinMs_stress": 745.7131000000008,
+              "remoteCasP50Ms_stress": 745.7131000000008,
+              "remoteCasP95Ms_stress": 914.6995000000024,
+              "remoteCasMaxMs_stress": 914.6995000000024,
+              "remoteCasMeanMs_stress": 830.2063000000016,
+              "remoteCasStdDevMs_stress": 84.4932000000008,
+              "collaboratorDiscoveryMinMs_stress": 265.50670000000537,
+              "collaboratorDiscoveryP50Ms_stress": 265.50670000000537,
+              "collaboratorDiscoveryP95Ms_stress": 266.84470000000147,
+              "collaboratorDiscoveryMaxMs_stress": 266.84470000000147,
+              "collaboratorDiscoveryMeanMs_stress": 266.1757000000034,
+              "collaboratorDiscoveryStdDevMs_stress": 0.66899999999805,
+              "cleanupMs_stress": 0.011300000005576294,
+              "throttleFailureLatencyMs": 298.5503000000026
+            }
+          }
+        }
+      },
+      "measurements": {
+        "setupMs_small": 731.090366666666,
+        "warmupMs_small": 281.59476666666643,
+        "remoteCasMinMs_small": 474.45663333333385,
+        "remoteCasP50Ms_small": 533.9560333333308,
+        "remoteCasP95Ms_small": 618.8689333333326,
+        "remoteCasMaxMs_small": 618.8689333333326,
+        "remoteCasMeanMs_small": 541.1440833333328,
+        "remoteCasStdDevMs_small": 47.85389071639482,
+        "collaboratorDiscoveryMinMs_small": 89.81126666666871,
+        "collaboratorDiscoveryP50Ms_small": 100.19680000000032,
+        "collaboratorDiscoveryP95Ms_small": 165.49313333333097,
+        "collaboratorDiscoveryMaxMs_small": 165.49313333333097,
+        "collaboratorDiscoveryMeanMs_small": 110.17802222222217,
+        "collaboratorDiscoveryStdDevMs_small": 25.683588994994903,
+        "cleanupMs_small": 0.045066666666874276,
+        "setupMs_medium": 827.4689999999997,
+        "warmupMs_medium": 380.7619333333326,
+        "remoteCasMinMs_medium": 507.0261000000016,
+        "remoteCasP50Ms_medium": 523.7014666666668,
+        "remoteCasP95Ms_medium": 610.0674999999998,
+        "remoteCasMaxMs_medium": 610.0674999999998,
+        "remoteCasMeanMs_medium": 546.9448500000004,
+        "remoteCasStdDevMs_medium": 39.96340808191305,
+        "collaboratorDiscoveryMinMs_medium": 101.91109999999996,
+        "collaboratorDiscoveryP50Ms_medium": 102.50440000000283,
+        "collaboratorDiscoveryP95Ms_medium": 125.75600000000122,
+        "collaboratorDiscoveryMaxMs_medium": 125.75600000000122,
+        "collaboratorDiscoveryMeanMs_medium": 111.28519166666774,
+        "collaboratorDiscoveryStdDevMs_medium": 10.689093516272594,
+        "cleanupMs_medium": 0.007766666666915019,
+        "setupMs_stress": 1466.964433333332,
+        "warmupMs_stress": 808.0933666666679,
+        "remoteCasMinMs_stress": 816.5785333333333,
+        "remoteCasP50Ms_stress": 816.5785333333333,
+        "remoteCasP95Ms_stress": 889.8894666666674,
+        "remoteCasMaxMs_stress": 889.8894666666674,
+        "remoteCasMeanMs_stress": 853.2340000000004,
+        "remoteCasStdDevMs_stress": 36.65546666666705,
+        "collaboratorDiscoveryMinMs_stress": 201.4308000000019,
+        "collaboratorDiscoveryP50Ms_stress": 201.4308000000019,
+        "collaboratorDiscoveryP95Ms_stress": 218.50770000000193,
+        "collaboratorDiscoveryMaxMs_stress": 218.50770000000193,
+        "collaboratorDiscoveryMeanMs_stress": 209.96925000000192,
+        "collaboratorDiscoveryStdDevMs_stress": 8.538450000000012,
+        "cleanupMs_stress": 0.0164666666702639,
+        "throttleFailureLatencyMs": 293.8810333333361
+      }
+    },
+    {
+      "scenarioId": "S0-PER-005",
+      "title": "Operational and implementation complexity is recorded using the same rubric",
+      "criterionType": "relative",
+      "status": "Pass",
+      "durationMs": 0.36340000000200234,
+      "evidence": {
+        "scale": "1=trivial, 2=low, 3=moderate, 4=high, 5=very high",
+        "dependencies": 2,
+        "implementation": 3,
+        "test": 4,
+        "migration": 3,
+        "deployment": 3,
+        "maintenance": 3,
+        "diagnostics": 3,
+        "recovery": 3,
+        "rationale": {
+          "dependencies": "Azure DevOps Git REST API and scoped authentication",
+          "implementation": "Repository envelope with branch-tip oldObjectId CAS",
+          "test": "Live repository, ref race, offline, failure, history, and cleanup coverage",
+          "migration": "Receipt-gated local-to-repository rehome",
+          "deployment": "Scoped credential, repository coordinates, and per-run branch",
+          "maintenance": "ADO Git REST API and ref semantics",
+          "diagnostics": "Provider responses, request telemetry, branch, commit, and generation state",
+          "recovery": "Auditable commit history plus offline conflict reconciliation"
+        },
+        "total": 24,
+        "mean": 3,
+        "campaigns": {
+          "campaign-1": {
+            "status": "Pass",
+            "evidence": {
+              "scale": "1=trivial, 2=low, 3=moderate, 4=high, 5=very high",
+              "dependencies": 2,
+              "implementation": 3,
+              "test": 4,
+              "migration": 3,
+              "deployment": 3,
+              "maintenance": 3,
+              "diagnostics": 3,
+              "recovery": 3,
+              "rationale": {
+                "dependencies": "Azure DevOps Git REST API and scoped authentication",
+                "implementation": "Repository envelope with branch-tip oldObjectId CAS",
+                "test": "Live repository, ref race, offline, failure, history, and cleanup coverage",
+                "migration": "Receipt-gated local-to-repository rehome",
+                "deployment": "Scoped credential, repository coordinates, and per-run branch",
+                "maintenance": "ADO Git REST API and ref semantics",
+                "diagnostics": "Provider responses, request telemetry, branch, commit, and generation state",
+                "recovery": "Auditable commit history plus offline conflict reconciliation"
+              },
+              "total": 24,
+              "mean": 3
+            },
+            "measurements": {}
+          },
+          "campaign-2": {
+            "status": "Pass",
+            "evidence": {
+              "scale": "1=trivial, 2=low, 3=moderate, 4=high, 5=very high",
+              "dependencies": 2,
+              "implementation": 3,
+              "test": 4,
+              "migration": 3,
+              "deployment": 3,
+              "maintenance": 3,
+              "diagnostics": 3,
+              "recovery": 3,
+              "rationale": {
+                "dependencies": "Azure DevOps Git REST API and scoped authentication",
+                "implementation": "Repository envelope with branch-tip oldObjectId CAS",
+                "test": "Live repository, ref race, offline, failure, history, and cleanup coverage",
+                "migration": "Receipt-gated local-to-repository rehome",
+                "deployment": "Scoped credential, repository coordinates, and per-run branch",
+                "maintenance": "ADO Git REST API and ref semantics",
+                "diagnostics": "Provider responses, request telemetry, branch, commit, and generation state",
+                "recovery": "Auditable commit history plus offline conflict reconciliation"
+              },
+              "total": 24,
+              "mean": 3
+            },
+            "measurements": {}
+          },
+          "campaign-3": {
+            "status": "Pass",
+            "evidence": {
+              "scale": "1=trivial, 2=low, 3=moderate, 4=high, 5=very high",
+              "dependencies": 2,
+              "implementation": 3,
+              "test": 4,
+              "migration": 3,
+              "deployment": 3,
+              "maintenance": 3,
+              "diagnostics": 3,
+              "recovery": 3,
+              "rationale": {
+                "dependencies": "Azure DevOps Git REST API and scoped authentication",
+                "implementation": "Repository envelope with branch-tip oldObjectId CAS",
+                "test": "Live repository, ref race, offline, failure, history, and cleanup coverage",
+                "migration": "Receipt-gated local-to-repository rehome",
+                "deployment": "Scoped credential, repository coordinates, and per-run branch",
+                "maintenance": "ADO Git REST API and ref semantics",
+                "diagnostics": "Provider responses, request telemetry, branch, commit, and generation state",
+                "recovery": "Auditable commit history plus offline conflict reconciliation"
+              },
+              "total": 24,
+              "mean": 3
+            },
+            "measurements": {}
+          }
+        }
+      },
+      "measurements": {}
+    }
+  ],
+  "campaigns": [
+    {
+      "name": "campaign-1",
+      "runId": "s0-ado-live-c1-1788212697875",
+      "raw": "campaign-1/raw-results.json",
+      "report": "campaign-1/outcome.md"
+    },
+    {
+      "name": "campaign-2",
+      "runId": "s0-ado-live-c2-1788212697875",
+      "raw": "campaign-2/raw-results.json",
+      "report": "campaign-2/outcome.md"
+    },
+    {
+      "name": "campaign-3",
+      "runId": "s0-ado-live-c3-1788212697875",
+      "raw": "campaign-3/raw-results.json",
+      "report": "campaign-3/outcome.md"
+    }
+  ],
+  "campaignVariability": {
+    "setupMs_small": {
+      "count": 3,
+      "min": 669.7360999999983,
+      "p50": 697.4435999999987,
+      "p95": 826.0914000000012,
+      "max": 826.0914000000012,
+      "mean": 731.090366666666,
+      "stddev": 83.43155062602872
+    },
+    "warmupMs_small": {
+      "count": 3,
+      "min": 269.8886999999995,
+      "p50": 275.690300000002,
+      "p95": 299.2052999999978,
+      "max": 299.2052999999978,
+      "mean": 281.59476666666643,
+      "stddev": 15.524587075129837
+    },
+    "remoteCasMinMs_small": {
+      "count": 3,
+      "min": 451.5076000000008,
+      "p50": 485.35589999999866,
+      "p95": 486.50640000000203,
+      "max": 486.50640000000203,
+      "mean": 474.45663333333385,
+      "stddev": 19.882769192527594
+    },
+    "remoteCasP50Ms_small": {
+      "count": 3,
+      "min": 488.17059999999765,
+      "p50": 540.0548999999955,
+      "p95": 573.6425999999992,
+      "max": 573.6425999999992,
+      "mean": 533.9560333333308,
+      "stddev": 43.06115217877226
+    },
+    "remoteCasP95Ms_small": {
+      "count": 3,
+      "min": 549.2138999999988,
+      "p50": 600.3283999999985,
+      "p95": 707.0645000000004,
+      "max": 707.0645000000004,
+      "mean": 618.8689333333326,
+      "stddev": 80.54201706130458
+    },
+    "remoteCasMaxMs_small": {
+      "count": 3,
+      "min": 549.2138999999988,
+      "p50": 600.3283999999985,
+      "p95": 707.0645000000004,
+      "max": 707.0645000000004,
+      "mean": 618.8689333333326,
+      "stddev": 80.54201706130458
+    },
+    "remoteCasMeanMs_small": {
+      "count": 3,
+      "min": 497.20098333333345,
+      "p50": 553.1190333333319,
+      "p95": 573.1122333333333,
+      "max": 573.1122333333333,
+      "mean": 541.1440833333328,
+      "stddev": 39.34690635574131
+    },
+    "remoteCasStdDevMs_small": {
+      "count": 3,
+      "min": 30.103023859982677,
+      "p50": 44.48503306838806,
+      "p95": 68.97361522081371,
+      "max": 68.97361522081371,
+      "mean": 47.85389071639482,
+      "stddev": 19.653056240050255
+    },
+    "collaboratorDiscoveryMinMs_small": {
+      "count": 3,
+      "min": 78.0505000000012,
+      "p50": 93.18380000000252,
+      "p95": 98.19950000000244,
+      "max": 98.19950000000244,
+      "mean": 89.81126666666871,
+      "stddev": 10.48932962888231
+    },
+    "collaboratorDiscoveryP50Ms_small": {
+      "count": 3,
+      "min": 85.50720000000001,
+      "p50": 107.15400000000227,
+      "p95": 107.92919999999867,
+      "max": 107.92919999999867,
+      "mean": 100.19680000000032,
+      "stddev": 12.727470089534894
+    },
+    "collaboratorDiscoveryP95Ms_small": {
+      "count": 3,
+      "min": 96.48199999999997,
+      "p50": 132.2161999999953,
+      "p95": 267.7811999999976,
+      "max": 267.7811999999976,
+      "mean": 165.49313333333097,
+      "stddev": 90.36796832513858
+    },
+    "collaboratorDiscoveryMaxMs_small": {
+      "count": 3,
+      "min": 96.48199999999997,
+      "p50": 132.2161999999953,
+      "p95": 267.7811999999976,
+      "max": 267.7811999999976,
+      "mean": 165.49313333333097,
+      "stddev": 90.36796832513858
+    },
+    "collaboratorDiscoveryMeanMs_small": {
+      "count": 3,
+      "min": 85.9286666666673,
+      "p50": 109.68664999999964,
+      "p95": 134.9187499999995,
+      "max": 134.9187499999995,
+      "mean": 110.17802222222217,
+      "stddev": 24.49873774804097
+    },
+    "collaboratorDiscoveryStdDevMs_small": {
+      "count": 3,
+      "min": 5.75336725772132,
+      "p50": 11.534962744302385,
+      "p95": 59.762436982961,
+      "max": 59.762436982961,
+      "mean": 25.683588994994903,
+      "stddev": 29.654386214062658
+    },
+    "cleanupMs_small": {
+      "count": 3,
+      "min": 0.04460000000108266,
+      "p50": 0.044799999999668216,
+      "p95": 0.04579999999987194,
+      "max": 0.04579999999987194,
+      "mean": 0.045066666666874276,
+      "stddev": 0.0006429100503357046
+    },
+    "setupMs_medium": {
+      "count": 3,
+      "min": 788.0506999999998,
+      "p50": 827.9639000000025,
+      "p95": 866.392399999997,
+      "max": 866.392399999997,
+      "mean": 827.4689999999997,
+      "stddev": 39.173194715645714
+    },
+    "warmupMs_medium": {
+      "count": 3,
+      "min": 324.4493999999977,
+      "p50": 368.2410999999993,
+      "p95": 449.59530000000086,
+      "max": 449.59530000000086,
+      "mean": 380.7619333333326,
+      "stddev": 63.50553143013238
+    },
+    "remoteCasMinMs_medium": {
+      "count": 3,
+      "min": 473.87690000000293,
+      "p50": 511.0822999999982,
+      "p95": 536.1191000000035,
+      "max": 536.1191000000035,
+      "mean": 507.0261000000016,
+      "stddev": 31.318723378196598
+    },
+    "remoteCasP50Ms_medium": {
+      "count": 3,
+      "min": 487.02560000000085,
+      "p50": 524.0156999999999,
+      "p95": 560.0630999999994,
+      "max": 560.0630999999994,
+      "mean": 523.7014666666668,
+      "stddev": 36.51976394369603
+    },
+    "remoteCasP95Ms_medium": {
+      "count": 3,
+      "min": 564.056899999996,
+      "p50": 585.6157999999996,
+      "p95": 680.5298000000039,
+      "max": 680.5298000000039,
+      "mean": 610.0674999999998,
+      "stddev": 61.96691321399244
+    },
+    "remoteCasMaxMs_medium": {
+      "count": 3,
+      "min": 564.056899999996,
+      "p50": 585.6157999999996,
+      "p95": 680.5298000000039,
+      "max": 680.5298000000039,
+      "mean": 610.0674999999998,
+      "stddev": 61.96691321399244
+    },
+    "remoteCasMeanMs_medium": {
+      "count": 3,
+      "min": 510.12085000000116,
+      "p50": 537.4356749999988,
+      "p95": 593.2780250000014,
+      "max": 593.2780250000014,
+      "mean": 546.9448500000004,
+      "stddev": 42.38628605316418
+    },
+    "remoteCasStdDevMs_medium": {
+      "count": 3,
+      "min": 20.95390247309204,
+      "p50": 44.18005833441612,
+      "p95": 54.756263438230995,
+      "max": 54.756263438230995,
+      "mean": 39.96340808191305,
+      "stddev": 17.291182903964035
+    },
+    "collaboratorDiscoveryMinMs_medium": {
+      "count": 3,
+      "min": 88.6814000000013,
+      "p50": 107.08580000000075,
+      "p95": 109.96609999999782,
+      "max": 109.96609999999782,
+      "mean": 101.91109999999996,
+      "stddev": 11.547413285665716
+    },
+    "collaboratorDiscoveryP50Ms_medium": {
+      "count": 3,
+      "min": 89.045100000003,
+      "p50": 107.44250000000466,
+      "p95": 111.02560000000085,
+      "max": 111.02560000000085,
+      "mean": 102.50440000000283,
+      "stddev": 11.792973279457128
+    },
+    "collaboratorDiscoveryP95Ms_medium": {
+      "count": 3,
+      "min": 118.62279999999737,
+      "p50": 119.15370000000257,
+      "p95": 139.49150000000373,
+      "max": 139.49150000000373,
+      "mean": 125.75600000000122,
+      "stddev": 11.898253396614688
+    },
+    "collaboratorDiscoveryMaxMs_medium": {
+      "count": 3,
+      "min": 118.62279999999737,
+      "p50": 119.15370000000257,
+      "p95": 139.49150000000373,
+      "max": 139.49150000000373,
+      "mean": 125.75600000000122,
+      "stddev": 11.898253396614688
+    },
+    "collaboratorDiscoveryMeanMs_medium": {
+      "count": 3,
+      "min": 104.00355000000127,
+      "p50": 111.46047500000168,
+      "p95": 118.39155000000028,
+      "max": 118.39155000000028,
+      "mean": 111.28519166666774,
+      "stddev": 7.195601377591825
+    },
+    "collaboratorDiscoveryStdDevMs_medium": {
+      "count": 3,
+      "min": 4.692933609892326,
+      "p50": 12.233499297116452,
+      "p95": 15.140847641809009,
+      "max": 15.140847641809009,
+      "mean": 10.689093516272594,
+      "stddev": 5.3924594404138375
+    },
+    "cleanupMs_medium": {
+      "count": 3,
+      "min": 0.006900000000314321,
+      "p50": 0.008000000001629815,
+      "p95": 0.008399999998800922,
+      "max": 0.008399999998800922,
+      "mean": 0.007766666666915019,
+      "stddev": 0.0007767453460960005
+    },
+    "setupMs_stress": {
+      "count": 3,
+      "min": 1403.2223000000013,
+      "p50": 1430.891499999998,
+      "p95": 1566.779499999997,
+      "max": 1566.779499999997,
+      "mean": 1466.964433333332,
+      "stddev": 87.54245717029549
+    },
+    "warmupMs_stress": {
+      "count": 3,
+      "min": 796.3066000000035,
+      "p50": 797.4582999999984,
+      "p95": 830.5152000000016,
+      "max": 830.5152000000016,
+      "mean": 808.0933666666679,
+      "stddev": 19.42641399598355
+    },
+    "remoteCasMinMs_stress": {
+      "count": 3,
+      "min": 721.0731000000014,
+      "p50": 745.7131000000008,
+      "p95": 982.9493999999977,
+      "max": 982.9493999999977,
+      "mean": 816.5785333333333,
+      "stddev": 144.60716218971575
+    },
+    "remoteCasP50Ms_stress": {
+      "count": 3,
+      "min": 721.0731000000014,
+      "p50": 745.7131000000008,
+      "p95": 982.9493999999977,
+      "max": 982.9493999999977,
+      "mean": 816.5785333333333,
+      "stddev": 144.60716218971575
+    },
+    "remoteCasP95Ms_stress": {
+      "count": 3,
+      "min": 733.8390999999974,
+      "p50": 914.6995000000024,
+      "p95": 1021.1298000000024,
+      "max": 1021.1298000000024,
+      "mean": 889.8894666666674,
+      "stddev": 145.24338157769571
+    },
+    "remoteCasMaxMs_stress": {
+      "count": 3,
+      "min": 733.8390999999974,
+      "p50": 914.6995000000024,
+      "p95": 1021.1298000000024,
+      "max": 1021.1298000000024,
+      "mean": 889.8894666666674,
+      "stddev": 145.24338157769571
+    },
+    "remoteCasMeanMs_stress": {
+      "count": 3,
+      "min": 727.4560999999994,
+      "p50": 830.2063000000016,
+      "p95": 1002.0396000000001,
+      "max": 1002.0396000000001,
+      "mean": 853.2340000000004,
+      "stddev": 138.73258753274243
+    },
+    "remoteCasStdDevMs_stress": {
+      "count": 3,
+      "min": 6.382999999997992,
+      "p50": 19.09020000000237,
+      "p95": 84.4932000000008,
+      "max": 84.4932000000008,
+      "mean": 36.65546666666705,
+      "stddev": 41.913062174140784
+    },
+    "collaboratorDiscoveryMinMs_stress": {
+      "count": 3,
+      "min": 157.01710000000458,
+      "p50": 181.76859999999579,
+      "p95": 265.50670000000537,
+      "max": 265.50670000000537,
+      "mean": 201.4308000000019,
+      "stddev": 56.85463840945806
+    },
+    "collaboratorDiscoveryP50Ms_stress": {
+      "count": 3,
+      "min": 157.01710000000458,
+      "p50": 181.76859999999579,
+      "p95": 265.50670000000537,
+      "max": 265.50670000000537,
+      "mean": 201.4308000000019,
+      "stddev": 56.85463840945806
+    },
+    "collaboratorDiscoveryP95Ms_stress": {
+      "count": 3,
+      "min": 190.45910000000003,
+      "p50": 198.2193000000043,
+      "p95": 266.84470000000147,
+      "max": 266.84470000000147,
+      "mean": 218.50770000000193,
+      "stddev": 42.0405084740894
+    },
+    "collaboratorDiscoveryMaxMs_stress": {
+      "count": 3,
+      "min": 190.45910000000003,
+      "p50": 198.2193000000043,
+      "p95": 266.84470000000147,
+      "max": 266.84470000000147,
+      "mean": 218.50770000000193,
+      "stddev": 42.0405084740894
+    },
+    "collaboratorDiscoveryMeanMs_stress": {
+      "count": 3,
+      "min": 173.7381000000023,
+      "p50": 189.99395000000004,
+      "p95": 266.1757000000034,
+      "max": 266.1757000000034,
+      "mean": 209.96925000000192,
+      "stddev": 49.35014621060011
+    },
+    "collaboratorDiscoveryStdDevMs_stress": {
+      "count": 3,
+      "min": 0.66899999999805,
+      "p50": 8.225350000004255,
+      "p95": 16.72099999999773,
+      "max": 16.72099999999773,
+      "mean": 8.538450000000012,
+      "stddev": 8.030579039365433
+    },
+    "cleanupMs_stress": {
+      "count": 3,
+      "min": 0.011300000005576294,
+      "p50": 0.013500000000931323,
+      "p95": 0.024600000004284084,
+      "max": 0.024600000004284084,
+      "mean": 0.0164666666702639,
+      "stddev": 0.007129048557598934
+    },
+    "throttleFailureLatencyMs": {
+      "count": 3,
+      "min": 284.9089000000022,
+      "p50": 298.18390000000363,
+      "p95": 298.5503000000026,
+      "max": 298.5503000000026,
+      "mean": 293.8810333333361,
+      "stddev": 7.772254798534439
+    }
+  }
+}

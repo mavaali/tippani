@@ -1,0 +1,45 @@
+{
+  "configurationId": "CFG-PROVIDER-ADO-DRYRUN",
+  "adapter": "ado",
+  "backingPath": "ado",
+  "applicabilityProfile": "ado",
+  "platform": "windows-ntfs",
+  "scale": "small",
+  "runId": "s0-provider-ado-dryrun",
+  "syntheticDataOnly": true,
+  "dryRun": true,
+  "budgets": {
+    "maxOperations": 100,
+    "maxDurationMs": 300000,
+    "maxObjects": 10000,
+    "maxBytes": 104857600
+  },
+  "sandbox": {
+    "kind": "provider-template",
+    "approved": true,
+    "allowListed": true,
+    "identityLabel": "Synthetic Sandbox Identity (template - replace before live run)",
+    "identityVerified": true,
+    "corporateFallbackDisabled": true,
+    "defaultBranchExcluded": true,
+    "ownershipMarker": "tippani-s0:s0-provider-ado-dryrun",
+    "namespace": "tippani-s0/s0-provider-ado-dryrun",
+    "coordinates": {
+      "organization": "syn-ado-org",
+      "project": "syn-s0-project",
+      "repository": "syn-s0-repo",
+      "ref": "refs/heads/tippani-s0/s0-provider-ado-dryrun/main"
+    },
+    "dryRunOperations": [
+      "connect",
+      "push-run-marker",
+      "put-workspace",
+      "get-workspace",
+      "export-history"
+    ],
+    "cleanup": {
+      "manifestId": "syn-cleanup-s0-provider-ado-dryrun",
+      "retentionHours": 24
+    }
+  }
+}
