@@ -1,340 +1,364 @@
-# Tippani User Guide
+# Review your first spec in Tippani
 
-A screen-by-screen tour of the Tippani portal: how to **discover**, **read**,
-**annotate**, **edit**, and **author** the Markdown specs in your Git
-repositories — without ever touching a raw diff.
+Tippani lets you read a spec, discuss it with its author, and suggest changes in
+your browser. This walkthrough takes you from opening a review to sharing feedback.
+You don't need to edit the document or use an AI assistant to review it.
 
-All screenshots use placeholder *lorem ipsum* content in a throwaway sandbox.
-Your own repositories and specs will appear in their place.
+A **pull request**, or **PR**, is a proposed update that colleagues review before
+it becomes part of the shared version. Tippani displays the Markdown (`.md`) specs
+in that update. It doesn't display Word documents or PDFs.
 
-## Contents
+**First time using Tippani?** Start with [one-time setup](#one-time-setup), or ask
+a teammate to help with it. You'll need access to the repository: the shared place
+where your team's specs are stored.
 
-- [Launching the portal](#launching-the-portal)
-- [Discovery — the home screen](#discovery--the-home-screen)
-  - [Specs](#specs-tab)
-  - [Review queue](#review-queue-tab)
-  - [Work items](#work-items-tab)
-  - [Branches](#branches-tab)
-  - [Reading list](#reading-list-tab)
-- [Reviewing a spec](#reviewing-a-spec)
-- [The comments panel](#the-comments-panel)
-- [The Feedback screen](#the-feedback-screen)
-- [Changed files: Current / Diff / Proposed](#changed-files-current--diff--proposed)
-- [Reading a finished spec](#reading-a-finished-spec)
-- [Authoring: branches, specs, and PRs](#authoring-branches-specs-and-prs)
-- [Publishing and the staged-changes ticker](#publishing-and-the-staged-changes-ticker)
+**Find what you need:** [First review](#1-open-the-right-spec) ·
+[Troubleshooting](#when-something-doesnt-look-right) · [Other tasks](#other-tasks) ·
+[Screen reference](#screen-reference) · [Setup](#one-time-setup).
+
+## 1. Open the right spec
+
+Ask the author for the review number and the name of the spec they want you to read.
+Use the launch command from your setup. Tippani opens a browser window; leave its
+terminal window running while you work.
+
+Check the review's title and author. Under **Changed Files**, choose the spec.
+If the document is already open, you can start reading.
+
+![The spec in the center, its headings on the left, and review comments on the right](img/spec-view-current.png)
+
+*Screenshots show sample content. Your review will have its own title and text.*
+
+Use **Contents** on the left to jump to a section. The middle is the spec; the
+right-hand **Comments** panel holds the discussion about it.
+
+**You're in the right place when:** the title and file match the author's request.
+
+## 2. Read the discussion
+
+Select a comment to find the passage it refers to. Read the replies before adding
+your own; the author may already have answered your question.
+
+Need the full discussion? Open **Feedback** from the review overview. It brings
+together comments across the review's files.
+
+Keep **Current** selected while you read. **Diff** and **Proposed** preview edits
+being prepared in Tippani; they aren't a history of everything changed in the PR.
+They stay disabled when there are no edits to preview.
+
+## 3. Choose a private note or shared feedback
+
+Before typing, check which panel you're using:
+
+| Panel | Who can see what you write? |
+|---|---|
+| **Annotations** | Notes kept on your computer, not posted to the review. |
+| **Comments** | Feedback shared on the review when you post it. |
+
+For a private reminder, select **Annotations**, hover over the relevant passage,
+and select the **Add annotation** control. Write your note and use its **Save**
+control. Return to **Comments** when you're ready to discuss something with others.
+
+For example, "Check the launch date with the team" might be a private reminder.
+"Can we explain what happens when the upload fails?" is feedback for the author.
+
+### Reply to someone
+
+**Posting shares your reply immediately when you're online.** You don't need to
+press **Push to remote** afterward.
+
+1. Select **Reply** on the comment.
+2. Write your response.
+3. Select **Post & next** to send it and move to the next comment.
+
+Look for **Reply posted**. **Reply queued** means Tippani has kept it locally but
+hasn't delivered it. See [queued feedback](#queued-feedback).
+
+### Add a new comment
+
+With **Comments** selected, hover over the passage and select its `+` control.
+Check the section and line shown in the comment box, write your feedback, and
+select **Comment**.
+
+**Comment posted** means it was shared. A pending-sync message means it wasn't.
+Use **Cancel** if you're not ready to send it.
+
+## 4. Finish your review
+
+You can leave feedback without making a review decision yet. When you're ready,
+use the buttons at the bottom:
+
+| Button | What you're telling the team |
+|---|---|
+| **Approve** | You've reviewed the proposal and approve it. |
+| **Request Changes** | The author needs to address something before you approve. |
+
+Both buttons submit your decision immediately when you're online. Neither merges
+the update into the shared version. Offline decisions aren't queued: reconnect
+before submitting one.
+
+Use **Resolve** on a comment only when that discussion has been addressed, following
+your team's review convention. It updates the shared discussion online; it isn't
+a private "I've read this" marker.
+
+**Before leaving:** check whether your feedback was posted or is still queued.
+You don't need to approve a spec just to finish reading it.
+
+## 5. Come back later
+
+Closing a browser tab isn't the same as stopping Tippani. If Tippani is still
+running, open another terminal window and run:
+
+```bash
+tippani open
+```
+
+This opens a fresh sign-in link. Don't bookmark or share that link: it works once.
+Don't type `localhost:3847` to start a new browser session.
+
+If Tippani says no portal is running, use your original launch command again.
+If it reports an expired app session, preserve any open edits before restarting.
+Don't assume unsaved text or every staged action will survive a restart.
 
 ---
 
-## Launching the portal
+## When something doesn't look right
 
-Point Tippani at your repositories once (this is the one place the connection
-details matter), then open the Discovery portal:
+| What you see | What to do |
+|---|---|
+| **Authentication required** or an expired browser link | Run `tippani open` while Tippani is running. |
+| More than one running portal | Use the listed port, for example `tippani open --port=3848`. |
+| Review not found or access denied | Check the review number and repository with the author. Confirm you can open the review in Azure DevOps or GitHub. |
+| No Markdown files | Ask for the review containing the `.md` spec. Tippani can't render a Word document or PDF. |
+| **Diff** or **Proposed** is disabled | There are no proposed edits to preview. Use **Current** to read. |
+| **Edit** is missing | That document or review may not be editable with your access. You can still use the available review controls. |
+| **File changed on the server** | Copy your changes before reloading. Read the newer version, then reapply your changes. |
+
+### Queued feedback
+
+**Queued** means saved on this computer, not delivered to the author. A failed
+connection can queue feedback even if you didn't deliberately choose offline mode.
+
+Reconnect and use the review's **Sync to ADO** button. That label is also used in
+the current GitHub review screen; the action sends to the review's repository host.
+Check for failures after syncing.
+
+If you started Tippani with `--offline`, save or copy any unfinished work, stop
+that instance, and launch the same review without `--offline` before syncing.
+Simply reconnecting Wi-Fi doesn't change that launch mode.
+
+---
+
+## Other tasks
+
+### Make an edit to a spec under review
+
+If you only want the author to consider a change, leave a comment. Editing changes
+the document itself.
+
+1. Select **Edit** and make your changes using the formatting toolbar.
+2. Select **Save** to see a preview of what will change.
+3. Read the preview and the **Commit message**, the short description saved with
+   the update. Select **Cancel** to keep working, or **Confirm & Save** to proceed.
+
+**In a PR review, Confirm & Save can publish the edited spec immediately.** It
+updates the version under review, not the team's main version. Look for the saved
+confirmation; a queued or conflict message needs attention before you leave.
+
+![The editing view with formatting controls and the comments panel](img/wysiwyg-editor.png)
+
+### Write a new spec
+
+This is a separate workflow from reviewing an existing PR. A **branch** is a
+separate version where you prepare work without changing the team's main version.
+
+1. In **Branches**, select **+ New branch** and choose the version to start from.
+2. Add a Markdown file or edit an existing one on that branch. Save your work.
+3. In **Review queue**, select **+ New pull request**. Choose the repository and
+   source and target branches; add a title and description. Select **Stage PR**.
+4. Review the pending work, then select **Push to remote** to publish it.
+
+Here, **staged** means prepared in Tippani but not yet published. The staged-changes
+count can include other pending work, not just the file you're looking at.
+
+In Azure DevOps, the PR form also supports work-item details. GitHub doesn't have
+that option. **Draft** creates a PR that isn't ready for formal review; the
+**Publish** action on a draft PR card stages its promotion for the next push.
+
+After a push, successful items are cleared. Failed items remain with an error so
+you can address the problem and retry. Don't assume a partially failed push
+published nothing.
+
+### Know which actions publish
+
+| Action | When it becomes shared |
+|---|---|
+| Save a private annotation | It isn't posted to the review. |
+| **Comment**, **Post & next**, or **Resolve** in a PR | Immediately online; otherwise queued for delivery. |
+| **Confirm & Save** while editing a PR file | Attempts to publish immediately online; read the result. |
+| Save while authoring through **Branches** | Staged until **Push to remote**. |
+| **Approve** or **Request Changes** | Immediately online; never queued offline. |
+| **Sync to ADO** | Sends queued review work. |
+| **Push to remote** | Publishes the pending staged work. |
+
+### Work offline
+
+Open the review online first and load the files you need. Tippani keeps a local
+copy; files it couldn't cache won't be available offline.
+
+Launch the same review with `--offline`. You can read cached content and queue
+feedback. Later, restart online and sync as described under
+[queued feedback](#queued-feedback). Review decisions require a live connection.
+
+The one-hour cache freshness rule applies to online loading. It doesn't delete
+your offline copy after an hour. Use `--refresh` on an online launch when you need
+to bypass the cache.
+
+### Use an AI assistant
+
+This is optional. An assistant can prepare replies and edits for you to inspect.
+Assistant staging is different from the browser's immediate-post buttons.
+See the [MCP & API Reference](mcp-api.md) for setup and publishing controls.
+
+---
+
+## Screen reference
+
+You don't need to learn every screen to complete a review.
+
+### Discovery
+
+Discovery is the home screen for finding work. Azure DevOps has five tabs; GitHub
+omits **Work items**.
+
+| Tab | Use it to |
+|---|---|
+| **Specs** | Search Markdown specs from repositories' default branches. Narrow by file name, repository, author, or folder. |
+| **Review queue** | Find a PR by title or author, then use the available filters to narrow the results. |
+| **Work items** | Search Azure DevOps work items and open an item in your work tracker. |
+| **Branches** | Browse remote branches or switch to **Local** for a clone on disk. |
+| **Reading list** | Keep links to local Markdown files you want to read again. |
+
+Newly published specs won't appear in search until the repository's search index
+has picked them up. A Reading list file opens from your computer, not from `main`.
+Its pinned **Tippani — User Manual** entry opens Tippani's README.
+
+![Discovery's review queue](img/discovery-review-queue.png)
+
+### Feedback
+
+The **Feedback** screen collects discussions across the review. Use **Needs you**,
+**Awaiting reviewer**, **Viewed**, **FYI**, or **Resolved** to narrow the list, or
+filter by reviewer, file, and text. Expand a discussion to read the replies.
+In its thread view, the send button is **Post reply**.
+
+![Feedback across a review's files](img/pr-feedback-threads.png)
+
+### Reading views and navigation
+
+| View | What it shows |
+|---|---|
+| **Current** | The loaded document before your proposed edits. |
+| **Diff** | How your edits or a staged proposal differ from that document. |
+| **Proposed** | The edited version as a readable page. |
+| **Edit** | The document editor, when editing is available. |
+
+You can resize the side panels or collapse them for more reading space. In the
+Comments panel, `J` and `K` move between active comments, `R` opens a reply, and
+`S` skips ahead. In a reply box, `Ctrl+Enter` on Windows or `Command+Enter` on Mac
+posts and advances. These shortcuts are optional; they send just like the button.
+
+---
+
+## One-time setup
+
+*This section is for you or the teammate helping you get started. Once setup is
+finished, return to [Open the right spec](#1-open-the-right-spec).*
+
+### Install Tippani
+
+Use [Node.js 20 or later, with npm](https://nodejs.org/en/download) for this installation.
+Install software through your organization's approved process. A terminal is the app where you
+paste commands: Terminal on Mac or PowerShell on Windows.
 
 ```bash
-# Azure DevOps
-tippani --org=https://dev.azure.com/YOUR_ORG --project="Your Project" --save-config
-tippani --browse
+npm install -g tippani
+```
 
-# GitHub
+To look around without repository access:
+
+```bash
+tippani --demo
+```
+
+The demo shows sample content. Comments entered there aren't saved or sent.
+Stop the demo with `Ctrl+C` in its terminal before opening a real review on the
+same port.
+
+### Connect to Azure DevOps
+
+Have [Azure CLI](https://learn.microsoft.com/cli/azure/install-azure-cli) installed
+and sign in with the account that can access the review:
+
+```bash
+az login
+```
+
+Ask the author for the PR number, organization URL, and project name. Replace the
+example values below; keep quotation marks around a project name containing spaces.
+
+```bash
+tippani 12345 --org=https://dev.azure.com/YOUR_ORG --project="Your Project" --save-config
+```
+
+That saves the connection settings and opens the review. For later reviews, use
+the new number:
+
+```bash
+tippani 12345
+```
+
+If you previously saved a personal access token, Tippani uses it ahead of Azure
+CLI sign-in. An expired saved token needs attention; signing in again through
+Azure CLI doesn't replace it. Don't create a token if your organization prohibits
+it. Ask your setup helper to resolve the credentials.
+
+**Helper note:** starting directly with `tippani --browse` currently requires a
+saved personal access token or an access token supplied through `TIPPANI_ADO_TOKEN`.
+It doesn't use the Azure CLI fallback used by the PR-number command. Use the
+PR-number path above for this walkthrough. Configuration flags alone don't start
+Tippani or save the settings: include a PR number or a supported launch mode.
+
+### Connect to GitHub
+
+Have [GitHub CLI](https://cli.github.com/) installed and sign in with the account
+that can access the review:
+
+```bash
+gh auth login
+```
+
+Paste the review's GitHub URL after `tippani`:
+
+```bash
+tippani https://github.com/OWNER/REPO/pull/123
+```
+
+For Discovery instead of a specific review:
+
+```bash
 tippani --browse --github=OWNER/REPO
 ```
 
-The portal serves from `http://localhost:3847` by default (override with
-`--port`). Everything runs locally — Tippani connects to your repositories on
-your behalf and renders the UI in your browser.
+Reading access doesn't necessarily grant permission to post reviews or change
+files. Have the repository owner help with access errors; don't share credentials.
 
-### Signing your browser in
+### Keep a launch command
 
-Tippani will not serve its pages to an unauthenticated browser, so typing
-`http://localhost:3847` into the address bar gets you an "Authentication
-required" page rather than the portal. A browser gets a session by following a
-**one-time sign-in link**, which only the running portal can create. Tippani
-opens one for you automatically when it starts — unless you passed `--headless`.
+Keep the command that worked for your repository. You can reuse it with a different
+review number. Keep Tippani's terminal running during a review; use `Ctrl+C` to
+stop it after saving or copying unfinished work.
 
-Each link works exactly once and expires after a couple of minutes. The session
-it creates lasts up to 8 hours, and ends after 30 minutes of inactivity.
-
-When you need a new link — you started headless, your session expired, or you
-closed the tab — run:
-
-```bash
-# Mint a fresh sign-in link for the portal that is already running, and open it
-tippani open
-
-# Just print the link
-tippani open --headless
-
-# Pick one of several running portals
-tippani open --port=3848
-
-# Land on a particular page
-tippani open --path=/feedback
-```
-
-`tippani open` attaches to the portal that is **already running**, so nothing is
-lost: your loaded pull request, staged edits, and drafts all survive. You never
-have to stop the server and start it again just to get back in. (`tippani
-reopen` does the same thing.)
-
-If no portal is running, Tippani says so and suggests how to start one. If more
-than one is running, it lists the ports and asks you to choose with `--port=<n>`.
-
-A second `tippani <PR_ID>` on a port that is already serving will not start a
-rival server — it reports that the port is in use and points you at `tippani
-open`.
-
-`--demo` runs a sample portal that prints its own link when it starts, and it
-registers itself like any other portal — if the link is consumed or expires,
-`tippani open` mints a fresh one for it too.
-
-The top bar is consistent everywhere: a **breadcrumb** on the left (`Home ›
-…`) and the Tippani wordmark with the current mode (`· discovery`, `· read ·
-annotate · edit`, `· feedback`) on the right.
-
----
-
-## Discovery — the home screen
-
-Discovery answers "what should I work on?" Azure DevOps has five tabs:
-
-**Specs** · **Review queue** · **Work items** · **Branches** · **Reading list**
-
-GitHub has the same home without **Work items**. GitHub Issues do not implement
-Azure DevOps WIQL or typed work-item fields, so Tippani omits that capability
-instead of showing a control that cannot work.
-
-### Specs tab
-
-Full-text search across the `.md` specs in your repositories. Type a keyword and
-press **Search**; results are specs from each repository's default branch.
-
-![Specs search](img/discovery-specs-search.png)
-
-- The left rail narrows results by **Included** file name (e.g. `Readme.md`),
-  **Repo**, **Author**, and **Folder**.
-- Each result shows the repo, "Last modified by", the file name, and its path.
-- Opening a result shows it **read-only at the repository's default branch**
-  inside Tippani (see [Reading a finished spec](#reading-a-finished-spec)).
-
-> Newly pushed specs appear here once search has indexed them, which can lag a
-> few minutes behind a commit.
-
-### Review queue tab
-
-Every pull request you can act on, as cards.
-
-![Review queue](img/discovery-review-queue.png)
-
-- A **filter box** ("Filter by title or author…") and a count ("N pull
-  requests") sit at the top, next to **Search** and **+ New pull request**.
-- The left rail filters by **Project**, **Author**, **Activity**, and **PR
-  Status** (**Draft** / **Published**), each with a live count.
-- Each card shows the **PR number**, its state badges (**Active**, **Draft**,
-  **Authoring**), the **title**, and the `author · source → target · project ·
-  repo` line. Click a card to open the PR for review.
-- A **draft** PR's card carries a **Publish** button that stages a
-  draft‑to‑published promotion (applied at the next push — see
-  [Publishing](#publishing-and-the-staged-changes-ticker)).
-
-**+ New pull request** expands an inline form to stage a PR — see
-[Authoring](#authoring-branches-specs-and-prs).
-
-### Work items tab
-
-Azure DevOps only. Look up the work items your specs relate to. Results open in
-your work tracker.
-
-![Work items](img/discovery-work-items.png)
-
-- The text area holds a query for the items you want. Edit it and press
-  **Search**.
-- Results show a count and a left rail faceted by **Assigned To**, **Status**,
-  and **Type**.
-- Each row shows the **id**, **type · state**, and **title**, and links out to
-  the work item (↗).
-
-### Branches tab
-
-Your branches across the repos in the selected project.
-
-![Branches](img/discovery-branches.png)
-
-- A **Remote / Local** toggle switches between remote branches and branches in
-  a local clone on disk.
-- **Project** selector, a branch count, and **Refresh**.
-- **+ New branch** stages a branch creation (part of the authoring flow).
-- Each branch card links to the branch's file list, where you can open specs
-  read-only or start editing.
-
-### Reading list tab
-
-A personal, persistent list of local `.md` files to open read-only, plus a
-pinned link to this manual.
-
-![Reading list](img/discovery-reading-list.png)
-
-- Type or **Browse…** to a `.md` path and press **Add**; the entry is
-  remembered across restarts. Each entry has a 🗑 control to remove it.
-- The **Tippani — User Manual** entry is **pinned** ("Manual" badge) and always
-  present at the bottom.
-- Click any entry to open the file read-only in the reviewing view.
-
----
-
-## Reviewing a spec
-
-Opening a PR (from the Review queue, or with `tippani <PR_ID>`) lands on the
-PR overview: the title, `PR #n by <author> · N file changed`, the description,
-a **Feedback** card (open-thread count), and a **Changed Files** list.
-
-Opening a changed file gives the three-pane reviewing workspace:
-
-![Reviewing workspace](img/spec-view-current.png)
-
-1. **Contents rail** (left) — the spec's headings as a jump list, plus **Files
-   in PR**. Collapse it with `«`.
-2. **Rendered spec** (center) — the Markdown for the selected view. A row of
-   view tabs sits in the top bar: **Current**, **Diff**, **Proposed**, **Edit**.
-3. **Comments panel** (right) — the review threads for this file, with a live
-   **N ACTIVE** count.
-
-A sticky action bar at the bottom offers **Approve** and **Request Changes**.
-
----
-
-## The comments panel
-
-The right-hand panel is built for fast, keyboard-driven review:
-
-- Each thread shows the author, a **Replied** badge when applicable, the comment
-  text, and **Reply** + **✓ Resolve** controls.
-- Keyboard shortcuts are shown inline: `J` / `K` move to the next / previous
-  comment, `R` replies, `S` skips, and `⌘⏎` posts and moves to the next.
-- Replies and resolutions are **staged** locally; nothing leaves your machine
-  until you push.
-
-### Annotations
-
-Beyond the shared review threads, Tippani supports **annotations** —
-private notes pinned to a specific line of the open spec. They stay on your
-machine, follow the text as it's edited, and are never sent to the host. They're
-ideal for a first read-through before you leave formal review feedback.
-
-![Annotations](img/annotations.png)
-
-- The **Annotations** rail on the right lists every note on the open file, each
-  stamped with the author, date, and the line it's pinned to.
-- A small count badge appears next to any heading whose section carries
-  annotations, so you can see at a glance where your notes are.
-- Each note has controls to reply, resolve, edit, and delete it.
-
----
-
-## The Feedback screen
-
-The **Feedback** card on a PR (or the `· feedback` mode) opens a consolidated
-view of every thread on the PR.
-
-![Feedback](img/pr-feedback-threads.png)
-
-- Filter chips across the top: **Needs you**, **Awaiting reviewer**, **Viewed**,
-  **FYI**, and **Resolved**.
-- Dropdowns to scope by **reviewer** and **file**, plus a search box.
-- Each thread card shows its scope (e.g. **PR-level**), its state (e.g.
-  **Awaiting reviewer**), the latest comment, "last by … · N comment", and an
-  **Expand** control to read and reply to the full thread.
-
----
-
-## Changed files: Current / Diff / Proposed
-
-Every changed file in a PR can be viewed three ways from the top-bar tabs:
-
-![Diff view](img/pr-file-diff.png)
-
-- **Current** — the file as it is on the PR branch, rendered cleanly.
-- **Diff** — additions and removals inline (added lines are marked `+`).
-- **Proposed** — the file as it would read after any staged edits are applied.
-- **Edit** — opens the WYSIWYG editor to change the spec in place; edits are
-  staged, not written directly.
-
-The **Edit** view is a rich Markdown editor with a formatting toolbar (bold,
-italic, lists, tables, blockquotes, code, links, and images), while the
-**Comments** rail and review controls stay alongside:
-
-![WYSIWYG editor](img/wysiwyg-editor.png)
-
-The **Contents** rail and the per-file **Comments** count stay in sync as you
-switch views and files.
-
----
-
-## Reading a finished spec
-
-Opening a spec from the **Specs** tab (or the Reading list) shows it read-only
-at `main` — the same rendered view, without the PR review chrome:
-
-![Read-only spec](img/spec-view-standalone.png)
-
-- A **Contents** rail mirrors the spec's headings.
-- The body renders Markdown fully: headings, blockquotes, lists, **tables**,
-  code, images, and **Mermaid** diagrams.
-- A **Review History** panel is available on the right, and **↻ Refresh**
-  reloads the file from source.
-
----
-
-## Authoring: branches, specs, and PRs
-
-Tippani can create brand-new specs and PRs with **no local clone**. Everything
-is **staged** first and published together. The flow:
-
-1. **Stage a branch.** From the **Branches** tab, **+ New branch** (or the
-   authoring tools) stages a branch creation from a base branch. Nothing is
-   created on the host yet.
-2. **Add or edit `.md` files.** Add new folders and Markdown files, or edit
-   existing ones, on the staged branch. New and edited files use the same
-   Current / Diff / Proposed reading views as PR-bound proposals.
-3. **Stage a pull request.** From the **Review queue**, **+ New pull request**
-   opens a form to stage a PR:
-
-   ![New pull request form](img/new-pull-request-form.png)
-
-   Pick **Project**, **Repository**, **Source branch**, and **Target branch**;
-   fill in **Title** and **Description**; optionally set a **Work item title**
-   and **Work item type** to link a Spec-review item; toggle **Draft**; and press
-   **Stage PR**. The PR is created only when you push.
-4. **Push.** One action publishes the entire staged set (see below).
-
-Existing remote files carry their load-time branch tip, so if the branch moves
-underneath you, publication is rejected rather than silently overwriting newer
-work.
-
----
-
-## Publishing and the staged-changes ticker
-
-Every staged change — review replies, resolutions, new/edited files, staged PRs,
-and draft→published promotions — is collected into one pending set. A top-row
-**staged-changes ticker** ("You have N staged changes · Push to remote") appears
-across the Branches and Review-queue surfaces whenever anything is pending.
-
-![Staged-changes ticker](img/staged-changes-ticker.png)
-
-Pressing **Push to remote** (or the MCP `push_staged_changes` tool) is the single
-moment anything is sent to the host. In order, it:
-
-1. flushes staged review replies and resolutions;
-2. creates any staged branches and publishes staged file adds/edits (grouped by
-   repository and branch, one commit per group);
-3. creates staged PRs and optional work-item links; and
-4. applies staged **draft → published** PR promotions.
-
-Anything that succeeds is cleared from the staged set; a group that fails keeps
-its staged state with a target-specific error so you can fix and retry. A staged
-PR card also carries a **delete** control to discard the intent before it's ever
-pushed.
-
-That's the whole loop: **discover → read → annotate → edit → author → push.**
-For the programmatic equivalent, see the [MCP & API Reference](mcp-api.md).
+For other installation options and advanced configuration, see the
+[README](../README.md). For a running portal whose browser tab has closed,
+use [Come back later](#5-come-back-later), not another server launch.

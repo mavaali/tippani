@@ -10,31 +10,46 @@
 
 Everything runs on your own machine. Tippani opens in your web browser at `http://localhost`, connects to the repositories you point it at, and never uploads your work anywhere else. There's also a matching **MCP server** so an AI assistant can do the same things for you.
 
-**New here?** The [User Guide](docs/user-guide.md) walks through every screen; the [MCP & API Reference](docs/mcp-api.md) covers the assistant tools and endpoints.
+**Reviewing your first spec?** Start with the
+[User Guide](docs/user-guide.md): open a spec, read the discussion, and share feedback.
+It separates everyday reviewing from setup, editing, and the screen reference.
+The [MCP & API Reference](docs/mcp-api.md) covers optional assistant integration.
 
-## Try it — no setup
+## Try it — no repository account
+
+The npm commands below require Node.js 20 or later and npm.
 
 ```bash
 npx tippani --demo
 ```
 
-Opens the portal on a sample spec with sample comment threads. No account, no login, no clone. Nothing is sent anywhere.
+Opens the portal on a sample spec with sample comment threads. No repository account,
+login, or clone is needed. Demo comments aren't saved or sent.
 
 ## Quick Start
 
-Tippani is a small command-line tool. Point it at your repositories once, then open the home screen in your browser.
+Tippani starts from a terminal and opens in your browser. Leave the terminal running
+while you review. For assisted setup, see [One-time setup](docs/user-guide.md#one-time-setup).
 
 Install globally from npm:
 
 ```bash
 npm install -g tippani
+```
+
+For Azure DevOps, install Azure CLI and run `az login` with an account that can access
+the review. Replace the PR number, organization URL, and project below:
+
+```bash
+az login
 tippani 12345 --org=https://dev.azure.com/YOUR_ORG --project="Your Project" --save-config
 ```
 
-Or open a GitHub pull request directly:
+Or install GitHub CLI, sign in, and open a GitHub pull request directly:
 
 ```bash
-tippani github:OWNER/REPO#123
+gh auth login
+tippani https://github.com/OWNER/REPO/pull/123
 # equivalent:
 tippani 123 --github=OWNER/REPO
 ```
@@ -50,18 +65,30 @@ tippani --browse --github=OWNER/REPO
 The repository anchors authoring; Discovery searches reviews and Markdown
 across the owner's accessible repositories.
 
-Or run without installing:
+Or run without a global installation, after signing in:
 
 ```bash
 npx tippani 12345 --org=https://dev.azure.com/YOUR_ORG --project="Your Project" --save-config
 ```
 
-Once your org and project are saved, open the Azure DevOps **Discovery** portal
-(the home screen with all five tabs) with `--browse`:
+After saving your org and project, later Azure DevOps reviews need only the number:
+
+```bash
+tippani 12345
+```
+
+To start Azure DevOps **Discovery** directly, `--browse` currently requires a saved
+PAT or an access token supplied through `TIPPANI_ADO_TOKEN` / `--ado-token`. Unlike
+the PR-number command, this launch mode doesn't try Azure CLI sign-in:
 
 ```bash
 tippani --browse
 ```
+
+Use the PR-number path if you signed in with Azure CLI and haven't supplied a token.
+Configuration flags alone don't save settings: include a PR number or launch mode.
+Stop the previous Tippani process before starting another on the same port, or use
+`tippani open` to reconnect to the one already running.
 
 Or download a standalone binary from the [latest release](https://github.com/mavaali/tippani/releases/latest):
 
@@ -90,11 +117,15 @@ because GitHub Issues are not a WIQL-compatible work-item system.
 
 - **A home screen for finding work** — search your specs, pick up a review, look up a linked work item, browse branches, or reopen something from your reading list.
 - **Comfortable reviewing** — a table of contents, the rendered spec, and the comment threads side by side; move between comments with `J` / `K`.
-- **Nicely rendered specs** — Markdown with tables, code, images, and **Mermaid** diagrams, and **Current / Diff / Proposed** views of every changed file.
+- **Nicely rendered specs** — Markdown with tables, code, images, and **Mermaid**
+  diagrams. **Diff / Proposed** preview your edits or a staged proposal; they're
+  disabled when there's nothing to preview.
 - **Two kinds of notes** — shared comment threads on the pull request, plus private **annotations** pinned to a line that follow the text as it changes.
 - **Edit in place** — change a spec in a WYSIWYG editor, no hand-written Markdown required.
 - **Write new specs** — create a branch, add or edit `.md` files, and open a pull request (optionally linked to a work item) — without cloning anything locally.
-- **Nothing happens by surprise** — every change waits, staged and reviewable, until you press **Push to remote** once.
+- **Stage new work** — branch authoring and assistant staging wait for an explicit
+  push. Browser review comments, replies, resolutions, and confirmed PR-file saves
+  can publish immediately online. See [which actions publish](docs/user-guide.md#know-which-actions-publish).
 - **Sign off** — Approve or Request Changes from the reviewing bar, recorded as your vote on the pull request.
 - **Work from a local clone** — review branches and files straight from a folder on disk.
 - **Offline mode** — cache a review, comment offline, and sync when you reconnect.
@@ -104,7 +135,7 @@ because GitHub Issues are not a WIQL-compatible work-item system.
 
 | Guide | What's inside |
 |---|---|
-| **[User Guide](docs/user-guide.md)** | A screen-by-screen walkthrough of the whole UI: Discovery tabs, the reviewing workspace, comments, editing, and the authoring flow. |
+| **[User Guide](docs/user-guide.md)** | A first-review walkthrough for non-technical PMs, with private versus shared feedback, setup, recovery, editing, authoring, and a screen reference. |
 | **[MCP & API Reference](docs/mcp-api.md)** | Every MCP tool and every HTTP control-API endpoint, with parameters and behavior. |
 | **[How this compares](docs/competitive-positioning.md)** | Dated, sourced research on the surrounding landscape — PR review tools, AI review agents, and MCP servers for developer workflows. |
 | **[Changelog](CHANGELOG.md)** | Release history. |
@@ -115,7 +146,7 @@ because GitHub Issues are not a WIQL-compatible work-item system.
 # Try it on a sample spec — no account, no config
 npx tippani --demo
 
-# Open the Discovery portal (Specs, Review queue, Work items, Branches, Reading list)
+# Open ADO Discovery (requires saved PAT or supplied ADO token, plus config)
 tippani --browse
 
 # Open a PR for review (uses saved config)
@@ -227,30 +258,36 @@ Priority: CLI flags > env vars > config file.
 
 Tippani signs in with **your own** credentials and keeps them **on your machine** — it never ships a shared secret and never sends your credentials anywhere except to the service that hosts your repositories. That host is the one place connection details matter:
 
-1. **Already signed in on this machine?** Tippani uses `gh auth token` for
-   GitHub, or the existing Azure CLI/PAT flow for Azure DevOps.
-2. **Prefer a token?** GitHub: `--gh-token` / `TIPPANI_GH_TOKEN`.
-   Azure DevOps: `--ado-token` / `TIPPANI_ADO_TOKEN`.
-3. **Neither?** Azure DevOps can prompt once for a PAT. GitHub asks you to run
-   `gh auth login` or provide a token; Tippani never stores the GitHub token.
+For GitHub, Tippani uses `--gh-token`, then `TIPPANI_GH_TOKEN` / `GITHUB_TOKEN`,
+then `gh auth token`. It doesn't save your GitHub token.
 
-You only do this the first time; after that, Tippani connects on its own.
+For an online Azure DevOps PR launch, it uses a supplied `--ado-token` /
+`TIPPANI_ADO_TOKEN`, then a saved PAT at `~/.tippani/pat`, then Azure CLI. On a
+fresh load without credentials, it prompts for a PAT and recommends `az login`
+as the alternative. PAT creation may be blocked by your organization's policy.
+
+An expired saved PAT isn't replaced by running `az login`; resolve the saved
+credential before retrying. Direct Azure DevOps `--browse` startup accepts a saved
+PAT or supplied token but doesn't perform the Azure CLI or interactive fallback.
+Credentials can expire, so initial setup doesn't guarantee indefinite access.
 
 ## Offline mode
 
 ```bash
-# First run caches everything
+# First run caches the review's available Markdown files
 npx tippani 12345
 
-# Later, work offline — no connection needed
+# Stop the online instance before launching the same review offline
 npx tippani 12345 --offline
 
-# Your comments are queued locally.
-# When you're back online, sync them:
-npx tippani 12345   # then click 'Sync' in the status bar
+# Save/copy unfinished work and stop the offline instance before restarting online
+npx tippani 12345   # then click 'Sync to ADO' in the status bar
 ```
 
-The cache lives in `~/.tippani/cache/` and is valid for one hour.
+The cache lives in `~/.tippani/cache/`. Online launches reuse it for up to one hour;
+`--refresh` bypasses it. Offline mode can use older cached data, but can't open a
+file that wasn't cached. Queued feedback isn't delivered until it syncs; review
+votes aren't queued. Reconnecting the network doesn't exit `--offline` mode.
 
 ## Build Standalone Binary
 
