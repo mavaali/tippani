@@ -73,6 +73,49 @@ export function escHtml(s) {
   return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 }
 
+function shellQuote(value) {
+  return `'${String(value).replace(/'/g, `'\"'\"'`)}'`;
+}
+
+function powershellQuote(value) {
+  return `'${String(value).replace(/'/g, "''")}'`;
+}
+
+export function buildAdoBrowseCommand(target = {}, platform = "posix") {
+  const { org, project, repo } = target || {};
+  if (!org || !project || !repo) return "";
+  const tokenArgs = "az account get-access-token --resource 499b84ac-1321-427f-aa17-267ca6975798 --query accessToken -o tsv";
+  if (platform === "win32") {
+    return `$env:TIPPANI_ADO_TOKEN = ${tokenArgs}; tippani --browse --org=${powershellQuote(org)} --project=${powershellQuote(project)} --repo=${powershellQuote(repo)}`;
+  }
+  return `TIPPANI_ADO_TOKEN="$(${tokenArgs})" tippani --browse --org=${shellQuote(org)} --project=${shellQuote(project)} --repo=${shellQuote(repo)}`;
+}
+
+export function renderDiscoveryConnectionBanner({
+  connected = false,
+  offline = false,
+  localRepoPath = "",
+  target = null,
+  platform = "posix",
+} = {}) {
+  if (connected && !offline) return "";
+  const localOnly = !!localRepoPath && !offline;
+  const command = buildAdoBrowseCommand(target, platform);
+  const label = localOnly ? "Local only" : "Offline";
+  const summary = localOnly
+    ? `This portal is reading ${escHtml(localRepoPath)} from your computer. Pull requests, work items, shared comments, and remote publishing are unavailable.`
+    : "This portal is using cached data. Fresh repository content, shared comments, and remote publishing are unavailable.";
+  const recovery = command
+    ? `<p class="connection-recovery">To go online, stop this portal in its terminal, then run:</p>
+       <div class="connection-command"><code id="onlineRelaunchCommand" tabindex="0">${escHtml(command)}</code><button id="copyOnlineCommand" type="button">Copy go-online command</button></div>`
+    : '<p class="connection-recovery">To go online, stop this portal and relaunch Tippani with <code>--browse</code> plus your repository host settings.</p>';
+  return `<section class="connection-notice" aria-labelledby="connectionNoticeTitle">
+    <div class="connection-heading"><span class="connection-pill">${label}</span><strong id="connectionNoticeTitle">${localOnly ? "You are working from a local clone" : "You are not connected to the repository host"}</strong></div>
+    <p>${summary}</p>
+    ${recovery}
+  </section>`;
+}
+
 // Serialize a value for safe embedding inside an inline <script> block.
 // JSON.stringify alone is NOT safe there: it doesn't escape "<", so a string
 // containing "</script>" closes the script element early (stored-XSS breakout),

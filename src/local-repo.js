@@ -69,33 +69,66 @@ export function parseGitConfigOriginUrl(configText) {
   return null;
 }
 
-// Parse an Azure DevOps Git remote URL -> { project, repo } (or null). Handles
-// dev.azure.com and *.visualstudio.com HTTPS forms (…/{project}/_git/{repo}) and
-// the SSH form (git@ssh.dev.azure.com:v3/{org}/{project}/{repo}). Segments are
-// URL-decoded; a trailing .git is stripped.
-export function parseAdoRemoteUrl(remoteUrl) {
+// Parse an Azure DevOps Git remote URL into the coordinates needed for an
+// authenticated Tippani launch. URLs are normalized to the dev.azure.com form.
+export function parseAdoRemoteTarget(remoteUrl) {
   let url = String(remoteUrl || "").trim();
   if (!url) return null;
   if (url.toLowerCase().endsWith(".git")) url = url.slice(0, -4);
-  let project = "", repo = "";
-  const marker = "/_git/";
-  const gi = url.indexOf(marker);
-  if (gi >= 0) {
-    repo = url.slice(gi + marker.length).split("/")[0];
-    const before = url.slice(0, gi).split("/").filter(Boolean);
-    project = before.length ? before[before.length - 1] : "";
-  } else {
-    const ci = url.indexOf(":v3/");
-    if (ci >= 0) {
-      const seg = url.slice(ci + 4).split("/").filter(Boolean); // [org, project, repo]
-      if (seg.length >= 3) { project = seg[seg.length - 2]; repo = seg[seg.length - 1]; }
+
+  let org = "", project = "", repo = "";
+  if (/^https?:\/\//i.test(url)) {
+    try {
+      const parsed = new URL(url);
+      const parts = parsed.pathname.split("/").filter(Boolean);
+      const gitIndex = parts.indexOf("_git");
+      if (gitIndex < 1 || gitIndex + 1 >= parts.length) return null;
+      project = parts[gitIndex - 1];
+      repo = parts[gitIndex + 1];
+      if (parsed.hostname.toLowerCase() === "dev.azure.com") org = parts[0] || "";
+      else if (parsed.hostname.toLowerCase().endsWith(".visualstudio.com")) {
+        org = parsed.hostname.slice(0, -".visualstudio.com".length);
+      } else {
+        return null;
+      }
+    } catch {
+      return null;
     }
+  } else {
+    const match = url.match(/^git@(?:ssh\.dev\.azure\.com|vs-ssh\.visualstudio\.com):v3\/([^/]+)\/([^/]+)\/([^/]+)$/i);
+    if (!match) return null;
+    [, org, project, repo] = match;
   }
+  try { org = decodeURIComponent(org); } catch { /* leave as-is */ }
   try { project = decodeURIComponent(project); } catch { /* leave as-is */ }
   try { repo = decodeURIComponent(repo); } catch { /* leave as-is */ }
-  project = project.trim(); repo = repo.trim();
-  if (!project || !repo) return null;
+  org = org.trim(); project = project.trim(); repo = repo.trim();
+  if (!org || !project || !repo) return null;
+  return { org: `https://dev.azure.com/${org}`, project, repo };
+}
+
+// Backward-compatible project/repo-only shape used by existing callers.
+export function parseAdoRemoteUrl(remoteUrl) {
+  const target = parseAdoRemoteTarget(remoteUrl);
+  if (!target) return null;
+  const { project, repo } = target;
   return { project, repo };
+}
+
+export function inferAdoTargetFromLocalRepo(repoPath, fsImpl = fs) {
+  const resolved = resolveGitDir(repoPath, fsImpl);
+  if (!resolved.ok) return null;
+  let config;
+  try { config = fsImpl.readFileSync(path.join(resolved.gitDir, "config"), "utf8"); }
+  catch {
+    try {
+      const commonDir = fsImpl.readFileSync(path.join(resolved.gitDir, "commondir"), "utf8").trim();
+      config = fsImpl.readFileSync(path.join(path.resolve(resolved.gitDir, commonDir), "config"), "utf8");
+    } catch {
+      return null;
+    }
+  }
+  return parseAdoRemoteTarget(parseGitConfigOriginUrl(config));
 }
 
 // Resolve the real .git directory for a working tree. Handles both a .git

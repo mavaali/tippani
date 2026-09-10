@@ -70,11 +70,11 @@ import {
   summarizeNonMarkdown,
 } from "./config-util.js";
 import { resolveImagePath, imageContentType, isLfsPointer, secureImageHeaders, isValidRepoId } from "./image-src.js";
-import { cssVariables, changeTypeBadge, escHtml, stripMarkdown, jsonForScript, errorPage } from "./html-util.js";
+import { cssVariables, changeTypeBadge, escHtml, stripMarkdown, jsonForScript, errorPage, renderDiscoveryConnectionBanner } from "./html-util.js";
 import { getSpecContentAt, getSpecBlobAt, buildSpecWebUrl, getLastCommitAuthor } from "./ado-read.js";
 import { branchesForRepo, repoOptions, branchNamePlaceholder, sortBranches, shortBranchName, summarizeBranchRef } from "./branch-list.js";
 import { branchFileRows, visibleFileCount, mdPathsFromChanges, buildSpecHref, stagedFileComparison } from "./branch-files.js";
-import { validateLocalRepo, resolveGitDir, parseGitHead, parsePackedRefs, mergeLocalBranches, parseOriginHeadDefault, userCreatedBranches } from "./local-repo.js";
+import { validateLocalRepo, resolveGitDir, parseGitHead, parsePackedRefs, mergeLocalBranches, parseOriginHeadDefault, userCreatedBranches, inferAdoTargetFromLocalRepo } from "./local-repo.js";
 import { baseCandidates, safeLocalPath } from "./local-git.js";
 import { handleReviewRequest } from "./review-vote.js";
 import { newComment as pcNew, addComment as pcAdd, updateComment as pcUpdate, removeComment as pcRemove, findComment as pcFind, sortComments as pcSort, setResolved as pcSetResolved, addReply as pcAddReply, navTargetId as pcNavTarget, reanchorComments as pcReanchor } from "./personal-comments.js";
@@ -142,6 +142,7 @@ let _adoProjectDisplayName = null;
 // --local-repo CLI arg, TIPPANI_LOCAL_REPO env, or POST /api/v1/local-repo (MCP).
 // Injected into the Discovery page so the Repo box shows the full path.
 let _localRepoPath = "";
+let _localAdoTarget = null;
 
 // --- PAT management ---
 const PAT_FILE = path.join(CONFIG_DIR, "pat");
@@ -1398,6 +1399,13 @@ function buildHomePage(
     </a>`;
   }).join("\n");
   const sampleWiql = "SELECT [System.Id], [System.Title], [System.State]\nFROM workitems\nWHERE [System.WorkItemType] = 'Feature' AND [System.CreatedDate] >= @today - 30 AND [System.AssignedTo] = @Me\nORDER BY [System.CreatedDate] DESC";
+  const connectionBanner = renderDiscoveryConnectionBanner({
+    connected: !!_conn,
+    offline: _isOffline,
+    localRepoPath: _localRepoPath,
+    target: isGitHub ? null : (_localRepoPath ? _localAdoTarget : { org: ADO_ORG, project: ADO_PROJECT, repo: ADO_REPO }),
+    platform: process.platform,
+  });
   return `<!DOCTYPE html>
 <html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Tippani \u2014 Discovery</title>
@@ -1410,6 +1418,14 @@ body { font-family: "Segoe UI", Aptos, Calibri, -apple-system, sans-serif; backg
 .logo { width: 32px; height: 32px; border-radius: 8px; background: var(--cp-accent); display: flex; align-items: center; justify-content: center; color: var(--cp-accent-fg); font-weight: 700; font-size: 12px; }
 h1 { font-size: 19px; font-weight: 700; margin-bottom: 4px; text-align: center; }
 .sub { font-size: 13px; color: var(--cp-text-muted); margin-bottom: 16px; text-align: center; }
+.connection-notice { margin: 16px 0 18px; padding: 14px 16px; border: 1px solid var(--cp-warning); border-left-width: 4px; border-radius: 10px; background: var(--cp-surface); }
+.connection-heading { display: flex; align-items: center; gap: 9px; margin-bottom: 7px; font-size: 14px; }
+.connection-pill { flex: 0 0 auto; padding: 2px 8px; border-radius: 99px; background: var(--cp-warning); color: #242424; font-size: 10px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.04em; }
+.connection-notice p { margin: 0; color: var(--cp-text-muted); font-size: 12.5px; line-height: 1.5; }
+.connection-recovery { margin-top: 8px !important; color: var(--cp-text) !important; }
+.connection-command { display: flex; align-items: stretch; gap: 8px; margin-top: 8px; }
+.connection-command code { flex: 1 1 auto; min-width: 0; overflow-x: auto; padding: 8px 10px; border-radius: 7px; background: var(--cp-code-bg); color: var(--cp-code-fg); font: 11px/1.45 Consolas, "Courier New", monospace; white-space: nowrap; }
+.connection-command button { flex: 0 0 auto; border: 1px solid var(--cp-accent); border-radius: 7px; padding: 7px 11px; background: var(--cp-accent); color: var(--cp-accent-fg); font-family: inherit; font-size: 12px; font-weight: 700; cursor: pointer; }
 .tabs { display: flex; justify-content: center; gap: 2px; border-bottom: 1px solid var(--cp-border); margin: 14px 0 18px; }
 .tab { padding: 8px 16px; font-family: inherit; font-size: 13px; font-weight: 600; color: var(--cp-text-muted); background: none; border: none; border-bottom: 2px solid transparent; cursor: pointer; }
 .tab:hover { color: var(--cp-text); }
@@ -2327,6 +2343,20 @@ table.wi-results { width: 100%; table-layout: fixed; border-collapse: collapse; 
   }
   window.addEventListener('DOMContentLoaded', function () {
     document.querySelectorAll('.tab').forEach(function (t) { t.addEventListener('click', function () { activateTab(t.dataset.tab); }); });
+    var copyOnlineCommand = document.getElementById('copyOnlineCommand');
+    if (copyOnlineCommand) {
+      copyOnlineCommand.addEventListener('click', async function () {
+        var command = document.getElementById('onlineRelaunchCommand');
+        if (!command) return;
+        try {
+          await navigator.clipboard.writeText(command.textContent);
+          copyOnlineCommand.textContent = 'Copied';
+        } catch (e) {
+          copyOnlineCommand.textContent = 'Select command to copy';
+          command.focus();
+        }
+      });
+    }
     var params = new URLSearchParams(location.search);
     var t = params.get('tab');
     if (!t) { try { t = localStorage.getItem('tippani.discoveryTab'); } catch (e) {} }
@@ -2456,6 +2486,7 @@ table.wi-results { width: 100%; table-layout: fixed; border-collapse: collapse; 
     <div class="sub">${isGitHub
       ? "Find a spec, review, or branch across your GitHub repositories."
       : "Find what to work on \u2014 a finished spec to read, a review to pick up, or a work item to open in ADO."}</div>
+    ${connectionBanner}
     <div class="tabs">
       <button class="tab" data-tab="specs" type="button">Specs</button>
       <button class="tab" data-tab="queue" type="button">Review queue</button>
@@ -7332,6 +7363,7 @@ async function main() {
     ADO_PROJECT = adoConfig.project || "";
     ADO_REPO = adoConfig.repo || adoConfig.project || "";
   }
+  _localAdoTarget = _localRepoPath ? inferAdoTargetFromLocalRepo(_localRepoPath) : null;
 
   // Save config if requested
   if (args.includes("--save-config") && _hostKind === "ado") {
@@ -8986,7 +9018,11 @@ async function main() {
   // validation lives in local-repo.js.
   async function openLocalRepo({ path: repoPath } = {}) {
     const v = validateLocalRepo(repoPath);
-    if (v.ok) { _localRepoPath = String(repoPath || "").trim(); approveLocalRoot(_localRepoPath); }
+    if (v.ok) {
+      _localRepoPath = String(repoPath || "").trim();
+      _localAdoTarget = inferAdoTargetFromLocalRepo(_localRepoPath);
+      approveLocalRoot(_localRepoPath);
+    }
     return v;
   }
 

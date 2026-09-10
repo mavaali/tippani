@@ -1,5 +1,5 @@
 // Tests for the shared server-side HTML/render helpers.
-import { cssVariables, changeTypeBadge, escHtml, stripMarkdown, jsonForScript } from "./html-util.js";
+import { cssVariables, changeTypeBadge, escHtml, stripMarkdown, jsonForScript, buildAdoBrowseCommand, renderDiscoveryConnectionBanner } from "./html-util.js";
 
 let pass = 0, fail = 0;
 function ok(name, cond) { if (cond) pass++; else { fail++; console.error("  FAIL: " + name); } }
@@ -49,6 +49,38 @@ ok("cssVariables defines the accent token", css.includes("--cp-accent"));
   eq("line-sep round-trips", JSON.parse(out), "a\u2028b\u2029c");
 }
 eq("jsonForScript handles arrays", JSON.parse(jsonForScript([1, "<x>", true])), [1, "<x>", true]);
+
+// --- Discovery connection banner --------------------------------------------
+const adoTarget = {
+  org: "https://dev.azure.com/powerbi",
+  project: "FabricSpecs",
+  repo: "FabricSpecs",
+};
+const onlineCommand = buildAdoBrowseCommand(adoTarget);
+ok("online command acquires an Azure DevOps token", onlineCommand.includes("az account get-access-token"));
+ok("online command launches browse mode", onlineCommand.includes("tippani --browse"));
+ok("online command includes exact target", onlineCommand.includes("--org='https://dev.azure.com/powerbi'") &&
+  onlineCommand.includes("--project='FabricSpecs'") && onlineCommand.includes("--repo='FabricSpecs'"));
+eq("incomplete target has no exact command", buildAdoBrowseCommand({ org: adoTarget.org }), "");
+eq("null target has no exact command", buildAdoBrowseCommand(null), "");
+const windowsCommand = buildAdoBrowseCommand(adoTarget, "win32");
+ok("Windows command uses PowerShell environment syntax", windowsCommand.startsWith("$env:TIPPANI_ADO_TOKEN = "));
+ok("Windows command quotes the exact target", windowsCommand.includes("--org='https://dev.azure.com/powerbi'") &&
+  windowsCommand.includes("--project='FabricSpecs'") && windowsCommand.includes("--repo='FabricSpecs'"));
+
+const localBanner = renderDiscoveryConnectionBanner({
+  connected: false,
+  localRepoPath: "/repo/<unsafe>",
+  target: adoTarget,
+});
+ok("local banner identifies local-only mode", localBanner.includes("Local only"));
+ok("local banner explains unavailable remote features", localBanner.includes("Pull requests") && localBanner.includes("shared comments"));
+ok("local banner offers a copyable go-online command", localBanner.includes('id="onlineRelaunchCommand"') && localBanner.includes('id="copyOnlineCommand"'));
+ok("local banner escapes the repository path", localBanner.includes("/repo/&lt;unsafe&gt;") && !localBanner.includes("/repo/<unsafe>"));
+eq("connected Discovery has no warning", renderDiscoveryConnectionBanner({ connected: true, localRepoPath: "/repo", target: adoTarget }), "");
+ok("offline banner identifies cached mode", renderDiscoveryConnectionBanner({ connected: false, offline: true, target: adoTarget }).includes("Offline"));
+ok("explicit offline mode overrides a live connection", renderDiscoveryConnectionBanner({ connected: true, offline: true, target: adoTarget }).includes("Offline"));
+ok("missing live connection identifies cached mode", renderDiscoveryConnectionBanner({ connected: false, target: adoTarget }).includes("Offline"));
 
 console.log(`html-util: ${pass} passed, ${fail} failed`);
 if (fail > 0) process.exit(1);

@@ -1,6 +1,6 @@
 // Tests for the local-repo tile helpers: .git/HEAD parsing + working-tree
 // validation (via an injected fake fs).
-import { parseGitHead, parsePackedRefs, mergeLocalBranches, resolveGitDir, validateLocalRepo, parseGitConfigOriginUrl, parseAdoRemoteUrl, parseOriginHeadDefault, userCreatedBranches } from "./local-repo.js";
+import { parseGitHead, parsePackedRefs, mergeLocalBranches, resolveGitDir, validateLocalRepo, parseGitConfigOriginUrl, parseAdoRemoteUrl, parseAdoRemoteTarget, inferAdoTargetFromLocalRepo, parseOriginHeadDefault, userCreatedBranches } from "./local-repo.js";
 import path from "node:path";
 
 let pass = 0, fail = 0;
@@ -122,6 +122,36 @@ eq("visualstudio.com host", parseAdoRemoteUrl("https://org.visualstudio.com/Proj
 eq("ssh v3 form", parseAdoRemoteUrl("git@ssh.dev.azure.com:v3/org/Proj/Repo"), { project: "Proj", repo: "Repo" });
 eq("non-ado / junk -> null", parseAdoRemoteUrl("https://github.com/o/r"), null);
 eq("empty -> null", parseAdoRemoteUrl(""), null);
+eq("full dev.azure.com target", parseAdoRemoteTarget("https://powerbi@dev.azure.com/powerbi/FabricSpecs/_git/FabricSpecs"),
+  { org: "https://dev.azure.com/powerbi", project: "FabricSpecs", repo: "FabricSpecs" });
+eq("full visualstudio.com target", parseAdoRemoteTarget("https://powerbi.visualstudio.com/Power%20BI/_git/powerbi-specs"),
+  { org: "https://dev.azure.com/powerbi", project: "Power BI", repo: "powerbi-specs" });
+eq("full ssh target", parseAdoRemoteTarget("git@ssh.dev.azure.com:v3/powerbi/FabricSpecs/FabricSpecs"),
+  { org: "https://dev.azure.com/powerbi", project: "FabricSpecs", repo: "FabricSpecs" });
+eq("full legacy ssh target", parseAdoRemoteTarget("git@vs-ssh.visualstudio.com:v3/powerbi/FabricSpecs/FabricSpecs"),
+  { org: "https://dev.azure.com/powerbi", project: "FabricSpecs", repo: "FabricSpecs" });
+eq("infers target from local clone origin",
+  inferAdoTargetFromLocalRepo("/repo", fakeFs({
+    "/repo": { dir: true },
+    [G(".git")]: { dir: true },
+    [G(path.join(".git", "config"))]: { content: cfg },
+  })),
+  { org: "https://dev.azure.com/powerbi", project: "Power BI", repo: "powerbi-specs" });
+eq("non-ADO clone has no online target",
+  inferAdoTargetFromLocalRepo("/repo", fakeFs({
+    "/repo": { dir: true },
+    [G(".git")]: { dir: true },
+    [G(path.join(".git", "config"))]: { content: '[remote "origin"]\n\turl = https://github.com/o/r.git' },
+  })),
+  null);
+eq("infers target from linked worktree common config",
+  inferAdoTargetFromLocalRepo("/repo", fakeFs({
+    "/repo": { dir: true },
+    [G(".git")]: { dir: false, content: "gitdir: /main/.git/worktrees/topic\n" },
+    "/main/.git/worktrees/topic/commondir": { content: "../..\n" },
+    "/main/.git/config": { content: cfg },
+  })),
+  { org: "https://dev.azure.com/powerbi", project: "Power BI", repo: "powerbi-specs" });
 
 // --- parseOriginHeadDefault --------------------------------------------------
 eq("origin HEAD -> default branch", parseOriginHeadDefault("ref: refs/remotes/origin/main\n"), "main");
