@@ -4,8 +4,8 @@
   "description": "Offline-capable CLI to read, annotate, and edit Azure DevOps PR markdown specs",
   "type": "module",
   "bin": {
-    "tippani": "./src/index.js",
-    "tippani-mcp": "./src/mcp.js"
+    "tippani": "src/index.js",
+    "tippani-mcp": "src/mcp.js"
   },
   "files": [
     "src/",
@@ -113,7 +113,7 @@
   ],
   "repository": {
     "type": "git",
-    "url": "https://github.com/mavaali/tippani.git"
+    "url": "git+https://github.com/mavaali/tippani.git"
   },
   "homepage": "https://github.com/mavaali/tippani",
   "author": "Mihir Wagle",
