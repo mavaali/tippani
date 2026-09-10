@@ -1,5 +1,21 @@
 # Changelog
 
+## 1.8.2 (2026-09-10)
+
+Local and offline portals now identify their connection mode on the Discovery
+screen and explain how to restart Tippani online.
+
+### Fixed
+
+- **Visible local/offline state:** Discovery shows a prominent **Local only** or
+  **Offline** notice before the tabs, names the remote capabilities that are
+  unavailable, and keeps connected portals free of an erroneous warning.
+- **Guided Azure DevOps relaunch:** when a local clone's `origin` is an Azure
+  DevOps repository, Tippani derives its organization, project, and repository
+  and provides a copyable command that acquires an Azure CLI access token and
+  restarts Discovery online. Other local repositories receive generic relaunch
+  guidance instead of a guessed target.
+
 ## 1.8.1 (2026-08-14)
 
 The local client boundary is now authenticated end to end: every browser page
