@@ -43,8 +43,10 @@ jobs:
         env:
           TIPPANI_RELEASE: ${{ inputs.release && '1' || '0' }}
           CSC_IDENTITY_AUTO_DISCOVERY: ${{ inputs.release && 'true' || 'false' }}
-          CSC_LINK: ${{ inputs.release && (matrix.platform == 'mac' && secrets.MAC_CSC_LINK || secrets.WIN_CSC_LINK) || '' }}
-          CSC_KEY_PASSWORD: ${{ inputs.release && (matrix.platform == 'mac' && secrets.MAC_CSC_KEY_PASSWORD || secrets.WIN_CSC_KEY_PASSWORD) || '' }}
+          # Mac only: Windows ships unsigned (see electron-builder.cjs) so there
+          # is no WIN_CSC_LINK/WIN_CSC_KEY_PASSWORD to wire up.
+          CSC_LINK: ${{ inputs.release && matrix.platform == 'mac' && secrets.MAC_CSC_LINK || '' }}
+          CSC_KEY_PASSWORD: ${{ inputs.release && matrix.platform == 'mac' && secrets.MAC_CSC_KEY_PASSWORD || '' }}
           APPLE_ID: ${{ inputs.release && secrets.APPLE_ID || '' }}
           APPLE_APP_SPECIFIC_PASSWORD: ${{ inputs.release && secrets.APPLE_APP_SPECIFIC_PASSWORD || '' }}
           APPLE_TEAM_ID: ${{ inputs.release && secrets.APPLE_TEAM_ID || '' }}
@@ -82,19 +84,6 @@ jobs:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-      - name: Verify Windows Authenticode on app and installer
-        if: inputs.release && matrix.platform == 'win'
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $files = @(Get-Item "installers/win-unpacked/Tippani.exe") + @(Get-ChildItem "installers/*.exe")
-          if ($files.Count -ne 2) { throw "Expected the application and one Windows installer" }
-          foreach ($file in $files) {
-            $signature = Get-AuthenticodeSignature $file.FullName
-            if ($signature.Status -ne 'Valid' -or !$signature.SignerCertificate) {
-              throw "A valid trusted Authenticode signature is required: $($file.Name)"
-            }
-          }
       - uses: actions/upload-artifact@v4
         with:
           name: desktop-${{ matrix.platform }}-${{ matrix.arch }}

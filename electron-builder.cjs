@@ -12,12 +12,18 @@ module.exports = {
   npmRebuild: false,
   publish: null,
   artifactName: "Tippani-${version}-${os}-${arch}.${ext}",
-  forceCodeSigning: release,
+  // Mac must be signed and notarized for a release build — no unsigned fallback.
+  // Windows ships unsigned: a solo/individual maintainer currently has no
+  // affordable path to an Authenticode cert (CA/Browser Forum rules require the
+  // key on a hardware token or cloud HSM since mid-2023; Azure Trusted Signing,
+  // the cheapest cloud option, doesn't accept individual applicants). Users get
+  // a SmartScreen warning until this is revisited. forceCodeSigning therefore
+  // only needs to guard the mac build; that plus the throw below is redundant
+  // with (but cheaper than) the CI-side codesign/notarization verification.
+  forceCodeSigning: false,
   beforePack: async (context) => {
-    if (!release) return;
-    const required = context.electronPlatformName === "darwin"
-      ? ["CSC_LINK", "CSC_KEY_PASSWORD", "APPLE_ID", "APPLE_APP_SPECIFIC_PASSWORD", "APPLE_TEAM_ID"]
-      : ["CSC_LINK", "CSC_KEY_PASSWORD"];
+    if (!release || context.electronPlatformName !== "darwin") return;
+    const required = ["CSC_LINK", "CSC_KEY_PASSWORD", "APPLE_ID", "APPLE_APP_SPECIFIC_PASSWORD", "APPLE_TEAM_ID"];
     for (const key of required) {
       if (!process.env[key]) throw new Error(`Release signing requires ${key}. No unsigned release fallback.`);
     }
