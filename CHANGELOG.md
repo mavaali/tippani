@@ -1,5 +1,29 @@
 # Changelog
 
+## 1.9.0 (2026-09-11)
+
+Desktop installers and a friendlier command line: Tippani now ships signed
+native apps for Mac and Windows, and running `tippani` with nothing to go on
+asks instead of just telling you what you did wrong.
+
+### Added
+
+- **Desktop app (macOS, Windows):** a small Electron launcher that signs in
+  through Azure CLI over private IPC (no PATs, no unauthenticated HTTP setup
+  form), forks the same bundled CLI, and opens the authenticated portal in
+  the system browser. A local-only mode reviews a folder on disk with no
+  provider sign-in at all. Signed, notarized installers are built and
+  attached to GitHub Releases automatically on a version tag; npm
+  publication is gated on that signed release existing first.
+- **Interactive launch:** running `tippani` with no PR/target in a real
+  terminal now prompts for it — PR number (or a GitHub target), then
+  org/project/repo for Azure DevOps — pre-filled from `~/.tippani/config.json`
+  so a returning user can just hit Enter. Non-interactive callers (MCP,
+  `--headless`, CI) are unaffected and still get the usage text.
+
+Covers [#96](https://github.com/mavaali/tippani/pull/96) and
+[#97](https://github.com/mavaali/tippani/pull/97).
+
 ## 1.8.2 (2026-09-10)
 
 Local and offline portals now identify their connection mode on the Discovery
