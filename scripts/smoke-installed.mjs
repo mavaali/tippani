@@ -51,7 +51,7 @@ try {
     }
   } else throw new Error("Installed-app smoke must run on macOS or Windows.");
 } finally {
-  // Windows may briefly retain handles after NSIS removes the app executable.
-  fs.rmSync(work, { recursive: true, force: true, maxRetries: 10, retryDelay: 250 });
+  // Async rm handles Windows read-only-file EPERM recovery as well as retries.
+  await fs.promises.rm(work, { recursive: true, force: true, maxRetries: 10, retryDelay: 250 });
 }
 console.log("Native installer: installed path with spaces/Unicode and actual GUI/runtime smoke passed.");
