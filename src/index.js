@@ -70,6 +70,7 @@ import {
   summarizeNonMarkdown,
 } from "./config-util.js";
 import { resolveImagePath, imageContentType, isLfsPointer, secureImageHeaders, isValidRepoId } from "./image-src.js";
+import { promptLine, resolveAnswer } from "./interactive-launch.js";
 import { cssVariables, changeTypeBadge, escHtml, stripMarkdown, jsonForScript, errorPage, renderDiscoveryConnectionBanner } from "./html-util.js";
 import { getSpecContentAt, getSpecBlobAt, buildSpecWebUrl, getLastCommitAuthor } from "./ado-read.js";
 import { branchesForRepo, repoOptions, branchNamePlaceholder, sortBranches, shortBranchName, summarizeBranchRef } from "./branch-list.js";
@@ -128,6 +129,60 @@ function getConfig() {
   };
 }
 
+// Argumentless launch (`tippani` with no PR/target and a real terminal
+// attached): prompt for what's missing instead of dumping usage. Cached
+// answers from ~/.tippani/config.json are offered as defaults so a returning
+// user can just hit Enter through org/project/repo. Returns null (after
+// printing why) when the user didn't give enough to proceed, so main() can
+// exit(1) the same way the non-interactive usage path does.
+async function runInteractiveLaunch() {
+  const readline = await import("readline");
+  const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+  const ask = (question) => new Promise((resolve) => rl.question(question, resolve));
+  try {
+    console.log("No PR given — let's set one up. (Run with --demo instead to skip this.)\n");
+    const targetAnswer = await ask(promptLine("PR (number, or github:owner/repo#123)", null));
+    if (!targetAnswer.trim()) {
+      console.error("Error: a PR number or GitHub target is required.");
+      return null;
+    }
+
+    const githubTarget = parseGitHubTarget([targetAnswer.trim()], process.env);
+    if (githubTarget.isGitHub) {
+      if (githubTarget.error) {
+        console.error(`Error: ${githubTarget.error}`);
+        return null;
+      }
+      return { isGitHub: true, owner: githubTarget.owner, repo: githubTarget.repo, prId: githubTarget.prId };
+    }
+
+    const prId = parseInt(targetAnswer, 10);
+    if (!Number.isFinite(prId) || prId <= 0) {
+      console.error(`Error: "${targetAnswer.trim()}" isn't a PR number or a recognized GitHub target.`);
+      return null;
+    }
+
+    const cfg = loadConfig();
+    const org = resolveAnswer(await ask(promptLine("Org (e.g. https://dev.azure.com/myorg)", cfg.org)), cfg.org);
+    const project = resolveAnswer(await ask(promptLine("Project", cfg.project)), cfg.project);
+    const repo = resolveAnswer(await ask(promptLine("Repo (optional, defaults to project)", cfg.repo || project)), cfg.repo || project);
+    if (!org || !project) {
+      console.error("Error: org and project are required.");
+      return null;
+    }
+
+    const saveAnswer = await ask(promptLine("Save these as defaults for next time? [Y/n]", null));
+    if (!/^n/i.test(saveAnswer.trim())) {
+      saveConfig({ org, project, repo });
+      console.log("Config saved to ~/.tippani/config.json");
+    }
+
+    return { isGitHub: false, prId, org, project, repo };
+  } finally {
+    rl.close();
+  }
+}
+
 // Resolved at startup
 let ADO_ORG, ADO_PROJECT, ADO_REPO;
 let _hostKind = "ado";
@@ -143,6 +198,10 @@ let _adoProjectDisplayName = null;
 // Injected into the Discovery page so the Repo box shows the full path.
 let _localRepoPath = "";
 let _localAdoTarget = null;
+// Set when the argumentless interactive prompt (below) collects org/project/repo
+// directly from the user, so it can override getConfig()'s file/env/flag lookup
+// without needing those values to round-trip through process.argv.
+let _interactiveAdoConfig = null;
 
 // --- PAT management ---
 const PAT_FILE = path.join(CONFIG_DIR, "pat");
@@ -7307,8 +7366,23 @@ async function main() {
   if (_localRepoPath) approveLocalRoot(_localRepoPath); // --local-repo is an explicit user approval
   const browseModeEffective = browseMode || (!!_localRepoPath && !_prId);
   _browseMode = browseModeEffective;
+  if (!_prId && !browseModeEffective && process.stdin.isTTY && process.stdout.isTTY) {
+    const launched = await runInteractiveLaunch();
+    if (!launched) process.exit(1);
+    if (launched.isGitHub) {
+      _hostKind = "github";
+      _githubOwner = launched.owner;
+      _githubRepo = launched.repo;
+      _prId = launched.prId;
+    } else {
+      _prId = launched.prId;
+      _interactiveAdoConfig = { org: launched.org, project: launched.project, repo: launched.repo };
+    }
+  }
   if (!_prId && !browseModeEffective) {
     console.log("Usage: tippani <PR_ID> [options]");
+    console.log("");
+    console.log("(Run with a real terminal attached and no arguments to be prompted instead.)");
     console.log("");
     console.log("Try it with no setup:");
     console.log("  tippani --demo    Open the portal on a sample spec (no ADO, no login)");
@@ -7347,7 +7421,7 @@ async function main() {
 
   // Resolve host configuration. Existing templates still use these context
   // variables for labels/links; in GitHub mode they carry owner/full repo.
-  const adoConfig = getConfig();
+  const adoConfig = _interactiveAdoConfig || getConfig();
   if (_hostKind === "github") {
     ADO_ORG = "https://github.com";
     ADO_PROJECT = _githubOwner;
