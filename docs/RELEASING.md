@@ -1,30 +1,36 @@
 # Releasing Tippani
 
 Every version tag (`v*`, including prereleases) runs `.github/workflows/release.yml`.
-A release is published only after all three native installers build, pass their
-packaged-runtime smoke, and pass signature verification. Do not create a public
-release manually or publish npm first.
+A release is published only after all three native installers build and pass their
+packaged-runtime smoke; the Mac installer additionally must pass signature and
+notarization verification. Do not create a public release manually or publish npm
+first.
 
 ## Prerequisites
 
 - On `main`, with the release commit merged (version bumped in `package.json`, CHANGELOG entry added).
 - `npm test` is green.
 - The release tag must exactly match `v` + `package.json` version.
-- Repository signing secrets must be configured by an authorized maintainer:
+- Mac signing secrets must be configured by an authorized maintainer:
   - `MAC_CSC_LINK`: base64 Developer ID Application certificate (.p12);
     `MAC_CSC_KEY_PASSWORD`: certificate password.
   - `APPLE_ID`, `APPLE_APP_SPECIFIC_PASSWORD`, `APPLE_TEAM_ID`: Apple notarization
     credentials for that developer account.
-  - `WIN_CSC_LINK`: base64 Windows code-signing certificate (.pfx);
-    `WIN_CSC_KEY_PASSWORD`: certificate password. The certificate must be trusted
-    and usable on the Windows runner. If your issuer requires hardware/cloud HSM
-    signing, configure an approved runner/signing integration before release;
-    exporting a non-exportable key is not an option.
+- **The Windows installer ships unsigned.** As of mid-2023, CA/Browser Forum rules
+  require Authenticode keys to live on a hardware token or cloud HSM — there is no
+  more downloadable `.pfx` to base64 into a secret. The cheapest cloud option
+  (Azure Trusted Signing) does not currently accept individual applicants, and the
+  individual-friendly ones (e.g. SSL.com eSigner) run ~$300-400/yr, which hasn't
+  been justified for this project yet. Users installing the `.exe` will see a
+  Windows SmartScreen warning ("Windows protected your PC" → More info → Run
+  anyway). Revisit if that stops being acceptable; see `electron-builder.cjs` and
+  `.github/workflows/desktop.yml` for where Windows signing would plug back in.
 - GitHub Actions must allow macOS arm64, macOS Intel, Windows x64 runners and
   release publication by the workflow's `GITHUB_TOKEN`.
-- Missing signing credentials, notarization rejection, failed signature checks,
-  missing architectures or failing tests block publication. Never disable these
-  checks to get an unsigned public release out.
+- Missing Mac signing credentials, notarization rejection, failed Mac signature
+  checks, missing architectures or failing tests block publication. Never disable
+  those checks to get an unsigned Mac release out — Windows shipping unsigned is
+  the one deliberate, documented exception, not a precedent for skipping the rest.
 
 ## Architecture and build
 
@@ -96,9 +102,10 @@ credentials for development builds.
 
 Use a native runner for each architecture. `.github/workflows/desktop.yml` builds
 all three on every CI push/PR without signing secrets; these test artifacts must
-not be distributed as releases. The release caller enables fail-closed signing,
-notarizes/staples the Mac app and DMG, and checks Windows Authenticode on the app
-and installer. Installed-path tests mount/copy the DMG or silently install,
+not be distributed as releases. The release caller enables fail-closed signing on
+Mac and notarizes/staples the Mac app and DMG; the Windows installer is not
+signature-checked, since it ships unsigned (see Prerequisites above).
+Installed-path tests mount/copy the DMG or silently install,
 reinstall and uninstall NSIS on its native runner, using a path with spaces and
 Unicode. Smoke tests run the packaged executable, verify actual
 provider-backed browser content with fixture credentials, enforce loopback/browser
@@ -136,7 +143,8 @@ npm publish --tag next                 # prerelease
   A failed upload leaves a draft; rerun the failed workflow, don't publish it by hand.
 - `prepublishOnly` blocks normal `npm publish` until the matching GitHub release
   contains both Mac installers, the Windows installer and checksums. Don't bypass
-  lifecycle scripts. This presence check complements, not replaces, CI signing checks.
+  lifecycle scripts. This presence check complements, not replaces, CI's Mac
+  signing checks (Windows has none — it ships unsigned).
 - `dist/`, `installers/` and `.desktop-validation/` are ignored, not committed.
   Development installers are unsigned/ad hoc and cannot validate public signing.
 - End users upgrade by quitting, downloading and reinstalling. There is no

@@ -240,13 +240,16 @@ try {
   process.env.TIPPANI_RELEASE = "1";
   delete require.cache[require.resolve("../electron-builder.cjs")];
   const release = require("../electron-builder.cjs");
-  assert.equal(release.forceCodeSigning, true);
+  // Mac is fail-closed with no unsigned fallback; Windows ships unsigned (no
+  // affordable individual code-signing path exists), so it needs no identity
+  // and forceCodeSigning must not blanket-require one for every platform.
+  assert.equal(release.forceCodeSigning, false);
   assert.equal(release.mac.notarize, true);
   assert.equal(release.mac.identity, undefined);
   const oldLink = process.env.CSC_LINK;
   delete process.env.CSC_LINK;
   await assert.rejects(release.beforePack({ electronPlatformName: "darwin" }), /CSC_LINK/);
-  await assert.rejects(release.beforePack({ electronPlatformName: "win32" }), /CSC_LINK/);
+  await assert.doesNotReject(release.beforePack({ electronPlatformName: "win32" }));
   if (oldLink) process.env.CSC_LINK = oldLink;
   delete process.env.TIPPANI_RELEASE;
   console.log("desktop: URL/token validation, data preservation, renderer retry, isolation and fail-closed signing tests passed");
