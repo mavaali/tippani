@@ -50,7 +50,8 @@ try {
       if (fs.existsSync(path.join(app, "Tippani.exe"))) throw new Error("NSIS uninstall did not remove the installed executable.");
     }
   } else throw new Error("Installed-app smoke must run on macOS or Windows.");
-  console.log("Native installer: installed path with spaces/Unicode and actual GUI/runtime smoke passed.");
 } finally {
-  fs.rmSync(work, { recursive: true, force: true });
+  // Windows may briefly retain handles after NSIS removes the app executable.
+  fs.rmSync(work, { recursive: true, force: true, maxRetries: 10, retryDelay: 250 });
 }
+console.log("Native installer: installed path with spaces/Unicode and actual GUI/runtime smoke passed.");
