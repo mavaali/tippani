@@ -19,8 +19,11 @@ where your team's specs are stored.
 ## 1. Open the right spec
 
 Ask the author for the review number and the name of the spec they want you to read.
-Use the launch command from your setup. Tippani opens a browser window; leave its
-terminal window running while you work.
+Open the Tippani app, paste the pull request URL, select your Microsoft account
+(Azure DevOps) or enter a GitHub token, and choose
+**Start review**. Leave the app open while you work in the browser.
+If you installed through npm instead, use your launch command and leave its
+terminal window running.
 
 Check the review's title and author. Under **Changed Files**, choose the spec.
 If the document is already open, you can start reading.
@@ -107,7 +110,8 @@ You don't need to approve a spec just to finish reading it.
 ## 5. Come back later
 
 Closing a browser tab isn't the same as stopping Tippani. If Tippani is still
-running, open another terminal window and run:
+running, choose **Open browser again** in the app. If you installed through npm,
+open another terminal window and run:
 
 ```bash
 tippani open
@@ -116,7 +120,8 @@ tippani open
 This opens a fresh sign-in link. Don't bookmark or share that link: it works once.
 Don't type `localhost:3847` to start a new browser session.
 
-If Tippani says no portal is running, use your original launch command again.
+If Tippani says no portal is running, check sign-in and choose **Start review**
+again (or use your original CLI launch command).
 If it reports an expired app session, preserve any open edits before restarting.
 Don't assume unsaved text or every staged action will survive a restart.
 
@@ -126,7 +131,11 @@ Don't assume unsaved text or every staged action will survive a restart.
 
 | What you see | What to do |
 |---|---|
-| **Authentication required** or an expired browser link | Run `tippani open` while Tippani is running. |
+| **Authentication required** or an expired browser link | Choose **Open browser again** in the app, or run `tippani open` for an npm installation. |
+| Desktop startup fails or times out | Check the URL, internet connection and repository access. Check sign-in and choose **Start review** to retry. |
+| Azure CLI missing or signed out | Use **Azure CLI install instructions** if needed, reopen Tippani after installation, then **Sign in with Microsoft** and select the intended account and tenant. |
+| Azure CLI rejected Tippani's request | This is an application/CLI compatibility error, not a cancelled sign-in. Update Tippani and Azure CLI, then retry. Errors name the failing stage: account listing, Microsoft sign-in, or token acquisition. |
+| Sign-in renewal fails or account changes | Preserve open edits, stop the review, sign in again and explicitly select your account. Tippani never silently switches identities. For GitHub, enter a new token and check organization approval/SSO. |
 | More than one running portal | Use the listed port, for example `tippani open --port=3848`. |
 | Review not found or access denied | Check the review number and repository with the author. Confirm you can open the review in Azure DevOps or GitHub. |
 | No Markdown files | Ask for the review containing the `.md` spec. Tippani can't render a Word document or PDF. |
@@ -277,6 +286,89 @@ finished, return to [Open the right spec](#1-open-the-right-spec).*
 
 ### Install Tippani
 
+Download from [Tippani releases](https://github.com/mavaali/tippani/releases/latest).
+Follow your organization's approved installation process.
+
+- **Mac:** select the `mac-arm64.dmg` download for Apple Silicon, or `mac-x64.dmg`
+  for Intel (Apple menu → About This Mac shows the chip). Open the disk image,
+  drag Tippani into Applications, eject the image, and launch Tippani from Applications.
+  macOS 12 or later is required.
+- **Windows:** select the `win-x64.exe` download and follow the installer. It installs
+  for your account, without administrator rights, and adds Start menu and desktop
+  shortcuts. Windows 10 or later, x64, is required.
+
+The app includes its runtime; Node.js, npm and GitHub CLI are not required.
+Azure DevOps sign-in requires Microsoft's Azure CLI (see below).
+Public installers must be signed (and notarized on Mac).
+Do not disable Gatekeeper/SmartScreen to run an unsigned test build; use a public
+signed release. Signing does not guarantee that Windows reputation warnings or
+your organization's software restrictions will never appear.
+
+### Open a local repository without sign-in
+
+Choose **Local repository**, then **Choose folder**. The native folder picker
+accepts the root of an existing Git repository, including a Git worktree.
+Choose **Open local repository in browser** to use the existing local review
+screen. Git must be installed for branch/file operations; Node.js, npm, Azure CLI,
+a remote account and access tokens are not required.
+
+The folder is remembered for next time. If it has moved or is no longer readable,
+choose it again. Canceling the picker keeps your previous selection.
+Private notes remain local; any local edits stay in the repository. This launch
+does not connect to repository providers or publish remotely, even if Tippani
+has saved credentials from another session. Save your edits and stop the session
+before switching to **Remote review**.
+
+### Desktop sign-in (remote reviews only)
+
+Ask the author for the full PR URL. Currently the launcher accepts `github.com`
+and `dev.azure.com` PR URLs. For an old `ORG.visualstudio.com` link, open that
+review on `dev.azure.com` and copy its canonical URL.
+
+**Azure DevOps (Microsoft Entra sign-in, no PAT):**
+
+1. Install [Microsoft's Azure CLI](https://learn.microsoft.com/cli/azure/install-azure-cli)
+   through your organization's approved process if needed. Tippani provides an
+   instructions button, but never downloads or installs Azure CLI automatically.
+   Quit and reopen Tippani after installation. Standard Mac Homebrew paths and
+   Windows Azure CLI installations are detected even when a GUI's PATH is limited.
+2. Paste the PR URL. Choose **Use an existing sign-in** to reuse an existing
+   sign-in, or **Sign in with Microsoft** to open Microsoft's browser/account picker.
+   Complete your organization's normal sign-in and MFA.
+3. Explicitly select your account and tenant, then **Open review in browser**. No new Entra
+   app registration is needed. Tippani does not change Azure CLI's default account.
+4. Keep Tippani open. It renews the same account's Azure DevOps token before expiry.
+   If renewal fails or the CLI identity changes, it reports the problem rather than
+   switching to another account, a saved PAT, or Git credentials. Save open edits,
+   stop the review, sign in again and reselect the intended account.
+
+**GitHub:** create a fine-grained token in Settings → Developer settings →
+Personal access tokens. Select the repository, **Contents: Read** and **Pull requests:
+Read and write** (file editing needs Contents write access). Paste it into Tippani's
+**GitHub personal access token** field and choose **Start review**. Organization
+approval or SSO authorization may be required. Reenter it after stopping or quitting.
+
+Tippani keeps provider tokens in memory, not launch arguments, logs, saved settings,
+or browser URLs. The PR URL or local folder and selected mode are remembered. Azure CLI maintains its own Microsoft
+sign-in cache using its standard account management; Tippani does not copy or delete
+that cache. Never paste tokens into a browser address bar or share them.
+
+### Upgrade or uninstall the desktop app
+
+To upgrade, save your browser edits, quit Tippani, download the newer version and
+install over the old copy. There is no automatic updater or update service.
+Local notes, caches, pending feedback and settings remain in `~/.tippani`
+(Windows: `%USERPROFILE%\\.tippani`). Back up that folder before major upgrades.
+
+To uninstall, quit the app, then move Tippani from Applications to Trash on Mac,
+or use Settings → Apps → Tippani → Uninstall on Windows. This removes the app,
+not your `.tippani` data. Electron's window preferences may also remain in
+`~/Library/Application Support/Tippani` or `%APPDATA%\\Tippani`.
+Only delete these folders yourself if you intentionally want to erase their data.
+Browser drafts still need saving before closing or stopping.
+
+### Optional npm installation
+
 Use [Node.js 20 or later, with npm](https://nodejs.org/en/download) for this installation.
 Install software through your organization's approved process. A terminal is the app where you
 paste commands: Terminal on Mac or PowerShell on Windows.
@@ -296,6 +388,9 @@ Stop the demo with `Ctrl+C` in its terminal before opening a real review on the
 same port.
 
 ### Connect to Azure DevOps
+
+*This and the remaining setup sections apply to the optional npm/CLI installation,
+not the desktop app.*
 
 Have [Azure CLI](https://learn.microsoft.com/cli/azure/install-azure-cli) installed
 and sign in with the account that can access the review:

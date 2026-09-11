@@ -11,6 +11,11 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  desktop:
+    uses: ./.github/workflows/desktop.yml
+    with:
+      release: false
+
   test:
     name: test (node ${{ matrix.node }})
     runs-on: ubuntu-latest

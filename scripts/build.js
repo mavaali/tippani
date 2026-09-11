@@ -43,7 +43,7 @@ function assertNoThirdPartyLinks(binPath) {
 function resolveOfficialNode() {
   const arch = process.arch === "arm64" ? "arm64" : "x64";
   const dirName = `node-${SEA_NODE_VERSION}-darwin-${arch}`;
-  const cacheDir = path.join(process.env.HOME || "/tmp", ".cache", "tippani-build");
+  const cacheDir = path.join(ROOT, "dist", "node-cache");
   const nodeBin = path.join(cacheDir, dirName, "bin", "node");
   if (!fs.existsSync(nodeBin)) {
     fs.mkdirSync(cacheDir, { recursive: true });
@@ -91,7 +91,7 @@ const sh = `#!/bin/bash\nDIR="$(cd "$(dirname "$0")" && pwd)"\nnode "$DIR/cli.cj
 fs.writeFileSync(path.join(DIST, "tippani.sh"), sh, { mode: 0o755 });
 
 // 4. macOS SEA (only on macOS)
-if (process.platform === "darwin") {
+if (process.platform === "darwin" && !process.argv.includes("--bundle-only")) {
   console.log("4. Building macOS standalone binary (SEA)...");
   const seaConfig = { main: "dist/cli.cjs", output: "dist/sea-prep.blob", disableExperimentalSEAWarning: true };
   fs.writeFileSync(path.join(DIST, "sea-config.json"), JSON.stringify(seaConfig));
@@ -111,10 +111,10 @@ if (process.platform === "darwin") {
     run("codesign --sign - dist/bin/tippani");
     console.log("   ✓ macOS binary: dist/bin/tippani");
   } catch (e) {
-    console.log("   ⚠ SEA build failed, falling back to shell launcher only:", e.message);
+    throw new Error("Standalone SEA build failed. Use --bundle-only explicitly for runtime-backed packaging.", { cause: e });
   }
 } else {
-  console.log("4. Skipping SEA (not on macOS)");
+  console.log("4. Skipping SEA (bundle-only or not on macOS)");
 }
 
 // Summary
@@ -127,5 +127,4 @@ if (fs.existsSync(path.join(DIST, "bin", "tippani"))) {
   const binSize = (fs.statSync(path.join(DIST, "bin", "tippani")).size / 1024 / 1024).toFixed(0);
   console.log(`  dist/bin/tippani         ${binSize} MB (macOS standalone, no Node required)`);
 }
-console.log(`\nTo share with Windows users: send dist/cli.cjs + dist/tippani.bat`);
-console.log(`To share with macOS users:   send dist/bin/tippani (standalone)\n`);
+console.log(`\nFor desktop installers (bundled runtime): npm run package:desktop\n`);

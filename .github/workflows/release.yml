@@ -1,0 +1,88 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+      - name: Require matching version tag
+        run: node -e "if (process.env.GITHUB_REF_NAME !== 'v' + require('./package.json').version) process.exit(1)"
+      - run: npm ci
+      - run: npm test
+      - run: npm run smoke:built-demo
+      - run: npm run smoke:github-pr
+      - name: Stage npm and CLI distributions
+        shell: bash
+        run: |
+          mkdir -p release-assets
+          npm pack --pack-destination release-assets
+          cp dist/cli.cjs dist/tippani.sh dist/tippani.bat release-assets/
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cli-and-npm
+          path: release-assets/*
+          if-no-files-found: error
+
+  desktop:
+    needs: verify
+    uses: ./.github/workflows/desktop.yml
+    with:
+      release: true
+    secrets: inherit
+
+  publish:
+    needs: [verify, desktop]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+      - uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+          merge-multiple: true
+      - name: Check complete release and generate checksums
+        shell: bash
+        run: |
+          set -euo pipefail
+          version=$(node -p "require('./package.json').version")
+          for file in "Tippani-$version-mac-arm64.dmg" "Tippani-$version-mac-x64.dmg" "Tippani-$version-win-x64.exe" "tippani-$version.tgz" cli.cjs tippani.sh tippani.bat; do
+            test -s "release-assets/$file"
+          done
+          (cd release-assets && sha256sum * > SHA256SUMS.txt)
+      - name: Publish only after all signed installers are uploaded
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag="$GITHUB_REF_NAME"
+          if gh release view "$tag" --json isDraft >/dev/null 2>&1; then
+            test "$(gh release view "$tag" --json isDraft --jq .isDraft)" = true
+          else
+            gh release create "$tag" --verify-tag --draft --title "$tag" --generate-notes
+          fi
+          gh release upload "$tag" release-assets/* --clobber
+          if [[ "$tag" == *-* ]]; then
+            gh release edit "$tag" --draft=false --prerelease
+          else
+            gh release edit "$tag" --draft=false --latest
+          fi

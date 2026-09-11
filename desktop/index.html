@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src 'none'; form-action 'none'; base-uri 'none'; frame-src 'none'">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Tippani</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <main>
+    <header class="brand">
+      <span class="brand-mark" aria-hidden="true">t.</span>
+      <div><span class="brand-name">Tippani</span><span class="brand-caption">A little more clarity. A better review.</span></div>
+      <small id="version" class="version"></small>
+    </header>
+    <div class="intro">
+      <p class="eyebrow">YOUR REVIEW STARTS HERE</p>
+      <h1>Make room for the discussion.</h1>
+      <p>Open a spec, leave a thoughtful note, move the work forward.</p>
+    </div>
+    <form id="setup">
+      <fieldset id="mode-choice" class="mode-choice">
+        <legend>How would you like to work?</legend>
+        <label><input type="radio" name="mode" id="mode-remote" value="remote" checked> Remote review <small>Azure DevOps or GitHub</small></label>
+        <label><input type="radio" name="mode" id="mode-local" value="local"> Local repository <small>No sign-in required</small></label>
+      </fieldset>
+      <section class="card" aria-labelledby="review-heading">
+        <div class="section-heading"><span class="step" aria-hidden="true">01</span><h2 id="review-heading">Choose a review</h2><span id="provider-label" class="tag">Azure DevOps / GitHub</span></div>
+        <div id="remote-target">
+        <label for="target">Pull request URL</label>
+        <input id="target" type="url" required placeholder="Paste the link shared by the author" autocomplete="off" spellcheck="false" aria-describedby="target-hint">
+        <p id="target-hint" class="hint">Use the full Azure DevOps or GitHub pull request link.</p>
+        </div>
+        <div id="local-target" hidden>
+          <label for="local-path">Repository folder</label>
+          <div class="folder-choice"><input id="local-path" readonly placeholder="Choose a folder on this computer" aria-describedby="local-hint"><button id="pick-local" type="button">Choose folder</button></div>
+          <p id="local-hint" class="hint">Choose an existing Git repository. Git is needed to browse branches; Azure CLI and access tokens are not.</p>
+        </div>
+      </section>
+      <section id="connection" class="card" aria-labelledby="connect-heading">
+        <div class="section-heading"><span class="step" aria-hidden="true">02</span><h2 id="connect-heading">Connect your account</h2></div>
+      <section id="azure">
+        <p class="section-copy">Your Microsoft work account. No personal access token.</p>
+        <div class="actions">
+          <button id="accounts" type="button">Use an existing sign-in</button>
+          <button id="sign-in" type="button">Sign in with Microsoft</button>
+        </div>
+        <label for="account">Microsoft account and tenant</label>
+        <select id="account" aria-describedby="account-hint"><option value="">Choose a sign-in method above</option></select>
+        <p id="account-hint" class="hint">Choose the account with access to this repository.</p>
+        <details>
+          <summary>First time here?</summary>
+          <p class="hint">Tippani uses Azure CLI for Microsoft sign-in. It opens your browser or account picker and renews access while the app stays open. No Node.js or npm needed.</p>
+          <button id="cli-help" class="text-button" type="button">Azure CLI installation guide</button>
+        </details>
+      </section>
+      <section id="github" hidden>
+      <label for="token">GitHub personal access token</label>
+      <input id="token" type="password" autocomplete="off" spellcheck="false">
+      <p class="hint">Your token stays in memory only. Enter it again after quitting or stopping a review. Never put a token in the URL.</p>
+      <details>
+        <summary>How do I get an access token?</summary>
+        <p><strong>GitHub:</strong> open Settings → Developer settings → Personal access tokens → Fine-grained tokens. Select the repository, Contents (Read), and Pull requests (Read and write). For file editing, Contents also needs write access. Your organization may need to approve the token or authorize SSO.</p>
+        <p>Tokens grant your account's permissions. Use the shortest practical expiry and only the repositories you need. Revoke a token on the provider's website if you lose it. Ask your repository owner if token creation is restricted.</p>
+      </details>
+      </section>
+      </section>
+      <section id="local-info" class="session" hidden>
+        <h2>Only on this computer</h2>
+        <p class="hint">Read local files and keep private notes without signing in. Local edits stay in your repository; this session does not publish to Azure DevOps or GitHub. Stop it and choose Remote review to work online.</p>
+      </section>
+      <button id="start" class="primary" type="submit">Open review in browser <span aria-hidden="true">&rarr;</span></button>
+    </form>
+    <section id="session" class="session" data-state="idle" aria-labelledby="session-heading">
+      <div class="session-heading"><h2 id="session-heading">Review session</h2><span id="state-label" class="tag">Ready to connect</span></div>
+      <p id="status" role="status" aria-live="polite" aria-atomic="true">Paste a review link to get started.</p>
+      <div id="session-actions" class="actions" hidden>
+        <button id="open" disabled>Reopen browser</button>
+        <button id="stop" disabled>Stop review</button>
+      </div>
+    </section>
+    <footer><p class="hint">Keep Tippani open while reviewing. Save browser edits before quitting; saved notes stay on this computer.</p><button id="quit" class="text-button">Quit Tippani</button></footer>
+  </main>
+  <script src="renderer.js"></script>
+</body>
+</html>
