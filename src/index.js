@@ -389,6 +389,7 @@ function friendlyAdoError(e, context) {
 }
 
 async function getTokenFromAzCli() {
+  if (_localOnly) return null;
   // Dev fallback for standalone use: mint an ADO access token via the az CLI for
   // the host-configured resource. No resource configured → no token.
   const resource = process.env.TIPPANI_ADO_AUDIENCE;
@@ -6796,6 +6797,7 @@ ${NAV_WATCHER}
 
 // --- Module-level state ---
 let _conn, _pr, _prId, _branch, _changedFiles, _otherChangedFiles = [], _cache, _isOffline, _canEdit = false;
+let _localOnly = false;
 // True when this portal was launched in browse mode (no PR on the command line).
 // A browse portal is anchored on the Discovery home: opening a PR from the queue
 // binds it (setting _prId) but must NOT make the home unreachable, so the home
@@ -6817,6 +6819,7 @@ let HOST_TOKEN_MODE = false;
 // expires, so a long-lived portal never makes ADO calls with a stale token.
 // Rebuilds the connection so every subsequent ADO call uses the new bearer.
 function applyAdoToken(token) {
+  if (_localOnly) return false;
   if (typeof token !== "string" || !token) return false;
   // Reject a stale bearer instead of binding it and failing later ADO calls.
   // The whole point of the push is "fresh before the old one expires", so an
@@ -6905,6 +6908,7 @@ const _remoteSpecDrafts = {
 // host-token invariant: in host-token mode it uses the live bearer or nothing —
 // it never falls back to a PAT/CLI identity (selectAdoAuthSource enforces this).
 function buildConnForOrg(org) {
+  if (_localOnly) return null;
   if (_hostKind === "github") return null;
   if ((!org || org === ADO_ORG) && _conn) return _conn;
   // Only consult a saved PAT in standalone mode; in host-token mode a missing
@@ -7363,6 +7367,12 @@ async function main() {
   // Local tab and (alone) boots the portal in browse mode.
   const localRepoArg = (args.find(a => a.startsWith("--local-repo="))?.split("=").slice(1).join("=")) || process.env.TIPPANI_LOCAL_REPO || null;
   _localRepoPath = localRepoArg ? String(localRepoArg).trim() : "";
+  const localOnly = args.includes("--local-only");
+  _localOnly = localOnly;
+  if (localOnly && (!_localRepoPath || _prId || _hostKind === "github")) {
+    console.error("--local-only requires --local-repo without a remote review target.");
+    process.exit(1);
+  }
   if (_localRepoPath) approveLocalRoot(_localRepoPath); // --local-repo is an explicit user approval
   const browseModeEffective = browseMode || (!!_localRepoPath && !_prId);
   _browseMode = browseModeEffective;
@@ -7452,7 +7462,7 @@ async function main() {
   }
 
   const forceRefresh = args.includes("--refresh");
-  _isOffline = args.includes("--offline");
+  _isOffline = localOnly || args.includes("--offline");
 
   // Host integration: --port / --headless / --ado-token (or the
   // TIPPANI_* env equivalents). Port lets multiple PRs run at once; headless
@@ -7508,7 +7518,7 @@ async function main() {
   // So browse mode only sets up the connection + empty PR state here, then falls
   // through to the shared app below.
   if (browseModeEffective) {
-    if (_hostKind === "ado") {
+    if (_hostKind === "ado" && !localOnly) {
       if (adoToken) _conn = getAdoConnectionBearer(adoToken);
       else { const pat = loadPat(); if (pat) _conn = getAdoConnection(pat); }
     }
@@ -9923,6 +9933,9 @@ if ($path) { [Console]::Out.Write($path) }
     }
     try {
       persistAppSession(appBearer);
+      if (process.env.TIPPANI_DESKTOP === "1" && process.send) {
+        process.send({ type: "desktop-ready", port: PORT });
+      }
     } catch (e) {
       console.warn(`  Warning: could not persist session token: ${e.message}`);
     }

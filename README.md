@@ -31,7 +31,38 @@ URL and the name of the spec to read. You'll need access to its repository.
 Tippani displays Markdown (`.md`) specs, including tables, code, images, and Mermaid
 diagrams. It doesn't display Word documents or PDFs.
 
-## Try the demo
+## Install the desktop app (recommended)
+
+Download an installer from [Release downloads](https://github.com/mavaali/tippani/releases/latest):
+
+- **Mac (macOS 12+):** choose `Tippani-VERSION-mac-arm64.dmg` for Apple Silicon,
+  or `Tippani-VERSION-mac-x64.dmg` for Intel. Open it and drag **Tippani** to **Applications**.
+- **Windows (Windows 10+ x64):** run `Tippani-VERSION-win-x64.exe`, then open
+  **Tippani** from the Start menu.
+
+No Node.js or npm is needed. Paste a pull request URL in the app.
+**Azure DevOps:** install Microsoft's Azure CLI if needed, choose **Sign in with
+Microsoft**, then explicitly select your account and tenant. No PAT or new app
+registration is required; existing Azure CLI accounts can be reused.
+**GitHub:** enter a GitHub personal access token. Choose **Start review**.
+The existing review interface opens in your normal browser.
+
+For local-only work, choose **Local repository**, then **Choose folder** and
+**Open local repository in browser**. Select an existing Git repository.
+No Azure CLI, account, PR URL or token is needed; Git is needed to browse branches.
+This session does not publish remotely. Stop it and select **Remote review** to
+work with Azure DevOps or GitHub.
+
+Keep the app open while reviewing. **Open browser again** renews browser sign-in;
+**Quit Tippani** stops its server without deleting saved data. To upgrade, quit
+and install the newer download over the old app. Every new release includes both
+Mac architectures and a Windows installer; older releases may have only CLI files.
+Unsigned CI/development builds are for testing, not public distribution.
+
+See **[One-time setup](docs/user-guide.md#one-time-setup)** for sign-in, upgrades,
+uninstall and the still-supported npm/CLI installation.
+
+## Optional command-line demo
 
 With **Node.js 20 or later and npm** installed, run this in a terminal:
 
@@ -41,12 +72,8 @@ npx tippani --demo
 
 The demo opens sample content without a repository account, login, or local clone.
 Comments entered there aren't saved or sent. Leave the terminal running while you
-look around; press `Ctrl+C` there to stop the demo.
-
-For a real review, follow **[One-time setup](docs/user-guide.md#one-time-setup)**.
-It covers installation and sign-in for Azure DevOps or GitHub. Ask a teammate to
-help if terminal commands are unfamiliar; you don't need to learn Git commands
-to use the review screen.
+look around; press `Ctrl+C` there to stop the demo. The desktop app instead opens
+real reviews using the setup above.
 
 ## Know what you're sharing
 

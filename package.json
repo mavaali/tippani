@@ -78,6 +78,12 @@
     "build:client": "node scripts/build-client.js",
     "build:mermaid": "node scripts/build-mermaid.js",
     "build": "node scripts/build.js",
+    "build:desktop": "node scripts/build-desktop.mjs",
+    "package:desktop": "npm run build:desktop && electron-builder --projectDir dist/desktop-app --config ../../electron-builder.cjs --publish never",
+    "pretest": "npm run test:desktop",
+    "prepublishOnly": "node scripts/check-release.mjs",
+    "test:desktop": "node src/desktop.test.mjs",
+    "smoke:desktop": "node scripts/smoke-desktop.mjs",
     "test:htmlutil": "node src/html-util.test.mjs",
     "test:adoread": "node src/ado-read.test.mjs",
     "test:tokencli": "node src/ado-token-cli.test.mjs",
@@ -140,6 +146,8 @@
     "unified": "^11.0.5"
   },
   "devDependencies": {
+    "electron": "41.10.7",
+    "electron-builder": "26.0.12",
     "esbuild": "^0.25.0",
     "jsdom": "^29.1.1",
     "postject": "^1.0.0-alpha.6"

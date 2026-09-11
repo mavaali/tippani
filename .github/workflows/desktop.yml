@@ -1,0 +1,105 @@
+name: Desktop installers
+
+on:
+  workflow_call:
+    inputs:
+      release:
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    name: desktop (${{ matrix.platform }}-${{ matrix.arch }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15
+            platform: mac
+            arch: arm64
+            app: installers/mac-arm64/Tippani.app
+          - runner: macos-15-intel
+            platform: mac
+            arch: x64
+            app: installers/mac/Tippani.app
+          - runner: windows-latest
+            platform: win
+            arch: x64
+            app: installers/win-unpacked
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+      - run: npm ci
+      - run: npm run test:desktop
+      - name: Build native installer (never publish from a build job)
+        shell: bash
+        env:
+          TIPPANI_RELEASE: ${{ inputs.release && '1' || '0' }}
+          CSC_IDENTITY_AUTO_DISCOVERY: ${{ inputs.release && 'true' || 'false' }}
+          CSC_LINK: ${{ inputs.release && (matrix.platform == 'mac' && secrets.MAC_CSC_LINK || secrets.WIN_CSC_LINK) || '' }}
+          CSC_KEY_PASSWORD: ${{ inputs.release && (matrix.platform == 'mac' && secrets.MAC_CSC_KEY_PASSWORD || secrets.WIN_CSC_KEY_PASSWORD) || '' }}
+          APPLE_ID: ${{ inputs.release && secrets.APPLE_ID || '' }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ inputs.release && secrets.APPLE_APP_SPECIFIC_PASSWORD || '' }}
+          APPLE_TEAM_ID: ${{ inputs.release && secrets.APPLE_TEAM_ID || '' }}
+        run: npm run package:desktop -- --${{ matrix.platform }} --${{ matrix.arch }}
+      - name: Packaged-runtime lifecycle and authenticated portal smoke
+        run: npm run smoke:desktop -- "${{ matrix.app }}"
+      - name: Install native artifact and validate installed application
+        shell: bash
+        run: |
+          set -euo pipefail
+          version=$(node -p "require('./package.json').version")
+          if [[ "${{ matrix.platform }}" == mac ]]; then
+            node scripts/smoke-installed.mjs "installers/Tippani-$version-mac-${{ matrix.arch }}.dmg"
+          else
+            node scripts/smoke-installed.mjs "installers/Tippani-$version-win-${{ matrix.arch }}.exe"
+          fi
+      - name: Verify Developer ID, notarization and disk image ticket
+        if: inputs.release && matrix.platform == 'mac'
+        shell: bash
+        run: |
+          set -euo pipefail
+          codesign --verify --deep --strict --verbose=2 "$APP_PATH"
+          codesign -dv "$APP_PATH" 2>&1 | grep 'Authority=Developer ID Application:'
+          xcrun stapler validate "$APP_PATH"
+          spctl --assess --type execute --verbose=2 "$APP_PATH"
+          # The app is notarized by electron-builder. Submit and staple the
+          # signed DMG too, so first installation works without an online ticket lookup.
+          for image in installers/*.dmg; do
+            xcrun notarytool submit "$image" --apple-id "$APPLE_ID" --password "$APPLE_APP_SPECIFIC_PASSWORD" --team-id "$APPLE_TEAM_ID" --wait
+            xcrun stapler staple "$image"
+            xcrun stapler validate "$image"
+          done
+        env:
+          APP_PATH: ${{ matrix.app }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+      - name: Verify Windows Authenticode on app and installer
+        if: inputs.release && matrix.platform == 'win'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $files = @(Get-Item "installers/win-unpacked/Tippani.exe") + @(Get-ChildItem "installers/*.exe")
+          if ($files.Count -ne 2) { throw "Expected the application and one Windows installer" }
+          foreach ($file in $files) {
+            $signature = Get-AuthenticodeSignature $file.FullName
+            if ($signature.Status -ne 'Valid' -or !$signature.SignerCertificate) {
+              throw "A valid trusted Authenticode signature is required: $($file.Name)"
+            }
+          }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: desktop-${{ matrix.platform }}-${{ matrix.arch }}
+          if-no-files-found: error
+          path: |
+            installers/*.dmg
+            installers/*.exe
+          retention-days: 14
