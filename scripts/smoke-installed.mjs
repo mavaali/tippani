@@ -32,11 +32,16 @@ try {
     await smoke(path.join(destination, "Tippani.app"));
   } else if (process.platform === "win32") {
     const app = path.join(destination, "Tippani");
-    // NSIS requires /D as the last argument, without quotes even for spaces.
-    await run(image, ["/S", `/D=${app}`], { windowsVerbatimArguments: true });
+    // electron-builder reads /D with StdUtils.GetParameter, which needs normal
+    // Windows argument quoting to preserve a destination containing spaces.
+    const install = () => run(image, ["/S", "/currentuser", `/D=${app}`]);
+    await install();
     try {
+      if (!fs.existsSync(path.join(app, "Tippani.exe")) || !fs.existsSync(path.join(app, "resources", "app.asar"))) {
+        throw new Error(`NSIS did not install the executable and application archive at the requested destination: ${app}`);
+      }
       await smoke(app);
-      await run(image, ["/S", `/D=${app}`], { windowsVerbatimArguments: true });
+      await install();
       await smoke(app);
     } finally {
       const uninstall = path.join(app, "Uninstall Tippani.exe");
