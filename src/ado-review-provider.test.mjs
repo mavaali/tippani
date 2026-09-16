@@ -237,6 +237,10 @@ function providerFor(fake, options = {}) {
 
   await provider.createComment(12, {
     filePath: "/spec.md", line: 7, body: "Needs evidence",
+    anchor: {
+      start: { line: 7, offset: 4 },
+      end: { line: 7, offset: 11 },
+    },
   });
   const createArgs = lastCall(fake.calls, "createThread").args;
   eq("createComment SDK coordinates", createArgs.slice(1), ["repo-A", 12, "project-A"]);
@@ -245,8 +249,8 @@ function providerFor(fake, options = {}) {
     status: 1,
     threadContext: {
       filePath: "/spec.md",
-      rightFileStart: { line: 7, offset: 1 },
-      rightFileEnd: { line: 7, offset: 1 },
+      rightFileStart: { line: 7, offset: 4 },
+      rightFileEnd: { line: 7, offset: 11 },
     },
   });
 

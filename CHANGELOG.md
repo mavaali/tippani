@@ -1,5 +1,25 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- Selected-text comments preserve exact Azure DevOps character spans when
+  representable and always retain the quoted selection as durable context.
+- Searchable `@mention` pickers in new comments and replies emit provider-native
+  Azure DevOps or GitHub mentions, with keyboard navigation and explicit offline
+  notification behavior.
+- The active review page now includes **Use with Copilot**, showing the current
+  session, provider-specific MCP setup, staged proposal flow and failure guidance.
+
+### Fixed
+
+- Live preview uses half-open syntax ranges, so leaving a Markdown construct
+  re-hides its markers; unsupported raw HTML is visibly identified.
+- **Save edits to PR** and **Approve PR** are distinct. Review votes are blocked
+  while edits are dirty or queued, and queued saves retain conflict-safe recovery
+  instead of silently widening the action's meaning.
+
 ## 1.9.0 (2026-09-11)
 
 Desktop installers and a friendlier command line: Tippani now ships signed

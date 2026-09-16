@@ -95,6 +95,13 @@ import { createGitHubSearchProvider } from "./github-search-provider.js";
 import { createGitHubBlobProvider } from "./github-blob-provider.js";
 import { createGitHubViewedStore } from "./github-viewed-store.js";
 import { normalizeGitHubCoordinates, parseGitHubTarget, selectGitHubToken } from "./github-target.js";
+import { wireMentionComposers } from "./client/mention-composer.js";
+import {
+  collectReviewParticipants,
+  composeReviewComment,
+  displayAdoMentions,
+  mapSelectionToSource,
+} from "./review-comment.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -687,9 +694,9 @@ async function getCommentThreads(conn, prId) {
   return reviewProvider(conn).listThreads(prId);
 }
 
-async function createCommentThread(conn, prId, filePath, line, content) {
+async function createCommentThread(conn, prId, filePath, line, content, anchor = null) {
   return reviewProvider(conn).createComment(prId, {
-    filePath, line, body: content,
+    filePath, line, body: content, anchor,
   });
 }
 
@@ -825,7 +832,7 @@ async function renderMarkdown(content) {
     .use(rehypeSlug)
     .use(rehypeAutolinkHeadings, { behavior: "wrap" })
     .use(rehypeStringify)
-    .process(content);
+    .process(displayAdoMentions(content));
   return String(result);
 }
 
@@ -960,7 +967,7 @@ async function renderMarkdownSafe(content) {
 
 function stripFrontmatter(content) {
   const match = content.match(/^---\n([\s\S]*?)\n---\n([\s\S]*)$/);
-  if (!match) return { metadata: {}, body: content };
+  if (!match) return { metadata: {}, body: content, bodyLineOffset: 0 };
   const metadata = {};
   match[1].split("\n").forEach((line) => {
     const [key, ...vals] = line.split(":");
@@ -968,7 +975,8 @@ function stripFrontmatter(content) {
       metadata[key.trim()] = vals.join(":").trim().replace(/^["']|["']$/g, "");
     }
   });
-  return { metadata, body: match[2] };
+  const prefix = content.slice(0, content.length - match[2].length);
+  return { metadata, body: match[2], bodyLineOffset: (prefix.match(/\n/g) || []).length };
 }
 
 function buildSourceMap(content) {
@@ -1043,6 +1051,25 @@ const NAV_WATCHER = `<script>
   navPoll();
 })();
 <\/script>`;
+
+function mentionComposerCss() {
+  return `
+.mention-host { position: relative; }
+.mention-list { position: absolute; left: 0; right: 0; top: 100%; margin-top: 4px; max-height: 180px; overflow-y: auto; background: var(--cp-surface); border: 1px solid var(--cp-border-strong); border-radius: 8px; box-shadow: var(--cp-shadow); z-index: 250; }
+.mention-option { display: block; width: 100%; border: 0; border-bottom: 1px solid var(--cp-border); background: transparent; color: var(--cp-text); padding: 8px 10px; text-align: left; font: inherit; cursor: pointer; }
+.mention-option:last-child { border-bottom: 0; }
+.mention-option.active, .mention-option:hover { background: var(--cp-accent-soft); }
+.mention-chips { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 5px; }
+.mention-chip { padding: 2px 7px; border-radius: 99px; background: var(--cp-accent-soft); color: var(--cp-accent); font-size: 11px; font-weight: 600; }
+.mention-offline { color: var(--cp-warning); font-size: 11px; margin-top: 4px; }
+`;
+}
+
+function mentionComposerScript(participants, isOffline) {
+  return `<script>
+(${wireMentionComposers.toString()})(document, ${jsonForScript(participants || [])}, ${jsonForScript(!!isOffline)});
+<\/script>`;
+}
 
 // --- File picker landing page ---
 function buildPickerPage(pr, changedFiles, threads = []) {
@@ -2691,11 +2718,12 @@ function buildThreadPage(pr, thread, draft, isViewed = false, viewedError = null
   const anchor = file ? `${file.split("/").pop()}${line ? ":" + line : ""}` : "PR-level comment";
   const resolved = thread.status === 2 || thread.status === 4;
   const draftContent = (draft && draft.content) || "";
+  const mentionParticipants = collectReviewParticipants(pr, [thread]);
 
   const commentsHtml = (thread.comments || []).map((c) => {
     const who = escHtml(c.author?.displayName || "Unknown");
     const when = c.publishedDate ? escHtml(new Date(c.publishedDate).toLocaleString()) : "";
-    const body = escHtml(c.content || "");
+    const body = c.renderedContent || escHtml(c.content || "");
     return `<div class="tc">
       <div class="tc-head"><span class="tc-who">${who}</span><span class="tc-when">${when}</span></div>
       <div class="tc-body">${body}</div>
@@ -2737,6 +2765,7 @@ textarea:focus { outline: 2px solid var(--cp-accent); outline-offset: 1px; }
 .btn { padding: 8px 16px; border-radius: 8px; font-size: 13px; font-weight: 600; border: 1px solid var(--cp-border-strong); background: var(--cp-surface); color: var(--cp-text); cursor: pointer; }
 .btn-primary { background: var(--cp-accent); color: var(--cp-accent-fg); border-color: var(--cp-accent); }
 .btn:disabled { opacity: 0.6; cursor: default; }
+${mentionComposerCss()}
 <\/style>
 <script>
   if (window.matchMedia('(prefers-color-scheme: dark)').matches) document.documentElement.dataset.theme = 'dark';
@@ -2753,7 +2782,7 @@ textarea:focus { outline: 2px solid var(--cp-accent); outline-offset: 1px; }
     ${commentsHtml}
     <div class="reply-wrap">
       <div class="reply-label">Your reply <span class="draft-badge" id="draftBadge">staged by agent</span></div>
-      <textarea id="reply" placeholder="Write a reply\u2026">${escHtml(draftContent)}</textarea>
+      <textarea id="reply" data-mention-composer placeholder="Write a reply\u2026 Type @ to mention a participant.">${escHtml(draftContent)}</textarea>
       <div class="reply-hint">Posted replies appear above. Text here is a draft \u2014 nothing is sent until you press Post reply.</div>
       <div class="actions">
         <button class="btn btn-primary" id="postBtn">Post reply</button>
@@ -2777,7 +2806,8 @@ textarea:focus { outline: 2px solid var(--cp-accent); outline-offset: 1px; }
     const btn = document.getElementById('postBtn');
     btn.disabled = true; btn.textContent = 'Posting\u2026';
     try {
-      const r = await fetch('/api/v1/threads/' + TID + '/reply', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ content }) });
+      const mentions = window.tippaniMentionPayload ? window.tippaniMentionPayload(box) : [];
+      const r = await fetch('/api/v1/threads/' + TID + '/reply', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ content, mentions }) });
       if (r.ok) { try { await fetch('/api/v1/threads/' + TID + '/draft', { method: 'DELETE' }); } catch {} location.reload(); }
       else { const e = await r.json().catch(() => ({})); alert('Post failed: ' + (e.error || r.status)); btn.disabled = false; btn.textContent = 'Post reply'; }
     } catch (e) { alert('Post failed: ' + e); btn.disabled = false; btn.textContent = 'Post reply'; }
@@ -2806,6 +2836,7 @@ textarea:focus { outline: 2px solid var(--cp-accent); outline-offset: 1px; }
   }
   setInterval(poll, 1500);
 <\/script>
+${mentionComposerScript(mentionParticipants, _isOffline)}
 ${NAV_WATCHER}
 </body>
 </html>`;
@@ -4044,7 +4075,7 @@ ${NAV_WATCHER}
 }
 
 // --- Spec review page (3-column layout) ---
-function buildSpecPage(specHtml, toc, metadata, pr, threads, specPath, sourceMap, changedFiles, currentFileIndex, rawMarkdown, canEdit, baseObjectId, viewedMap = {}, viewedError = null, reviewing = false, ctx = null, reviewPc = null) {
+function buildSpecPage(specHtml, toc, metadata, pr, threads, specPath, sourceMap, changedFiles, currentFileIndex, rawMarkdown, canEdit, baseObjectId, viewedMap = {}, viewedError = null, reviewing = false, ctx = null, reviewPc = null, sourceLineOffset = 0, queuedSaveContent = null) {
   const tocHtml = toc
     .map(
       (t) =>
@@ -4067,6 +4098,8 @@ function buildSpecPage(specHtml, toc, metadata, pr, threads, specPath, sourceMap
   const allThreads = sortThreadsByLine((threads || []).filter((t) => t.comments?.length > 0));
   const activeThreads = allThreads.filter((t) => t.status !== 2 && t.status !== 4);
   const resolvedThreads = allThreads.filter((t) => t.status === 2 || t.status === 4);
+  const mentionParticipants = collectReviewParticipants(pr, allThreads);
+  const hasQueuedSave = typeof queuedSaveContent === "string";
 
   function buildThreadHtml(t, isResolved) {
     const anchor = t.threadContext?.filePath
@@ -4110,7 +4143,7 @@ function buildSpecPage(specHtml, toc, metadata, pr, threads, specPath, sourceMap
           <button class="btn-thread-resolve" onclick="resolveThread(${t.id})">✓ Resolve</button>
         </div>
         <form class="reply-form" data-thread-id="${t.id}" onsubmit="return false;">
-          <textarea class="reply-textarea" rows="3" placeholder="Reply… (⌘/Ctrl+Enter to post and advance, Esc to cancel)"></textarea>
+          <textarea class="reply-textarea" data-mention-composer rows="3" placeholder="Reply… Type @ to mention a participant."></textarea>
           <div class="reply-form-actions">
             <button type="button" class="reply-btn-post" onclick="submitReply(${t.id})">Post & next</button>
             <button type="button" class="reply-btn-cancel reply-btn-discard" style="display:none;" onclick="discardDraft(${t.id})">Discard draft</button>
@@ -4155,9 +4188,11 @@ function buildSpecPage(specHtml, toc, metadata, pr, threads, specPath, sourceMap
       <button class="view-btn" data-view="proposed" onclick="tippani.setView('proposed')" title="Proposed version (clean)" disabled>Proposed</button>
     </div>
     <span class="dirty-dot" id="dirtyDot" style="display:none" title="Unsaved changes">●</span>
-    ${canEdit ? `<button class="edit-toggle save-btn" id="saveBtn" onclick="tippani.save()" style="display:none" disabled>Save</button>` : ""}
+    ${canEdit ? `<button class="edit-toggle save-btn" id="saveBtn" onclick="tippani.save()" style="display:none" disabled>Save edits to PR</button>` : ""}
     ${canEdit ? `<button class="edit-toggle" id="findBtn" onclick="tippani.search()" style="display:none" title="Find & Replace (Ctrl+F / Ctrl+H)">Find</button>` : ""}
     ${canEdit ? `<button class="edit-toggle" id="editToggle" onclick="tippani.toggle()" title="Toggle edit mode (${"⌘"}/Ctrl+E)">Edit</button>` : ""}
+    ${ctx ? "" : `<button class="edit-toggle" id="queuedSaveBtn" onclick="openQueuedSaveModal()" style="display:${hasQueuedSave ? "" : "none"}" title="Recover the queued edit for this file">Queued edit</button>
+    <button class="edit-toggle" id="copilotBtn" onclick="openCopilotModal()" title="Connect Copilot to this active review session">Use with Copilot</button>`}
     <span id="proposalSource" class="proposal-source" style="display:none"></span>
     <button class="edit-toggle" id="discardProposalBtn" onclick="tippani.discardProposal()" style="display:none" title="Discard the staged proposed edit for this file">Discard proposal</button>
   `;
@@ -4556,6 +4591,14 @@ body.show-markers .rh-marker { display: inline-flex; }
 .save-btn:disabled { opacity: 0.5; cursor: default; }
 .dirty-dot { color: var(--cp-accent); font-size: 12px; line-height: 1; margin-right: 2px; }
 .conflict-msg { font-size: 13px; line-height: 1.55; color: var(--cp-text); margin-bottom: 6px; }
+.selection-comment-btn { position: fixed; z-index: 180; padding: 6px 10px; border: 0; border-radius: 7px; background: var(--cp-accent); color: var(--cp-accent-fg); font: 600 12px inherit; box-shadow: var(--cp-shadow); cursor: pointer; display: none; }
+.selected-quote { margin-top: 7px; padding: 7px 9px; border-left: 3px solid var(--cp-accent); background: var(--cp-surface-soft); color: var(--cp-text); white-space: pre-wrap; }
+.copilot-grid { display: grid; grid-template-columns: max-content 1fr; gap: 6px 12px; margin: 12px 0; font-size: 13px; }
+.copilot-label { color: var(--cp-text-muted); }
+.copilot-steps { margin: 12px 0 12px 20px; font-size: 13px; }
+.copilot-config { padding: 10px; border: 1px solid var(--cp-border); border-radius: 8px; background: var(--cp-surface-soft); white-space: pre-wrap; font: 12px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+.copilot-note { color: var(--cp-text-muted); font-size: 12px; margin-top: 8px; }
+${mentionComposerCss()}
 
 /* Toast */
 .toast { position: fixed; bottom: 80px; right: 24px; background: var(--cp-surface); color: var(--cp-text); padding: 10px 18px; border-radius: 10px; font-size: 13px; display: none; z-index: 200; border: 1px solid var(--cp-border); box-shadow: var(--cp-shadow); max-width: 440px; }
@@ -4671,21 +4714,58 @@ ${ctx ? renderCrumbBar([{ label: "Home", href: "/discovery" }, { label: ctx.back
 </div>
 
 ${reviewing ? `<div class="review-bar">
-  <button class="review-btn review-btn-approve" onclick="submitReview('approve')">Approve</button>
+  <button class="review-btn review-btn-approve" onclick="submitReview('approve')">Approve PR</button>
   <button class="review-btn review-btn-changes" onclick="submitReview('request-changes')">Request Changes</button>
 </div>` : ``}
+
+<button class="selection-comment-btn" id="selectionCommentBtn" type="button" title="Comment on selection (Cmd/Ctrl+Shift+M)" aria-keyshortcuts="Control+Shift+M Meta+Shift+M">Comment on selection</button>
 
 <div class="comment-modal" id="commentModal">
   <div class="comment-modal-inner">
     <h3>Add a comment</h3>
     <div class="comment-context" id="commentContext"></div>
-    <textarea id="commentText" rows="4" placeholder="Write your comment..."></textarea>
+    <textarea id="commentText" data-mention-composer rows="4" placeholder="Write your comment... Type @ to mention a participant."></textarea>
     <div class="comment-modal-actions">
       <button class="modal-btn" onclick="closeModal()">Cancel</button>
       <button class="modal-btn modal-btn-primary" onclick="submitComment()">Comment</button>
     </div>
   </div>
 </div>
+
+${ctx ? "" : `<div class="comment-modal" id="queuedSaveModal" role="dialog" aria-modal="true" aria-labelledby="queuedSaveModalTitle">
+  <div class="comment-modal-inner">
+    <h3 id="queuedSaveModalTitle">Queued edit not yet committed</h3>
+    <p class="copilot-note">This file stays read-only until the queued save syncs. If the branch moved, copy the queued text, discard the stale queue entry, reload the latest file, and reapply your edit.</p>
+    <pre class="copilot-config" id="queuedSavePreview" style="max-height:40vh;overflow:auto"></pre>
+    <div class="comment-modal-actions">
+      <button class="modal-btn" id="queuedSaveCopy" onclick="copyQueuedSave()">Copy queued text</button>
+      <button class="modal-btn" onclick="discardQueuedSave()">Discard and reload</button>
+      <button class="modal-btn modal-btn-primary" id="queuedSaveClose" onclick="closeQueuedSaveModal()">Close</button>
+    </div>
+  </div>
+</div>
+
+<div class="comment-modal" id="copilotModal" role="dialog" aria-modal="true" aria-labelledby="copilotModalTitle">
+  <div class="comment-modal-inner">
+    <h3 id="copilotModalTitle">Use Copilot with this Tippani review</h3>
+    <div class="copilot-grid">
+      <span class="copilot-label">Active session</span><strong>${_hostKind === "github" ? "GitHub" : "Azure DevOps"} PR #${prId} on port ${PORT}</strong>
+      <span class="copilot-label">Connection</span><strong>${_isOffline ? "Offline — proposals work from cache; publishing waits for reconnect" : "Connected"}</strong>
+      <span class="copilot-label">Commit permission</span><strong>${canEdit ? "Available" : "Unavailable for this identity"}</strong>
+    </div>
+    <ol class="copilot-steps">
+      <li>Configure an MCP server named <strong>tippani</strong> that runs <code>tippani-mcp</code> with ${_hostKind === "github" ? "<code>TIPPANI_GH_TOKEN</code> or <code>gh auth token</code>" : "an Azure DevOps token"}.</li>
+      <li>Ask Copilot to call <code>open_pr</code> for PR #${prId}; it will discover and adopt this active session.</li>
+      <li>Ask for an edit. Tippani shows the staged proposal under <strong>Diff</strong> and <strong>Proposed</strong>.</li>
+      <li>Review or refine it, then use <strong>Save edits to PR</strong>. A staged proposal is never committed implicitly.</li>
+    </ol>
+    <pre class="copilot-config">${_hostKind === "github"
+      ? `{"mcpServers":{"tippani":{"command":"tippani-mcp","env":{"TIPPANI_GH_TOKEN":"&lt;GitHub token&gt;"}}}}`
+      : `{"mcpServers":{"tippani":{"command":"tippani-mcp","env":{"TIPPANI_ADO_TOKEN":"&lt;Azure DevOps token&gt;"}}}}`}</pre>
+    <p class="copilot-note">If Copilot cannot find the review, verify the MCP server is connected and call <code>open_pr</code>. Authentication errors identify the missing or expired token; commit failures identify session discovery, branch movement, or write permission.</p>
+    <div class="comment-modal-actions"><button class="modal-btn modal-btn-primary" id="copilotClose" onclick="closeCopilotModal()">Close</button></div>
+  </div>
+</div>`}
 
 <div class="comment-modal" id="diffModal">
   <div class="diff-modal-inner">
@@ -4700,7 +4780,7 @@ ${reviewing ? `<div class="review-bar">
     </div>
     <div class="comment-modal-actions">
       <button class="modal-btn" id="diffCancel">Cancel</button>
-      <button class="modal-btn modal-btn-primary" id="diffConfirm">Confirm &amp; Save</button>
+      <button class="modal-btn modal-btn-primary" id="diffConfirm">Commit edits</button>
     </div>
   </div>
 </div>
@@ -4743,13 +4823,15 @@ window.tippani = (function () {
   // offers annotations (reviewPc). BRANCH stays null for real PRs either way, so
   // existing PR-only behavior (no BRANCH) is unaffected.
   window.__PC = ${jsonForScript(pcCtx)};
+  let queuedSave = ${jsonForScript(hasQueuedSave)};
+  let queuedMarkdown = ${jsonForScript(queuedSaveContent)};
   const ORIG_TITLE = document.title;
   let editor = null;
   let editMode = false;
   let saving = false;
 
   const el = (id) => document.getElementById(id);
-  const isDirty = () => !!editor && editor.getMarkdown() !== RAW_MARKDOWN;
+  const isDirty = () => queuedSave || (!!editor && editor.getMarkdown() !== RAW_MARKDOWN);
   const comparisonOriginal = () => (BRANCH && BRANCH.pureStaged ? "" : CURRENT_MARKDOWN);
   const toast = (m, o) => window.showToast && window.showToast(m, o);
   const toastError = (m) => { if (window.showToast) window.showToast(m, { persist: true, error: true }); };
@@ -4757,7 +4839,7 @@ window.tippani = (function () {
   // Save button is enabled only when there are unsaved changes.
   function updateSaveState() {
     const btn = el("saveBtn");
-    if (btn) btn.disabled = saving || !isDirty();
+    if (btn) btn.disabled = saving || queuedSave || !isDirty();
   }
 
   // Dirty indicator: a dot in the header + an asterisk-equivalent in the title (#49).
@@ -4780,6 +4862,7 @@ window.tippani = (function () {
     if (!editor && window.TippaniEditor)
       editor = window.TippaniEditor.mount(el("spec-editor"), RAW_MARKDOWN, {
         onChange: onEditorChange,
+        readOnly: queuedSave,
       });
     return editor;
   }
@@ -4899,6 +4982,10 @@ window.tippani = (function () {
   wireToolbar();
 
   function enterEdit() {
+    if (queuedSave && !BRANCH) {
+      window.openQueuedSaveModal?.();
+      return;
+    }
     if (!ensureEditor()) return;
     el("spec-content").style.display = "none";
     el("spec-editor").style.display = "";
@@ -5044,7 +5131,7 @@ window.tippani = (function () {
         toastError("Stage failed: " + e.message + " \u2014 your edits are kept");
       } finally {
         saving = false;
-        if (bbtn) bbtn.textContent = "Save";
+        if (bbtn) bbtn.textContent = "Save edits";
         updateSaveState();
         updateDirtyIndicator();
       }
@@ -5053,7 +5140,7 @@ window.tippani = (function () {
 
     saving = true;
     const btn = el("saveBtn");
-    if (btn) btn.textContent = "Saving…";
+    if (btn) btn.textContent = "Saving edits…";
     updateSaveState();
     try {
       const r = await fetch("/api/save", {
@@ -5065,15 +5152,19 @@ window.tippani = (function () {
       if (data.ok && data.synced) {
         RAW_MARKDOWN = newMd; // new saved baseline → no longer dirty
         await dropStagedProposal(); // committed buffer supersedes any staged proposal
-        toast("Saved — commit " + (data.commitId ? String(data.commitId).slice(0, 8) : "ok"));
+        toast("Edits committed to PR — " + (data.commitId ? String(data.commitId).slice(0, 8) : "complete"));
+        setTimeout(() => location.reload(), 500);
       } else if (data.conflict) {
         // Branch moved underneath us — never overwrite blindly (#49).
         showConflict();
       } else if (data.queued) {
-        RAW_MARKDOWN = newMd; // safely persisted to the queue; will retry on sync
+        queuedSave = true;
+        queuedMarkdown = newMd;
+        editor?.setReadOnly?.(true);
         await dropStagedProposal(); // committed buffer supersedes any staged proposal
-        if (data.error) toastError("Push failed (" + data.error + ") — queued, will retry on sync");
-        else toast(data.message || "Saved locally — will sync");
+        const queuedBtn = el("queuedSaveBtn"); if (queuedBtn) queuedBtn.style.display = "";
+        if (data.error) toastError("Commit failed (" + data.error + ") — edits queued for sync");
+        else toast(data.message || "Edits saved locally — will sync");
       } else {
         toastError("Save failed: " + (data.error || "unknown") + " — your edits are kept");
       }
@@ -5081,7 +5172,7 @@ window.tippani = (function () {
       toastError("Save failed: " + e.message + " — your edits are kept");
     } finally {
       saving = false;
-      if (btn) btn.textContent = "Save";
+      if (btn) btn.textContent = "Save edits to PR";
       updateSaveState();
       updateDirtyIndicator();
     }
@@ -5181,6 +5272,8 @@ window.tippani = (function () {
       document.addEventListener("DOMContentLoaded", enterEdit);
     else enterEdit();
   }
+  updateSaveState();
+  updateDirtyIndicator();
   return {
     toggle,
     enterEdit,
@@ -5190,6 +5283,23 @@ window.tippani = (function () {
     showDiff,
     showConflict,
     updateDirtyIndicator,
+    setQueuedSave: (value, content) => {
+      queuedSave = !!value;
+      if (typeof content === "string") queuedMarkdown = content;
+      if (!queuedSave) queuedMarkdown = null;
+      editor?.setReadOnly?.(queuedSave);
+      const queuedBtn = el("queuedSaveBtn"); if (queuedBtn) queuedBtn.style.display = queuedSave ? "" : "none";
+      updateSaveState();
+      updateDirtyIndicator();
+    },
+    markQueuedSaveCommitted: () => {
+      if (queuedMarkdown != null) RAW_MARKDOWN = queuedMarkdown;
+      queuedSave = false;
+      editor?.setReadOnly?.(true);
+      updateSaveState();
+      updateDirtyIndicator();
+    },
+    getQueued: () => queuedMarkdown,
     discardProposal,
     // Original (last-loaded) markdown — the baseline a save diffs against.
     getOriginal: comparisonOriginal,
@@ -5219,10 +5329,14 @@ const SPEC_PATH = ${jsonForScript(specPath)};
 const PR_ID = ${jsonForScript(prId)};
 const CURRENT_FILE_INDEX = ${jsonForScript(currentFileIndex)};
 const SOURCE_MAP = ${jsonForScript(sourceMap)};
+const SOURCE_LINE_OFFSET = ${jsonForScript(sourceLineOffset)};
 const TOC_DATA = ${jsonForScript(toc)};
+const mapSelectionToSource = ${mapSelectionToSource.toString()};
 const THREADS_DATA = ${jsonForScript(allThreads.map(t => ({
   id: t.id,
-  line: t.threadContext?.rightFileStart?.line || null,
+  line: t.threadContext?.rightFileStart?.line
+    ? t.threadContext.rightFileStart.line - (t.threadContext?.filePath === specPath ? sourceLineOffset : 0)
+    : null,
   file: t.threadContext?.filePath || null,
   count: (t.comments || []).length,
   resolved: t.status === 2 || t.status === 4
@@ -5267,6 +5381,8 @@ function findNearestHeading(el) {
 
 // Make content blocks commentable with floating + button
 let commentLine = 1;
+let commentAnchor = { exact: false, start: { line: 1, offset: 1 }, end: { line: 1, offset: 1 } };
+let commentQuote = '';
 const commentableSelector = '.spec p, .spec li, .spec blockquote, .spec table, .spec pre';
 const commentableEls = [];
 let _activeCommentableEls = commentableEls;
@@ -5274,6 +5390,28 @@ let _activeSourceMap = SOURCE_MAP;
 // Branch Personal-Comments mode replaces the PR "+" affordance with the read-only
 // review margin's hover/add-dot; keep the block list + source-map alignment either way.
 const PC_MODE = !!window.__PC;
+function openCommentModal(el, mapping, selection = null) {
+  const heading = findNearestHeading(el);
+  commentQuote = selection?.quote || '';
+  commentAnchor = selection?.anchor || {
+    exact: false,
+    start: { line: (mapping ? mapping.startLine : 1) + SOURCE_LINE_OFFSET, offset: 1 },
+    end: { line: (mapping ? mapping.startLine : 1) + SOURCE_LINE_OFFSET, offset: 1 },
+  };
+  commentLine = commentAnchor.start.line;
+  const context = document.getElementById('commentContext');
+  context.textContent = heading
+    ? '\u00A7 ' + heading + ', line ' + commentLine + (commentAnchor.exact ? ' (exact selection)' : '')
+    : 'Line ' + commentLine + (commentAnchor.exact ? ' (exact selection)' : '');
+  if (commentQuote) {
+    const quote = document.createElement('div');
+    quote.className = 'selected-quote';
+    quote.textContent = commentQuote;
+    context.appendChild(quote);
+  }
+  document.getElementById('commentModal').classList.add('active');
+  document.getElementById('commentText').focus();
+}
 document.querySelectorAll(commentableSelector).forEach((el, i) => {
   if (el.closest('.commentable') || el.closest('.ro-commentable')) return;
   const blockIdx = commentableEls.length;
@@ -5294,18 +5432,56 @@ document.querySelectorAll(commentableSelector).forEach((el, i) => {
   btn.addEventListener('click', (e) => {
     e.stopPropagation();
     const mapping = SOURCE_MAP[blockIdx];
-    commentLine = mapping ? mapping.startLine : 1;
-    // Set context in modal
-    const heading = findNearestHeading(el);
-    const ctx = document.getElementById('commentContext');
-    ctx.textContent = heading
-      ? '\u00A7 ' + heading + (mapping ? ', line ' + mapping.startLine : '')
-      : (mapping ? 'Line ' + mapping.startLine : '');
-    document.getElementById('commentModal').classList.add('active');
-    document.getElementById('commentText').focus();
+    openCommentModal(el, mapping);
   });
   el.prepend(btn);
 });
+
+if (!window.__BRANCH) (function () {
+  const button = document.getElementById('selectionCommentBtn');
+  const spec = document.getElementById('spec-content');
+  let pending = null, timer = null;
+  function hide() { pending = null; button.style.display = 'none'; }
+  function detect() {
+    if (document.body.classList.contains('sidebar-mode-annotations')) return hide();
+    const selection = window.getSelection();
+    if (!selection || selection.isCollapsed || selection.rangeCount !== 1) return hide();
+    const range = selection.getRangeAt(0);
+    const startNode = range.startContainer.nodeType === 1 ? range.startContainer : range.startContainer.parentElement;
+    const endNode = range.endContainer.nodeType === 1 ? range.endContainer : range.endContainer.parentElement;
+    const startBlock = startNode?.closest?.('.commentable');
+    const endBlock = endNode?.closest?.('.commentable');
+    const quote = selection.toString().trim();
+    if (!startBlock || startBlock !== endBlock || !spec.contains(startBlock) || !quote) return hide();
+    const mapping = SOURCE_MAP[Number(startBlock.dataset.blockIdx)];
+    const anchor = mapSelectionToSource(window.tippani.getOriginal(), mapping, quote);
+    anchor.start.line += SOURCE_LINE_OFFSET;
+    anchor.end.line += SOURCE_LINE_OFFSET;
+    pending = { el: startBlock, mapping, quote, anchor };
+    const rect = range.getBoundingClientRect();
+    button.style.left = Math.max(8, Math.min(window.innerWidth - 170, rect.left + rect.width / 2 - 70)) + 'px';
+    button.style.top = Math.max(8, rect.top - 38) + 'px';
+    button.style.display = 'block';
+  }
+  function schedule() { clearTimeout(timer); timer = setTimeout(detect, 0); }
+  spec.addEventListener('mouseup', schedule);
+  spec.addEventListener('keyup', schedule);
+  document.addEventListener('selectionchange', schedule);
+  button.addEventListener('mousedown', (e) => e.preventDefault());
+  button.addEventListener('click', () => {
+    if (!pending) return;
+    openCommentModal(pending.el, pending.mapping, pending);
+    hide();
+  });
+  document.addEventListener('keydown', (e) => {
+    if (e.key.toLowerCase() !== 'm' || !e.shiftKey || !(e.metaKey || e.ctrlKey)) return;
+    detect();
+    if (!pending) return;
+    e.preventDefault();
+    openCommentModal(pending.el, pending.mapping, pending);
+    hide();
+  });
+})();
 
 // ---- Branch Personal Comments margin (task 2) ---------------------------------
 // A faithful port of the read-only review margin (buildReadonlySpecPage): the right
@@ -6102,6 +6278,10 @@ function setSidebarMode(mode) {
   annotationsPane.style.display = toAnnotations ? '' : 'none';
   document.body.classList.toggle('sidebar-mode-annotations', toAnnotations);
   document.body.classList.toggle('sidebar-mode-comments', !toAnnotations);
+  if (toAnnotations) {
+    const selectionButton = document.getElementById('selectionCommentBtn');
+    if (selectionButton) selectionButton.style.display = 'none';
+  }
   const commentsBtn = document.getElementById('sidebarModeComments');
   const annotationsBtn = document.getElementById('sidebarModeAnnotations');
   if (commentsBtn) { commentsBtn.classList.toggle('active', !toAnnotations); commentsBtn.setAttribute('aria-selected', toAnnotations ? 'false' : 'true'); }
@@ -6135,17 +6315,78 @@ function setSidebarMode(mode) {
 
 function closeModal() {
   document.getElementById('commentModal').classList.remove('active');
-  document.getElementById('commentText').value = '';
+  const box = document.getElementById('commentText');
+  box.value = '';
+  box._tippaniMentions = [];
+  box.dispatchEvent(new Event('input', { bubbles: true }));
   document.getElementById('commentContext').textContent = '';
+  commentQuote = '';
+}
+
+let copilotLastFocus = null;
+let queuedSaveLastFocus = null;
+function openCopilotModal() {
+  copilotLastFocus = document.activeElement;
+  document.getElementById('copilotModal').classList.add('active');
+  document.getElementById('copilotClose').focus();
+}
+function closeCopilotModal() {
+  document.getElementById('copilotModal').classList.remove('active');
+  if (copilotLastFocus?.focus) copilotLastFocus.focus();
+  copilotLastFocus = null;
+}
+function openQueuedSaveModal() {
+  queuedSaveLastFocus = document.activeElement;
+  const content = window.tippani?.getQueued?.() || '';
+  document.getElementById('queuedSavePreview').textContent = content;
+  document.getElementById('queuedSaveCopy').disabled = !content;
+  document.getElementById('queuedSaveModal').classList.add('active');
+  document.getElementById('queuedSaveClose').focus();
+}
+function closeQueuedSaveModal() {
+  document.getElementById('queuedSaveModal').classList.remove('active');
+  if (queuedSaveLastFocus?.focus) queuedSaveLastFocus.focus();
+  queuedSaveLastFocus = null;
+}
+async function copyQueuedSave() {
+  const content = window.tippani?.getQueued?.() || '';
+  if (!content) return;
+  try {
+    await navigator.clipboard.writeText(content);
+    showToast('Queued edit copied');
+  } catch {
+    showToast('Copy failed — select the queued text and copy it manually');
+  }
+}
+async function discardQueuedSave() {
+  if (!confirm('Discard this queued edit? Copy it first if you need to reapply it.')) return;
+  try {
+    const res = await fetch('/api/pending/save?filePath=' + encodeURIComponent(SPEC_PATH), { method: 'DELETE' });
+    if (!res.ok) throw new Error('discard failed');
+    location.reload();
+  } catch {
+    showToast('Failed to discard queued edit');
+  }
 }
 
 // Escape key closes modal; focus trap inside modal
 document.addEventListener('keydown', (e) => {
-  const modal = document.getElementById('commentModal');
-  if (!modal.classList.contains('active')) return;
-  if (e.key === 'Escape') { closeModal(); return; }
+  const commentModal = document.getElementById('commentModal');
+  const copilotModal = document.getElementById('copilotModal');
+  const queuedSaveModal = document.getElementById('queuedSaveModal');
+  const modal = commentModal.classList.contains('active') ? commentModal
+    : copilotModal?.classList.contains('active') ? copilotModal
+      : queuedSaveModal?.classList.contains('active') ? queuedSaveModal : null;
+  if (!modal) return;
+  if (e.key === 'Escape') {
+    e.preventDefault();
+    if (modal === copilotModal) closeCopilotModal();
+    else if (modal === queuedSaveModal) closeQueuedSaveModal();
+    else closeModal();
+    return;
+  }
   if (e.key === 'Tab') {
-    const focusable = modal.querySelectorAll('textarea, button');
+    const focusable = modal.querySelectorAll('textarea, button, a[href]');
     const first = focusable[0], last = focusable[focusable.length - 1];
     if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
     else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
@@ -6180,13 +6421,15 @@ function showToast(msg, opts) {
 }
 
 async function submitComment() {
-  const text = document.getElementById('commentText').value.trim();
+  const box = document.getElementById('commentText');
+  const text = box.value.trim();
   if (!text) return;
   try {
+    const mentions = window.tippaniMentionPayload ? window.tippaniMentionPayload(box) : [];
     const res = await fetch('/api/comment', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ line: commentLine, content: text, filePath: SPEC_PATH })
+      body: JSON.stringify({ line: commentLine, anchor: commentAnchor, quote: commentQuote, mentions, content: text, filePath: SPEC_PATH })
     });
     if (!res.ok) throw new Error('Failed');
     const result = await res.json();
@@ -6379,10 +6622,11 @@ async function submitReply(threadId) {
   const postBtn = form.querySelector('.reply-btn-post');
   if (postBtn) postBtn.disabled = true;
   try {
+    const mentions = window.tippaniMentionPayload ? window.tippaniMentionPayload(ta) : [];
     const res = await fetch('/api/reply', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ threadId, content: text })
+      body: JSON.stringify({ threadId, content: text, mentions })
     });
     if (!res.ok) throw new Error('Failed');
     const result = await res.json();
@@ -6683,13 +6927,35 @@ function markThreadResolvedInPlace(threadId) {
 }
 
 async function submitReview(type) {
+  const dirty = window.tippani?.isDirty?.() === true;
+  if (type === 'approve' && dirty) {
+    showToast('Unsaved edits remain. Use Save edits to PR before approving.');
+    window.tippani?.enterEdit?.();
+    document.getElementById('saveBtn')?.focus();
+    return;
+  }
+  if (type === 'approve') {
+    try {
+      const pending = await fetch('/api/pending');
+      if (!pending.ok) throw new Error('pending state unavailable');
+      const state = await pending.json();
+      if (state.hasPendingSave) {
+        window.tippani?.setQueuedSave?.(true);
+        showToast('A spec edit is queued but not committed. Sync or discard it before approving.');
+        return;
+      }
+    } catch {
+      showToast('Cannot confirm whether edits are committed. Approval was not submitted.');
+      return;
+    }
+  }
   const btns = document.querySelectorAll('.review-btn');
   btns.forEach(b => b.disabled = true);
   try {
     const res = await fetch('/api/review', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ type })
+      body: JSON.stringify({ type, hasUnsavedEdits: dirty })
     });
     let data = null;
     try { data = await res.json(); } catch { /* non-JSON error body */ }
@@ -6712,6 +6978,9 @@ async function updateSyncStatus() {
   try {
     const res = await fetch('/api/pending');
     const data = await res.json();
+    if (window.tippani?.setQueuedSave && typeof SPEC_PATH === 'string') {
+      window.tippani.setQueuedSave((data.pendingSaveFiles || []).includes(SPEC_PATH));
+    }
     const bar = document.getElementById('syncBar');
     const status = document.getElementById('syncStatus');
     const btn = document.getElementById('syncBtn');
@@ -6733,8 +7002,18 @@ async function syncPending() {
   try {
     const res = await fetch('/api/sync', { method: 'POST' });
     const data = await res.json();
+    const currentFileSynced = (data.syncedSaveFiles || []).includes(SPEC_PATH);
+    if (currentFileSynced) window.tippani?.markQueuedSaveCommitted?.();
     if (data.synced > 0) showToast(data.synced + ' comment' + (data.synced > 1 ? 's' : '') + ' synced to ADO');
     if (data.failed > 0) showToast(data.failed + ' failed to sync');
+    if ((data.failedSaveFiles || []).includes(SPEC_PATH)) {
+      openQueuedSaveModal();
+      return;
+    }
+    if (currentFileSynced) {
+      location.reload();
+      return;
+    }
     updateSyncStatus();
     if (data.synced > 0) setTimeout(() => location.reload(), 1000);
   } catch (e) {
@@ -6790,6 +7069,7 @@ setInterval(updateSyncStatus, 30000);
   handleRight.addEventListener('mousedown', startDrag(handleRight, sidebarRight, 'right'));
 })();
 <\/script>
+${mentionComposerScript(mentionParticipants, _isOffline)}
 ${NAV_WATCHER}
 </body>
 </html>`;
@@ -6805,6 +7085,8 @@ let _localOnly = false;
 // /open is a one-way door — the tabbed home can never be returned to.
 let _browseMode = false;
 let _adoToken = null;
+let _saveOperations = 0;
+let _reviewVoteInFlight = false;
 
 // True when the embedding host injected an ADO token at spawn (--ado-token /
 // TIPPANI_ADO_TOKEN). In host-token mode tippani NEVER switches to another
@@ -7880,6 +8162,9 @@ async function main() {
     }
     const t = (threads || []).find((x) => x.id === Number(req.params.id));
     if (!t) return res.redirect("/feedback");
+    for (const comment of t.comments || []) {
+      if (comment.content) comment.renderedContent = await renderMarkdownSafe(comment.content);
+    }
     const { map: viewedMap, error: viewedError } = await loadViewedState(_conn, _prId, _isOffline);
     const lastId = (t.comments || []).reduce((m, c) => Math.max(m, c.id || 0), 0);
     const isViewed = viewedMap[String(t.id)] != null && Number(viewedMap[String(t.id)]) === lastId;
@@ -7989,7 +8274,7 @@ async function main() {
       const raw = await repoContentProvider(_conn).getText(
         repoId, specPath, branch, project,
       );
-      const { metadata, body } = stripFrontmatter(raw);
+      const { metadata, body, bodyLineOffset } = stripFrontmatter(raw);
       const { toc } = buildSourceMap(body);
       const { html, ranges } = await renderSpecBody(body, specSanitizeSchema, { includeHeadings: true });
       const bodyHtml = html.replace(/(<img\b[^>]*\bsrc=")([^"]+)(")/gi, (m, pre, src, post) => {
@@ -8303,7 +8588,7 @@ async function main() {
         return res.status(503).send("File not in cache and running offline.");
       }
 
-      const { metadata, body } = stripFrontmatter(raw);
+      const { metadata, body, bodyLineOffset } = stripFrontmatter(raw);
       const { toc } = buildSourceMap(body);
       const { html: specHtml, ranges: sourceMap } = await renderSpecBody(body, specSanitizeSchema, { rewriteImagesForFileIndex: idx });
 
@@ -8324,7 +8609,11 @@ async function main() {
         .map(p => ({
           id: 'local-' + p.id,
           status: 1,
-          threadContext: { filePath: p.filePath, rightFileStart: { line: p.line, offset: 1 }, rightFileEnd: { line: p.line, offset: 1 } },
+          threadContext: {
+            filePath: p.filePath,
+            rightFileStart: p.anchor?.start || { line: p.line, offset: 1 },
+            rightFileEnd: p.anchor?.end || { line: p.line, offset: 1 },
+          },
           comments: [{ author: { displayName: 'You (pending sync)' }, publishedDate: p.createdAt, content: p.content, renderedContent: null }]
         }));
 
@@ -8369,7 +8658,14 @@ async function main() {
         pcForReview = { repo: ADO_REPO, branch: pcBranch, path: filePath, user: pcUser, comments: pcComments, dataSeq: pcDataSeq };
       } catch { pcForReview = null; }
 
-      res.type("html").send(buildSpecPage(specHtml, toc, metadata, _pr, allThreads, filePath, sourceMap, _changedFiles, idx, body, canEdit, baseObjectId, viewedMap, viewedError, !!_pr && !_pr.isDraft, null, pcForReview));
+      const queuedSave = pending.filter((action) =>
+        action.type === "save" && !action.synced && action.filePath === filePath).at(-1);
+      res.type("html").send(buildSpecPage(
+        specHtml, toc, metadata, _pr, allThreads, filePath, sourceMap,
+        _changedFiles, idx, body, canEdit, baseObjectId, viewedMap, viewedError,
+        !!_pr && !_pr.isDraft, null, pcForReview, bodyLineOffset,
+        queuedSave ? stripFrontmatter(queuedSave.content).body : null,
+      ));
     } catch (e) {
       res.status(500).type("html").send(errorPage({ title: "Couldn't render this file", message: "The spec failed to render. Check the server console for details.", backHref: "/", backLabel: "Back to files" }));
       console.error("Spec render error:", e.message);
@@ -9429,10 +9725,32 @@ if ($path) { [Console]::Out.Write($path) }
   }
 
   app.post("/api/comment", async (req, res) => {
-    const action = addPending(_prId, { type: 'comment', filePath: req.body.filePath, line: req.body.line, content: req.body.content });
+    const body = req.body || {};
+    const line = Number(body.line);
+    if (typeof body.filePath !== "string" || !body.filePath || typeof body.content !== "string" || !body.content.trim()
+        || !Number.isInteger(line) || line < 1) {
+      return res.status(400).json({ error: "filePath, positive line, and non-empty content are required" });
+    }
+    const validPosition = (position) => position
+      && Number.isInteger(Number(position.line)) && Number(position.line) >= 1
+      && Number.isInteger(Number(position.offset)) && Number(position.offset) >= 1;
+    if (body.anchor && (!validPosition(body.anchor.start) || !validPosition(body.anchor.end))) {
+      return res.status(400).json({ error: "anchor start/end require positive integer line and offset values" });
+    }
+    const anchor = body.anchor ? {
+      exact: body.anchor.exact === true,
+      start: { line: Number(body.anchor.start.line), offset: Number(body.anchor.start.offset) },
+      end: { line: Number(body.anchor.end.line), offset: Number(body.anchor.end.offset) },
+    } : null;
+    const content = composeReviewComment(body.content, {
+      quote: body.quote,
+      mentions: body.mentions,
+      hostKind: _hostKind,
+    });
+    const action = addPending(_prId, { type: 'comment', filePath: body.filePath, line, anchor, content });
     if (!_isOffline && _conn) {
       try {
-        await createCommentThread(_conn, _prId, req.body.filePath, req.body.line, req.body.content);
+        await createCommentThread(_conn, _prId, body.filePath, line, content, anchor);
         action.synced = true;
         const pending = loadPending(_prId);
         const idx = pending.findIndex(p => p.id === action.id);
@@ -9450,15 +9768,19 @@ if ($path) { [Console]::Out.Write($path) }
   // Shared reply/resolve helpers — wraps the inflight guard + pending-queue
   // bookkeeping so both /api/reply (legacy) and /api/v1/threads/:id/reply
   // (control API) share one path.
-  async function doReply(threadId, content) {
+  async function doReply(threadId, content, mentions = []) {
     const tid = Number(threadId);
+    if (!Number.isFinite(tid) || typeof content !== "string" || !content.trim()) {
+      return { ok: false, status: 400, body: { error: "threadId and non-empty content are required" } };
+    }
     if (Number.isFinite(tid) && !_inflight.acquire(tid)) {
       return { ok: false, status: 409, body: { error: "another reply is already in flight for this thread" } };
     }
-    const action = addPending(_prId, { type: 'reply', threadId, content });
+    const finalContent = composeReviewComment(content, { mentions, hostKind: _hostKind });
+    const action = addPending(_prId, { type: 'reply', threadId, content: finalContent });
     if (!_isOffline && _conn) {
       try {
-        await replyToThread(_conn, _prId, threadId, content);
+        await replyToThread(_conn, _prId, threadId, finalContent);
         action.synced = true;
         const pending = loadPending(_prId);
         const i = pending.findIndex(p => p.id === action.id);
@@ -9553,12 +9875,24 @@ if ($path) { [Console]::Out.Write($path) }
     if (typeof content !== "string") {
       return { ok: false, status: 400, body: { error: "commit_spec requires explicit content (the staged draft is review-only)" } };
     }
+    if (_reviewVoteInFlight) {
+      return { ok: false, status: 409, body: { error: "review vote is in progress; retry the commit after it completes" } };
+    }
+    _saveOperations++;
+    try {
     // Re-attach the original YAML frontmatter (stripped from the editor buffer)
     // so committing an edited spec never drops it (data loss on Learn docs).
     const bodyContent = reattachFrontmatter(_cache?.fileContents?.[filePath], content);
     const commitMessage = (message && String(message).trim()) || `tippani: update ${filePath.split("/").pop()}`;
     if (_isOffline || !_conn) {
-      addPending(_prId, { type: "save", filePath, content: bodyContent, message: commitMessage });
+      if (loadPending(_prId).some((action) => action.type === "save" && !action.synced)) {
+        return { ok: false, status: 409, body: { error: "another spec edit is already queued; sync or discard it first" } };
+      }
+      const baseObjectId = _pr?.lastMergeSourceCommit?.commitId || null;
+      if (!baseObjectId) {
+        return { ok: false, status: 409, body: { error: "cannot queue a safe offline commit without the PR source revision; reopen online first" } };
+      }
+      addPending(_prId, { type: "save", filePath, content: bodyContent, message: commitMessage, baseObjectId });
       _specDrafts.delete(idx);
       return { ok: true, status: 200, body: { ok: true, synced: false, queued: true } };
     }
@@ -9574,10 +9908,13 @@ if ($path) { [Console]::Out.Write($path) }
       }
       return { ok: false, status: 502, body: { error: friendlyAdoError(e, "commit spec") } };
     }
+    } finally {
+      _saveOperations--;
+    }
   }
 
   app.post("/api/reply", async (req, res) => {
-    const r = await doReply(req.body.threadId, req.body.content);
+    const r = await doReply(req.body.threadId, req.body.content, req.body.mentions);
     res.status(r.status).json(r.body);
   });
 
@@ -9592,13 +9929,25 @@ if ($path) { [Console]::Out.Write($path) }
     if (typeof content !== "string" || !filePath) {
       return res.status(400).json({ ok: false, error: "filePath and content are required" });
     }
+    if (_reviewVoteInFlight) {
+      return res.status(409).json({ ok: false, error: "review vote is in progress; retry the save after it completes" });
+    }
+    if (loadPending(_prId).some((action) => action.type === "save" && !action.synced)) {
+      return res.status(409).json({ ok: false, error: "Another spec edit is already queued. Sync or discard it before saving another file." });
+    }
+    _saveOperations++;
+    try {
     const commitMessage = (message && String(message).trim()) || `tippani: update ${filePath.split("/").pop()}`;
     // Re-attach the original YAML frontmatter (stripped from the editor buffer)
     // so saving an edited spec never drops it (data loss on Learn docs). Done
     // before queuing so the offline queue carries the full content too.
     const fullContent = reattachFrontmatter(_cache?.fileContents?.[filePath], content);
     // Queue first so a failure/offline never loses the edit.
-    const action = addPending(_prId, { type: "save", filePath, content: fullContent, message: commitMessage });
+    const expectedBaseObjectId = baseObjectId || _pr?.lastMergeSourceCommit?.commitId || null;
+    if (!expectedBaseObjectId) {
+      return res.status(409).json({ ok: false, error: "Cannot save safely without the PR source revision. Reload the review and try again." });
+    }
+    const action = addPending(_prId, { type: "save", filePath, content: fullContent, message: commitMessage, baseObjectId: expectedBaseObjectId });
 
     if (_isOffline || !_conn) {
       return res.json({ ok: true, synced: false, queued: true, message: "Saved locally (offline) — will push on sync." });
@@ -9606,7 +9955,7 @@ if ($path) { [Console]::Out.Write($path) }
     try {
       // Pass the load-time tip as oldObjectId (#49) — ADO rejects the push if the
       // branch moved underneath the editor (optimistic concurrency).
-      const commitId = await pushFileToBranch(_conn, _branch, filePath, fullContent, commitMessage, baseObjectId || undefined);
+      const commitId = await pushFileToBranch(_conn, _branch, filePath, fullContent, commitMessage, expectedBaseObjectId);
       const pending = loadPending(_prId);
       const idx = pending.findIndex((p) => p.id === action.id);
       if (idx >= 0) pending[idx].synced = true;
@@ -9627,6 +9976,9 @@ if ($path) { [Console]::Out.Write($path) }
       // Other failure: edit stays queued (no data loss). Surface an actionable error.
       res.json({ ok: false, synced: false, queued: true, error: friendlyAdoError(e, "save") });
     }
+    } finally {
+      _saveOperations--;
+    }
   });
 
   // Approve / Request changes. This is a WRITE to ADO and is deliberately not
@@ -9635,16 +9987,26 @@ if ($path) { [Console]::Out.Write($path) }
   // handleReviewRequest (review-vote.js) so it's testable with a fake ADO
   // connection — this route is just the HTTP<->function adapter.
   app.post("/api/review", async (req, res) => {
-    const { status, body } = await handleReviewRequest({
-      type: req.body && req.body.type,
-      isOffline: _isOffline,
-      hasConn: !!_conn,
-      prId: _prId,
-      conn: _conn,
-      submitVote: submitReviewVote,
-      formatError: friendlyAdoError,
-    });
-    res.status(status).json(body);
+    const hasPendingSave = loadPending(_prId).some((action) => action.type === "save" && !action.synced);
+    if (_reviewVoteInFlight) return res.status(409).json({ ok: false, error: "another review vote is already in progress" });
+    if (_saveOperations > 0) return res.status(409).json({ ok: false, error: "a spec save is still in progress" });
+    _reviewVoteInFlight = true;
+    try {
+      const { status, body } = await handleReviewRequest({
+        type: req.body && req.body.type,
+        isOffline: _isOffline,
+        hasConn: !!_conn,
+        prId: _prId,
+        hasUnsavedEdits: req.body?.hasUnsavedEdits === true,
+        hasPendingSave,
+        conn: _conn,
+        submitVote: submitReviewVote,
+        formatError: friendlyAdoError,
+      });
+      res.status(status).json(body);
+    } finally {
+      _reviewVoteInFlight = false;
+    }
   });
 
   // Sync pending actions to ADO
@@ -9654,6 +10016,19 @@ if ($path) { [Console]::Out.Write($path) }
     }
     const pending = loadPending(_prId);
     const unsynced = pending.filter(p => !p.synced);
+    const queuedSaves = unsynced.filter((action) => action.type === "save");
+    if (queuedSaves.length && _reviewVoteInFlight) {
+      return { ok: false, synced: 0, failed: queuedSaves.length, message: "Review vote is in progress; retry sync after it completes" };
+    }
+    if (queuedSaves.length > 1) {
+      return {
+        ok: false, synced: 0, failed: queuedSaves.length,
+        total: unsynced.length,
+        errors: queuedSaves.map((action) => ({ id: action.id, type: "save", error: "multiple queued spec edits require recovery; keep one and discard the others" })),
+        failedSaveFiles: queuedSaves.map((action) => action.filePath),
+      };
+    }
+    if (queuedSaves.length) _saveOperations++;
     let synced = 0, failed = 0;
     const errors = [];
 
@@ -9679,17 +10054,21 @@ if ($path) { [Console]::Out.Write($path) }
       }
     }
 
+    try {
     for (const action of unsynced) {
       try {
         if (action.type === 'comment') {
-          await createCommentThread(_conn, _prId, action.filePath, action.line, action.content);
+          await createCommentThread(_conn, _prId, action.filePath, action.line, action.content, action.anchor);
         } else if (action.type === 'reply') {
           await replyToThread(_conn, _prId, action.threadId, action.content);
         } else if (action.type === 'resolve') {
           await resolveThread(_conn, _prId, action.threadId);
         } else if (action.type === 'save') {
-          await pushFileToBranch(_conn, _branch, action.filePath, action.content, action.message);
+          if (!action.baseObjectId) throw new Error("queued save lacks its original PR source revision; copy and reapply it against the latest file");
+          await pushFileToBranch(_conn, _branch, action.filePath, action.content, action.message, action.baseObjectId);
           if (_cache && _cache.fileContents) _cache.fileContents[action.filePath] = action.content;
+          const fileIndex = (_changedFiles || []).findIndex((file) => file.path === action.filePath);
+          if (fileIndex >= 0) _specDrafts.delete(fileIndex);
         }
         action.synced = true;
         synced++;
@@ -9697,6 +10076,9 @@ if ($path) { [Console]::Out.Write($path) }
         failed++;
         errors.push({ id: action.id, type: action.type, error: e.message });
       }
+    }
+    } finally {
+      if (queuedSaves.length) _saveOperations--;
     }
 
     savePending(_prId, pending);
@@ -9707,7 +10089,11 @@ if ($path) { [Console]::Out.Write($path) }
       saveCache(_prId, _cache);
     } catch {}
 
-    return { ok: failed === 0, synced, failed, total: unsynced.length, errors };
+    return {
+      ok: failed === 0, synced, failed, total: unsynced.length, errors,
+      syncedSaveFiles: queuedSaves.filter((action) => action.synced).map((action) => action.filePath),
+      failedSaveFiles: queuedSaves.filter((action) => !action.synced).map((action) => action.filePath),
+    };
   }
 
   async function pushAllStagedChanges() {
@@ -9725,7 +10111,19 @@ if ($path) { [Console]::Out.Write($path) }
   app.get("/api/pending", (_req, res) => {
     const pending = loadPending(_prId);
     const unsynced = pending.filter(p => !p.synced);
-    res.json({ count: unsynced.length, isOffline: _isOffline });
+    const pendingSaveFiles = unsynced.filter((action) => action.type === "save").map((action) => action.filePath);
+    res.json({ count: unsynced.length, isOffline: _isOffline, hasPendingSave: pendingSaveFiles.length > 0, pendingSaveFiles });
+  });
+
+  app.delete("/api/pending/save", (req, res) => {
+    const filePath = String(req.query.filePath || "");
+    if (!filePath) return res.status(400).json({ error: "filePath is required" });
+    const pending = loadPending(_prId);
+    const kept = pending.filter((action) =>
+      action.synced || action.type !== "save" || action.filePath !== filePath);
+    const removed = pending.length - kept.length;
+    if (removed) savePending(_prId, kept);
+    res.json({ ok: true, removed });
   });
 
   // ----- Control API (#42 Phase 1) ---------------------------------------

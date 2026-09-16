@@ -893,14 +893,14 @@ export function registerControlApi(app, deps) {
   app.post("/api/v1/threads/:id/reply", requireAuth({ mutation: true }), async (req, res) => {
     const t = findThread(req.params.id);
     if (!t) return res.status(404).json({ error: "thread not found" });
-    const { content } = req.body || {};
+    const { content, mentions } = req.body || {};
     if (typeof content !== "string" || !content.trim()) {
       return res.status(400).json({ error: "content (non-empty string) required" });
     }
     if (typeof postReply !== "function") {
       return res.status(501).json({ error: "reply not wired in this deployment" });
     }
-    const r = await postReply(t.id, content);
+    const r = await postReply(t.id, content, mentions);
     res.status(r.status).json(r.body);
   });
 

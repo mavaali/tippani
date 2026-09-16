@@ -35,11 +35,11 @@ export function voteForReviewType(type) {
 
 export function voteLabel(vote) {
   switch (vote) {
-    case VOTE.approve: return "Approved";
-    case VOTE.approveWithSuggestions: return "Approved with suggestions";
-    case VOTE.reset: return "Vote cleared";
-    case VOTE.requestChanges: return "Changes requested";
-    case VOTE.reject: return "Rejected";
+    case VOTE.approve: return "PR approval vote submitted";
+    case VOTE.approveWithSuggestions: return "PR approval-with-suggestions vote submitted";
+    case VOTE.reset: return "PR review vote cleared";
+    case VOTE.requestChanges: return "PR changes-requested vote submitted";
+    case VOTE.reject: return "PR rejection vote submitted";
     default: return "";
   }
 }
@@ -47,7 +47,15 @@ export function voteLabel(vote) {
 // Guard the preconditions a vote needs. Voting is a WRITE to ADO, so unlike a
 // comment it is never queued offline — a stale vote posted later could approve
 // a PR whose content has since changed.
-export function reviewPrecheck({ isOffline = false, hasConn = false, prId = 0 } = {}) {
+export function reviewPrecheck({
+  isOffline = false,
+  hasConn = false,
+  prId = 0,
+  hasUnsavedEdits = false,
+  hasPendingSave = false,
+} = {}) {
+  if (hasUnsavedEdits) return { ok: false, code: "unsaved-edits", error: "Save edits to the PR before submitting a review vote." };
+  if (hasPendingSave) return { ok: false, code: "pending-save", error: "A spec edit is queued but not committed. Sync or discard it before submitting a review vote." };
   if (isOffline) return { ok: false, code: "offline", error: "Can't submit a review offline — votes are not queued. Reconnect and try again." };
   if (!hasConn) return { ok: false, code: "no-connection", error: "Not connected to Azure DevOps." };
   if (!prId) return { ok: false, code: "no-pr", error: "No pull request is open." };
@@ -70,12 +78,12 @@ export function reviewPrecheck({ isOffline = false, hasConn = false, prId = 0 } 
 // rather than imported so this stays ADO-agnostic and unit-testable without a
 // real connection; index.js passes the real `submitReviewVote` /
 // `friendlyAdoError`, tests pass fakes.
-export async function handleReviewRequest({ type, isOffline, hasConn, prId, conn, submitVote, formatError } = {}) {
+export async function handleReviewRequest({ type, isOffline, hasConn, prId, hasUnsavedEdits, hasPendingSave, conn, submitVote, formatError } = {}) {
   const vote = voteForReviewType(type);
   if (vote === null) {
     return { status: 400, body: { ok: false, code: "bad-type", error: "Unknown review type." } };
   }
-  const pre = reviewPrecheck({ isOffline, hasConn, prId });
+  const pre = reviewPrecheck({ isOffline, hasConn, prId, hasUnsavedEdits, hasPendingSave });
   if (!pre.ok) {
     return { status: 409, body: { ok: false, code: pre.code, error: pre.error } };
   }

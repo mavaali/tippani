@@ -80,8 +80,10 @@ hasn't delivered it. See [queued feedback](#queued-feedback).
 ### Add a new comment
 
 With **Comments** selected, hover over the passage and select its `+` control.
-Check the section and line shown in the comment box, write your feedback, and
-select **Comment**.
+For a more precise anchor, select rendered text and choose **Comment on selection**
+or press `Ctrl+Shift+M` on Windows / `Command+Shift+M` on Mac. The selected text
+is quoted in the thread even when the provider can only preserve a line anchor.
+Type `@` in a new comment or reply to choose and notify a review participant.
 
 **Comment posted** means it was shared. A pending-sync message means it wasn't.
 Use **Cancel** if you're not ready to send it.
@@ -93,12 +95,13 @@ use the buttons at the bottom:
 
 | Button | What you're telling the team |
 |---|---|
-| **Approve** | You've reviewed the proposal and approve it. |
+| **Approve PR** | You've reviewed the proposal and approve it. |
 | **Request Changes** | The author needs to address something before you approve. |
 
 Both buttons submit your decision immediately when you're online. Neither merges
 the update into the shared version. Offline decisions aren't queued: reconnect
-before submitting one.
+before submitting one. Tippani blocks the vote while spec edits are unsaved or
+queued, so **Approve PR** cannot be mistaken for saving the document.
 
 Use **Resolve** on a comment only when that discussion has been addressed, following
 your team's review convention. It updates the shared discussion online; it isn't
@@ -166,11 +169,11 @@ If you only want the author to consider a change, leave a comment. Editing chang
 the document itself.
 
 1. Select **Edit** and make your changes using the formatting toolbar.
-2. Select **Save** to see a preview of what will change.
+2. Select **Save edits to PR** to see a preview of what will change.
 3. Read the preview and the **Commit message**, the short description saved with
-   the update. Select **Cancel** to keep working, or **Confirm & Save** to proceed.
+   the update. Select **Cancel** to keep working, or **Commit edits** to proceed.
 
-**In a PR review, Confirm & Save can publish the edited spec immediately.** It
+**In a PR review, Commit edits can publish the edited spec immediately.** It
 updates the version under review, not the team's main version. Look for the saved
 confirmation; a queued or conflict message needs attention before you leave.
 
@@ -204,9 +207,9 @@ published nothing.
 |---|---|
 | Save a private annotation | It isn't posted to the review. |
 | **Comment**, **Post & next**, or **Resolve** in a PR | Immediately online; otherwise queued for delivery. |
-| **Confirm & Save** while editing a PR file | Attempts to publish immediately online; read the result. |
+| **Commit edits** while editing a PR file | Attempts to publish immediately online; read the result. |
 | Save while authoring through **Branches** | Staged until **Push to remote**. |
-| **Approve** or **Request Changes** | Immediately online; never queued offline. |
+| **Approve PR** or **Request Changes** | Immediately online; never queued offline. |
 | **Sync to ADO** | Sends queued review work. |
 | **Push to remote** | Publishes the pending staged work. |
 
@@ -227,6 +230,8 @@ to bypass the cache.
 
 This is optional. An assistant can prepare replies and edits for you to inspect.
 Assistant staging is different from the browser's immediate-post buttons.
+The active review's **Use with Copilot** button shows the required MCP setup,
+current session, provider authentication, staged proposal flow, and common errors.
 See the [MCP & API Reference](mcp-api.md) for setup and publishing controls.
 
 ---

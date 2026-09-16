@@ -201,6 +201,11 @@ Staged whole-file proposals appear as Current/Proposed comparisons. A user can
 accept and refine one in the editor before committing. An assistant should show a
 fresh clickable `portalUrl`, not reuse a consumed sign-in link.
 
+The active PR page also exposes **Use with Copilot**. It identifies the current
+provider, PR and portal session; shows the correct ADO or GitHub MCP credential
+configuration; and explains that assistant edits remain staged until the user
+reviews the Diff/Proposed views and explicitly selects **Save edits to PR**.
+
 ---
 
 ## MCP server

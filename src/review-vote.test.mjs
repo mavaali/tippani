@@ -34,11 +34,11 @@ try {
   check("toString -> null", voteForReviewType("toString") === null);
 
   // --- voteLabel -----------------------------------------------------------
-  check("label approve", voteLabel(VOTE.approve) === "Approved");
-  check("label request changes", voteLabel(VOTE.requestChanges) === "Changes requested");
-  check("label reject", voteLabel(VOTE.reject) === "Rejected");
-  check("label reset", voteLabel(VOTE.reset) === "Vote cleared");
-  check("label suggestions", voteLabel(VOTE.approveWithSuggestions) === "Approved with suggestions");
+  check("label approve", voteLabel(VOTE.approve) === "PR approval vote submitted");
+  check("label request changes", voteLabel(VOTE.requestChanges) === "PR changes-requested vote submitted");
+  check("label reject", voteLabel(VOTE.reject) === "PR rejection vote submitted");
+  check("label reset", voteLabel(VOTE.reset) === "PR review vote cleared");
+  check("label suggestions", voteLabel(VOTE.approveWithSuggestions) === "PR approval-with-suggestions vote submitted");
   check("label unknown -> empty", voteLabel(99) === "" && voteLabel(undefined) === "");
 
   // --- reviewPrecheck ------------------------------------------------------
@@ -57,6 +57,8 @@ try {
 
   check("empty args blocked", reviewPrecheck().ok === false);
   check("offline wins over missing conn", reviewPrecheck({ isOffline: true, hasConn: false, prId: 0 }).code === "offline");
+  check("unsaved edits block voting", reviewPrecheck({ hasUnsavedEdits: true, hasConn: true, prId: 12 }).code === "unsaved-edits");
+  check("queued save blocks voting", reviewPrecheck({ hasPendingSave: true, hasConn: true, prId: 12 }).code === "pending-save");
 } catch (e) {
   fail++;
   console.error("  FAIL: threw " + e.message);
@@ -122,10 +124,16 @@ try {
     const submitVote = spy();
     const r = await handleReviewRequest({ type: "approve", isOffline: false, hasConn: true, prId: 42, conn: fakeConn, submitVote, formatError: noopFormatError });
     check("handleReviewRequest: approve -> 200", r.status === 200 && r.body.ok === true && r.body.vote === 10);
-    check("handleReviewRequest: approve -> message 'Approved'", r.body.message === "Approved");
+    check("handleReviewRequest: approve -> precise message", r.body.message === "PR approval vote submitted");
     check("handleReviewRequest: approve DOES call submitVote exactly once", submitVote.calls.length === 1);
     check("handleReviewRequest: submitVote called with (conn, prId, vote)",
       submitVote.calls[0][0] === fakeConn && submitVote.calls[0][1] === 42 && submitVote.calls[0][2] === 10);
+  }
+  {
+    const submitVote = spy();
+    const r = await handleReviewRequest({ type: "approve", hasUnsavedEdits: true, hasConn: true, prId: 42, submitVote, formatError: noopFormatError });
+    check("handleReviewRequest: unsaved edits -> 409", r.status === 409 && r.body.code === "unsaved-edits");
+    check("handleReviewRequest: unsaved edits never vote", submitVote.calls.length === 0);
   }
 
   // request-changes maps to -5 through the whole orchestrator, and the spy
@@ -226,4 +234,3 @@ try {
 
 console.log(`\nreview-vote.test: ${pass} passed, ${fail} failed`);
 process.exitCode = fail === 0 ? 0 : 1;
-
