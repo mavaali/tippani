@@ -81,8 +81,10 @@ real reviews using the setup above.
 feedback.** Posting a comment or reply, resolving a discussion, or submitting a
 review decision can update the remote review immediately when you're online.
 
-Editing a PR file is also different from leaving a suggestion: **Confirm & Save**
-can publish the changed spec to the version under review. Branch authoring and
+Editing a PR file is also different from leaving a suggestion: **Save edits to PR**
+and **Commit edits** can publish the changed spec to the version under review.
+**Approve PR** submits only the review vote and is blocked while edits are unsaved
+or queued. Branch authoring and
 assistant staging wait for an explicit push instead. Don't assume every action
 waits for **Push to remote**.
 

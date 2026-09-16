@@ -112,7 +112,6 @@ async function main() {
       views.join(","));
     check("saved new staged files enable Diff/Proposed against an empty baseline",
       /comparisonOriginal\s*=\s*\(\)\s*=>\s*\(BRANCH && BRANCH\.pureStaged \? "" : CURRENT_MARKDOWN\)/.test(file.html) &&
-      /const pureStagedContent =/.test(file.html) &&
       !/Not available for staged files/.test(file.html));
     check("saving a new staged file leaves its empty Current baseline unchanged",
       !/content\.innerHTML = rendered\.html/.test(file.html) &&
@@ -121,6 +120,16 @@ async function main() {
     check("Edit toggle present", !!fdoc.getElementById("editToggle"));
     check("Editor formatting toolbar band present", !!fdoc.getElementById("fmtToolbar"));
     check("Editor + current-view containers present", !!fdoc.getElementById("spec-editor") && !!fdoc.getElementById("spec-current"));
+    check("selected-text comment entry point present", !!fdoc.getElementById("selectionCommentBtn"));
+    check("selected-text comments have a keyboard shortcut",
+      fdoc.getElementById("selectionCommentBtn")?.getAttribute("aria-keyshortcuts")?.includes("Control+Shift+M"));
+    check("@mention composers wired", fdoc.querySelectorAll("textarea[data-mention-composer]").length >= 1);
+    check("Save edits and Approve PR are explicitly distinct",
+      /Save edits to PR/.test(file.html) && /Approve PR/.test(file.html));
+    check("Use with Copilot onboarding present",
+      !!fdoc.getElementById("copilotBtn") && !!fdoc.getElementById("copilotModal") && /tippani-mcp/.test(file.html));
+    check("queued-save recovery dialog present",
+      !!fdoc.getElementById("queuedSaveModal") && /Copy queued text/.test(file.html) && /Discard and reload/.test(file.html));
 
     const leftPaneHead = fdoc.querySelector("#sidebarLeft .tp-pane-head");
     const rightPaneHead = fdoc.querySelector("#sidebarRight .tp-pane-head");
@@ -131,7 +140,8 @@ async function main() {
       leftRail?.firstElementChild?.textContent.trim() === "»");
     check("PR Comments pane has button left, label right",
       rightPaneHead?.firstElementChild?.classList.contains("tp-collapse-btn") &&
-      rightPaneHead?.lastElementChild?.classList.contains("sidebar-section-label"));
+      (rightPaneHead?.lastElementChild?.classList.contains("sidebar-section-label") ||
+       rightPaneHead?.querySelector("#sidebarModeComments")?.textContent.includes("Comments")));
     check("PR Comments pane has collapse-right and expand-left controls",
       rightPaneHead?.querySelector(".tp-collapse-btn")?.textContent.trim() === "»" &&
       rightRail?.firstElementChild?.textContent.trim() === "«" &&

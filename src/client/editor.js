@@ -5,7 +5,7 @@
 // Bundled at build time into editor.bundle.js (EDITOR_JS string) and inlined into
 // the spec page. See docs/plans/2026-06-04-wysiwyg-editor-design.md.
 
-import { EditorState } from "@codemirror/state";
+import { Compartment, EditorState } from "@codemirror/state";
 import {
   EditorView,
   Decoration,
@@ -58,7 +58,7 @@ const hideMark = Decoration.replace({});
 // line the user is editing (the Typora trick).
 function selectionTouches(state, from, to) {
   for (const r of state.selection.ranges) {
-    if (r.from <= to && r.to >= from) return true;
+    if (r.empty ? r.from >= from && r.from < to : r.from < to && r.to > from) return true;
   }
   return false;
 }
@@ -107,6 +107,9 @@ function buildDecorations(view) {
       to,
       enter(node) {
         const reveal = selectionTouches(state, node.from, node.to);
+        if (node.type.isError || node.name === "HTMLBlock" || node.name === "HTMLTag") {
+          addLineClass(state, node.from, node.to, "cm-pv-unsupported", deco);
+        }
 
         // Headings: ATXHeading1..6 — size the line, hide the leading "# " marker
         const headingMatch = /^ATXHeading(\d)$/.exec(node.name);
@@ -253,6 +256,10 @@ const tippaniTheme = EditorView.theme({
     padding: "0 4px",
   },
   ".cm-pv-link": { color: "var(--cp-link)", textDecoration: "underline" },
+  ".cm-pv-unsupported": {
+    backgroundColor: "color-mix(in srgb, var(--cp-warning) 14%, transparent)",
+    boxShadow: "inset 3px 0 0 var(--cp-warning)",
+  },
   ".cm-pv-listmark": { color: "var(--cp-text-muted)" },
   // Blocks
   ".cm-pv-quote": {
@@ -444,6 +451,7 @@ const toolbarSync = ViewPlugin.fromClass(class {
 
 function mount(el, markdownText, opts = {}) {
   const onChange = typeof opts.onChange === "function" ? opts.onChange : null;
+  const editable = new Compartment();
   const state = EditorState.create({
     doc: markdownText,
     extensions: [
@@ -456,6 +464,12 @@ function mount(el, markdownText, opts = {}) {
       toolbarSync,
       tableField,
       tippaniTheme,
+      editable.of([
+        EditorView.editable.of(opts.readOnly !== true),
+        EditorState.readOnly.of(opts.readOnly === true),
+      ]),
+      EditorState.transactionFilter.of((tr) =>
+        tr.docChanged && tr.startState.facet(EditorState.readOnly) ? [] : tr),
       EditorView.lineWrapping,
       onChange
         ? EditorView.updateListener.of((u) => {
@@ -472,6 +486,12 @@ function mount(el, markdownText, opts = {}) {
     // Replace the entire buffer (used to load an externally-staged proposal).
     setMarkdown: (md) =>
       view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: String(md ?? "") } }),
+    setReadOnly: (value) =>
+      view.dispatch({ effects: editable.reconfigure([
+        EditorView.editable.of(!value),
+        EditorState.readOnly.of(!!value),
+      ]) }),
+    isReadOnly: () => view.state.facet(EditorState.readOnly),
     // Open the Find & Replace panel (manual equivalent of the edit_spec find kind).
     openSearch: () => { view.focus(); openSearchPanel(view); },
     // Toggle the Find & Replace panel — open if closed, close if already open, so

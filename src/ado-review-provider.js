@@ -118,16 +118,18 @@ export function createAdoReviewProvider(conn, {
   }
 
   async function createComment(prId, {
-    filePath, line, body,
+    filePath, line, body, anchor,
   }, options = {}) {
     const gitApi = await getGitApi();
+    const start = anchor?.start || { line, offset: 1 };
+    const end = anchor?.end || start;
     const thread = {
       comments: [{ content: body, commentType: 1 }],
       status: 1,
       threadContext: {
         filePath,
-        rightFileStart: { line, offset: 1 },
-        rightFileEnd: { line, offset: 1 },
+        rightFileStart: start,
+        rightFileEnd: end,
       },
     };
     return gitApi.createThread(

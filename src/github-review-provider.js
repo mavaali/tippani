@@ -35,6 +35,11 @@ function mapPullRequest(pr, { owner, repo } = {}) {
       displayName: pr.user?.login || "",
       uniqueName: pr.user?.login || null,
     },
+    reviewers: (pr.requested_reviewers || []).map((reviewer) => ({
+      id: reviewer.login || null,
+      displayName: reviewer.login || "",
+      uniqueName: reviewer.login || null,
+    })),
     sourceRefName: `refs/heads/${pr.head?.ref || ""}`,
     targetRefName: `refs/heads/${pr.base?.ref || ""}`,
     status: mapStatus(pr),
@@ -347,18 +352,25 @@ export function createGitHubReviewProvider(client, {
   }
 
   async function createComment(number, {
-    filePath, line, body,
+    filePath, line, body, anchor,
   }) {
+    const startLine = anchor?.start?.line;
+    const endLine = anchor?.end?.line || line;
+    const position = {
+      body,
+      commit_id: await ensureHeadSha(number),
+      path: String(filePath).replace(/^\/+/, ""),
+      line: endLine,
+      side: "RIGHT",
+    };
+    if (Number.isInteger(startLine) && startLine < endLine) {
+      position.start_line = startLine;
+      position.start_side = "RIGHT";
+    }
     const comment = await client.request(
       "POST", repoPath("pulls", number, "comments"),
       {
-        body: {
-          body,
-          commit_id: await ensureHeadSha(number),
-          path: String(filePath).replace(/^\/+/, ""),
-          line,
-          side: "RIGHT",
-        },
+        body: position,
       },
     );
     const threads = await listThreads(number);

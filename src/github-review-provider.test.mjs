@@ -117,6 +117,9 @@ const lastCall = (client, name) =>
     project: { id: "o", name: "o" },
     webUrl: "https://github.com/o/r",
   });
+  eq("PR mapping includes requested reviewers", mapped.reviewers, [{
+    id: "reviewer", displayName: "reviewer", uniqueName: "reviewer",
+  }]);
   ok("merged PR maps completed", mapPullRequest(rawPr({
     state: "closed", merged_at: "2026-01-03",
   })).status === 3);
@@ -331,6 +334,7 @@ const lastCall = (client, name) =>
   });
   const created = await provider.createComment(7, {
     filePath: "/docs/spec.md", line: 12, body: "Review",
+    anchor: { start: { line: 10, offset: 3 }, end: { line: 12, offset: 5 } },
   });
   ok("createComment returns containing thread", created.id === 101);
   const post = callsOf(client, "request").find((call) =>
@@ -341,6 +345,8 @@ const lastCall = (client, name) =>
     path: "docs/spec.md",
     line: 12,
     side: "RIGHT",
+    start_line: 10,
+    start_side: "RIGHT",
   });
   await provider.replyToThread(7, 101, "Reply");
   ok("reply endpoint uses root numeric comment",

@@ -68,5 +68,41 @@ for (const file of files) {
   host.remove();
 }
 
+{
+  const host = window.document.createElement("div");
+  window.document.body.appendChild(host);
+  const content = "**bold** *italic*";
+  const ed = window.TippaniEditor.mount(host, content, {});
+  ed.view.dispatch({ selection: { anchor: 3 } });
+  check("active construct reveals markdown", host.querySelector(".cm-line")?.textContent.includes("**bold**"));
+  ed.view.dispatch({ selection: { anchor: 8 } });
+  check("leaving construct restores preview", host.querySelector(".cm-line")?.textContent === "bold italic");
+  ed.destroy();
+  host.remove();
+}
+
+{
+  const host = window.document.createElement("div");
+  window.document.body.appendChild(host);
+  const ed = window.TippaniEditor.mount(host, "<custom>raw</custom>", {});
+  check("unsupported raw HTML is identified", !!host.querySelector(".cm-pv-unsupported"));
+  ed.destroy();
+  host.remove();
+}
+
+{
+  const host = window.document.createElement("div");
+  window.document.body.appendChild(host);
+  const ed = window.TippaniEditor.mount(host, "queued edit", {});
+  ed.setReadOnly(true);
+  ed.view.dispatch({ changes: { from: 0, to: 6, insert: "changed" } });
+  check("queued save blocks programmatic changes", ed.getMarkdown() === "queued edit");
+  ed.view.dispatch({ selection: { anchor: 0, head: 6 } });
+  window.TippaniEditor.commands.toggleBold(ed.view);
+  check("queued save blocks toolbar commands", ed.getMarkdown() === "queued edit");
+  ed.destroy();
+  host.remove();
+}
+
 console.log(`\ninvariant.test: ${pass} passed, ${fail} failed (${files.length} fixtures)`);
 process.exit(fail ? 1 : 0);
